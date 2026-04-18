@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slide</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: #1a1a1a;
+      color: #d4d4d4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 8px 16px;
+      background: #252525;
+      border-bottom: 1px solid #333;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: normal;
+      color: #888;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    #file-name {
+      font-size: 13px;
+      color: #aaa;
+    }
+
+    #sync-status {
+      font-size: 13px;
+      margin-left: 4px;
+    }
+
+    #error-bar {
+      display: none;
+      padding: 4px 16px;
+      background: #3a1a1a;
+      color: #f87171;
+      font-size: 12px;
+      border-bottom: 1px solid #5a2a2a;
+    }
+
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .editors {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #333;
+      min-height: 0;
+    }
+
+    .pane {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .pane + .pane {
+      border-top: 1px solid #333;
+    }
+
+    .pane-label {
+      padding: 5px 12px;
+      font-size: 11px;
+      color: #666;
+      background: #1e1e1e;
+      border-bottom: 1px solid #2a2a2a;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    textarea {
+      flex: 1;
+      background: #1a1a1a;
+      color: #d4d4d4;
+      border: none;
+      outline: none;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      resize: none;
+      tab-size: 2;
+    }
+
+    textarea:focus {
+      background: #1c1c1c;
+    }
+
+    .result-pane {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .result-pane .pane-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #iterations {
+      color: #555;
+      font-size: 10px;
+      font-style: italic;
+    }
+
+    #result {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre;
+    }
+
+    .lit-match    { color: #9cdcfe; }
+    .lit-assert   { color: #4ec9b0; }
+    .lit-ask      { color: #dcdcaa; }
+    .lit-constrain { color: #f48771; }
+    .lit-symbol   { color: #ce9178; }
+    .lit-variable { color: #4fc1ff; }
+    .lit-wildcard { color: #666; }
+
+    .node-clickable { cursor: pointer; }
+    .node-selected  { background: #3a3a1a; outline: 1px solid #dcdcaa; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Slide</h1>
+    <span id="file-name"></span>
+    <span id="sync-status"></span>
+  </header>
+  <div id="error-bar"></div>
+  <div class="workspace">
+    <div class="editors">
+      <div class="pane">
+        <div class="pane-label">Patterns</div>
+        <textarea id="patterns" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <div class="result-pane">
+      <div class="pane-label">
+        <span>Result</span>
+        <span id="iterations"></span>
+      </div>
+      <div id="result"></div>
+    </div>
+  </div>
+  <script type="module" src="/src/web.js"></script>
+</body>
+</html>
