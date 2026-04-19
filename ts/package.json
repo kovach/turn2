@@ -8,8 +8,7 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "serve": "npm run build && node dist/server.js",
-    "watch": "sh watch.sh",
-    "web": "vite"
+    "watch": "sh watch.sh"
   },
   "keywords": [],
   "author": "",
@@ -18,7 +17,6 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "vite": "^8.0.8"
+    "typescript": "^6.0.3"
   }
 }

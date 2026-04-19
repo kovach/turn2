@@ -17,21 +17,15 @@ let currentFile: string | null = null; // non-null only in attached mode
 let pendingSync = false;               // attached: PUT not yet called with current content
 let fileList: string[] = [];
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let lastValid = true;
 
 const GAS = 20;
-
-function isValid(text: string): boolean {
-  const parsed = parsePatterns(text);
-  if ("message" in parsed) return false;
-  const { steps } = fixpoint0(parsed);
-  return steps < GAS;
-}
 
 function updateSyncStatus() {
   if (mode === "detached") {
     syncStatusEl.textContent = "∅";
     syncStatusEl.style.color = "#555";
-  } else if (!isValid(patternsEl.value)) {
+  } else if (!lastValid) {
     syncStatusEl.textContent = "✗";
     syncStatusEl.style.color = "#f87171";
   } else if (pendingSync) {
@@ -101,7 +95,7 @@ function schedulePut() {
   if (debounceTimer !== null) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
     debounceTimer = null;
-    if (mode !== "attached" || currentFile === null || !isValid(patternsEl.value)) return;
+    if (mode !== "attached" || currentFile === null || !lastValid) return;
     try {
       const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
         method: "PUT", body: patternsEl.value,
@@ -151,7 +145,7 @@ async function handleCtrlS() {
 }
 
 async function cycleFile(dir: 1 | -1) {
-  if (mode !== "attached" || currentFile === null || pendingSync || !isValid(patternsEl.value)) return;
+  if (mode !== "attached" || currentFile === null || pendingSync || !lastValid) return;
   const idx = fileList.indexOf(currentFile);
   if (idx === -1) return;
   const next = fileList[(idx + dir + fileList.length) % fileList.length]!;
@@ -208,6 +202,7 @@ function clearError() {
 function run() {
   const parsedPatterns = parsePatterns(patternsEl.value);
   if ("message" in parsedPatterns) {
+    lastValid = false;
     showError(`Patterns — line ${parsedPatterns.line}: ${parsedPatterns.message}`);
     resultEl.innerHTML = "";
     iterationsEl.textContent = "";
@@ -217,6 +212,7 @@ function run() {
   clearError();
 
   const { result, steps } = fixpoint0(parsedPatterns);
+  lastValid = steps < GAS;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
   resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
 }
@@ -268,7 +264,7 @@ patternsEl.addEventListener("input", () => {
   run();
   if (mode === "attached") {
     pendingSync = true;
-    if (isValid(patternsEl.value)) {
+    if (lastValid) {
       schedulePut();
     } else if (debounceTimer !== null) {
       clearTimeout(debounceTimer);
@@ -297,6 +293,28 @@ function execReplace(start: number, end: number, text: string) {
   document.execCommand("insertText", false, text);
 }
 
+function moveLineDir(dir: 1 | -1) {
+  const el = patternsEl;
+  const { selectionStart: s, value } = el;
+  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
+  const col = s - lineStart;
+  if (dir === -1) {
+    if (lineStart === 0) return;
+    const prevLineEnd = lineStart - 1;
+    const prevLineStart = value.lastIndexOf("\n", prevLineEnd - 1) + 1;
+    const pos = Math.min(prevLineStart + col, prevLineEnd);
+    el.setSelectionRange(pos, pos);
+  } else {
+    const lineEnd = value.indexOf("\n", s);
+    if (lineEnd === -1) return;
+    const nextLineStart = lineEnd + 1;
+    const nextLineEnd = value.indexOf("\n", nextLineStart);
+    const nextLineEndActual = nextLineEnd === -1 ? value.length : nextLineEnd;
+    const pos = Math.min(nextLineStart + col, nextLineEndActual);
+    el.setSelectionRange(pos, pos);
+  }
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === "Tab") {
     e.preventDefault();
@@ -323,6 +341,29 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === "x" && e.ctrlKey) {
     e.preventDefault();
     cutSubtree();
+  } else if (e.key === "b" && e.ctrlKey) {
+    e.preventDefault();
+    const pos = Math.max(0, patternsEl.selectionStart - 1);
+    patternsEl.setSelectionRange(pos, pos);
+  } else if (e.key === "f" && e.ctrlKey) {
+    e.preventDefault();
+    const pos = Math.min(patternsEl.value.length, patternsEl.selectionStart + 1);
+    patternsEl.setSelectionRange(pos, pos);
+  } else if (e.key === "a" && e.ctrlKey) {
+    e.preventDefault();
+    const lineStart = patternsEl.value.lastIndexOf("\n", patternsEl.selectionStart - 1) + 1;
+    patternsEl.setSelectionRange(lineStart, lineStart);
+  } else if (e.key === "e" && e.ctrlKey) {
+    e.preventDefault();
+    const lineEnd = patternsEl.value.indexOf("\n", patternsEl.selectionStart);
+    const pos = lineEnd === -1 ? patternsEl.value.length : lineEnd;
+    patternsEl.setSelectionRange(pos, pos);
+  } else if (e.key === "p" && e.ctrlKey) {
+    e.preventDefault();
+    moveLineDir(-1);
+  } else if (e.key === "n" && e.ctrlKey) {
+    e.preventDefault();
+    moveLineDir(1);
   }
 }
 
@@ -423,10 +464,22 @@ function handleTab() {
 
 function dedent() {
   const el = patternsEl;
-  const { selectionStart, value } = el;
-  const lineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+  const { selectionStart: s, selectionEnd: e, value } = el;
+
+  if (s !== e) {
+    const firstLineStart = value.lastIndexOf("\n", s - 1) + 1;
+    const region = value.slice(firstLineStart, e);
+    const dedented = region.replace(/^  /gm, "");
+    const removedFirst = region.slice(0, 2) === "  " ? 2 : 0;
+    const removedTotal = region.length - dedented.length;
+    execReplace(firstLineStart, e, dedented);
+    el.setSelectionRange(Math.max(firstLineStart, s - removedFirst), e - removedTotal);
+    return;
+  }
+
+  const lineStart = value.lastIndexOf("\n", s - 1) + 1;
   if (value.slice(lineStart, lineStart + 2) === "  ") {
-    const newPos = Math.max(lineStart, selectionStart - 2);
+    const newPos = Math.max(lineStart, s - 2);
     execReplace(lineStart, lineStart + 2, "");
     el.setSelectionRange(newPos, newPos);
   }

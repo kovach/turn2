@@ -6,12 +6,12 @@
   + player o
   + other x o
   + other o x
-  + n 1
-  + n 2
-  + n 3
-  - n X
-  - n Y
-  + cell X Y
+  + n z
+  + n (s z)
+  + n (s (s z))
+  - n R
+  - n C
+  + cell R C
 
 # first turn
 - game
@@ -19,10 +19,11 @@
     + actor x
 
 - is A X
+-[X] cell R C
 -[A] ask
-  + value X
+  + value (cell R C)
 
-# actor P fills a square with their mark
+ # actor P fills a square with their mark
 - turn
   - actor P
   ? ask
@@ -36,4 +37,17 @@
     - actor P
     - fill _ _
   + turn
-    + actor Op
+    + actor P
+
+- game
+  - fill (cell R z) M
+  - fill (cell R (s z)) M
+  - fill (cell R (s (s z))) M
+  + won M (row R)
+
++ is (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1))) (id r2 id11 (id r2 id6) (id r2 id6))
+
++ is (id r5 id3 (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1))))))) (id r2 id11 (id r2 id6) (id r2 id7))
+
+
++ is (id r5 id3 (id r6 id6 (id r2 id1) (id r2 id4) (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r5 id5 (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r4 id2 (id r9 id1) (id r2 id11 (id r2 id6) (id r2 id7)) (id r5 id3 (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r5 id5 (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r4 id2 (id r9 id1) (id r2 id11 (id r2 id6) (id r2 id7)) (id r5 id3 (id r6 id6 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)))))) (id r6 id7 (id r2 id1) (id r2 id4) (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r5 id5 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1)) (id r4 id2 (id r8 id1) (id r2 id11 (id r2 id6) (id r2 id6)) (id r5 id3 (id r3 id2 (id r2 id1)) (id r3 id3 (id r2 id1))))))))))) (id r2 id11 (id r2 id6) (id r2 id8))

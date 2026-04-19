@@ -36,27 +36,29 @@ function literalTypes(tree: Tree): string[] {
   const h = g.children[0]!;
   const i = h.children[0]!;
 
-  // match nodes get Variable ids X1, X2
+  // match nodes get Variable ids X1, X3 (counter is shared with positive nodes)
   assert.deepEqual(f.id, { tag: "Variable", name: "X1" });
-  assert.deepEqual(h.id, { tag: "Variable", name: "X2" });
+  assert.deepEqual(h.id, { tag: "Variable", name: "X3" });
 
-  // + g id = Atom([id, r1, X1])
+  // + g id = Atom([id, r1, sym("id2"), X1])
   assert.equal(g.id.tag, "Atom");
   if (g.id.tag === "Atom") {
     assert.deepEqual(g.id.atom.terms[0], { tag: "Symbol", name: "id" });
     assert.deepEqual(g.id.atom.terms[1], { tag: "Symbol", name: "r1" });
-    assert.deepEqual(g.id.atom.terms[2], { tag: "Variable", name: "X1" });
-    assert.equal(g.id.atom.terms.length, 3);
+    assert.deepEqual(g.id.atom.terms[2], { tag: "Symbol", name: "id2" });
+    assert.deepEqual(g.id.atom.terms[3], { tag: "Variable", name: "X1" });
+    assert.equal(g.id.atom.terms.length, 4);
   }
 
-  // + i id = Atom([id, r1, X1, g.id, X2])
+  // + i id = Atom([id, r1, sym("id4"), X1, X3])
+  // positive nodes don't push to previousVars, so g.id does not appear
   assert.equal(i.id.tag, "Atom");
   if (i.id.tag === "Atom") {
     assert.deepEqual(i.id.atom.terms[0], { tag: "Symbol", name: "id" });
     assert.deepEqual(i.id.atom.terms[1], { tag: "Symbol", name: "r1" });
-    assert.deepEqual(i.id.atom.terms[2], { tag: "Variable", name: "X1" });
-    assert.deepEqual(i.id.atom.terms[3], g.id);
-    assert.deepEqual(i.id.atom.terms[4], { tag: "Variable", name: "X2" });
+    assert.deepEqual(i.id.atom.terms[2], { tag: "Symbol", name: "id4" });
+    assert.deepEqual(i.id.atom.terms[3], { tag: "Variable", name: "X1" });
+    assert.deepEqual(i.id.atom.terms[4], { tag: "Variable", name: "X3" });
     assert.equal(i.id.atom.terms.length, 5);
   }
   console.log("PASS: idExpand assigns correct ids");

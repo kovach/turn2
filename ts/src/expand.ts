@@ -10,12 +10,12 @@ export function idExpand(tree: Tree, name: string): Tree {
     const isPositive = node.literal.literalType !== "Match";
     let newId: Term;
     if (isPositive) {
-      newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), ...previousVars] } };
+      newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
     } else {
       const isAutoId = node.id.tag === "Variable" && /^\d+$/.test(node.id.name);
       newId = isAutoId ? vari("X" + counter++) : node.id;
+      previousVars.push(newId);
     }
-    previousVars.push(newId);
     const atom = node.id.tag === "Variable"
       ? substAtom(node.literal.atom, new Map([[node.id.name, newId]]))
       : node.literal.atom;

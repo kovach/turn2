@@ -34,6 +34,7 @@ unify-tree:
     - a single substitution s that unifies each (I,I') and (A,A')
     - for each path from a node in pattern to the root of pattern, the corresponding reference nodes also lie on a path in reference
       - **note**: the path need not be in order. the pattern `(foo (bar))` should match the reference `(bar (foo))`
+      - TODO: reverse the above behavior. `(foo (bar))` should no longer match `(bar (foo))`
 
 to compute unify-tree:
   - init empty substitution
@@ -73,9 +74,12 @@ the following syntax allows a pattern to bind the node id explicitly:
 -[Id] foo
   + bar Id
 ```
+```
+- [(id X)] foo
+  + bar X
+```
 
-the syntax is `*[<term>]` where `*` stands for a literal type.
-this should be a minimal change to the parser
+The syntax is `*[<term>]` where `*` stands for a literal type.
 
 # evaluation
 plan: plans/evaluation.md
@@ -86,10 +90,13 @@ plan: plans/evaluation.md
   each tree node needs an id value, depending on literal type.
   these are filled in top to bottom (starting from the first line of the pattern and going down)
   - `match` node gets a fresh id variable (generate var string in some syntactic way)
-  - each `assert` node gets an atom term; the atom has the following form:
-    `[sym("id"), sym(name), ...previous_vars]`, where
-      - `previous_vars` :=  the preceeding id variables and the variables appearing within the earlier atoms
-  - `ask` and `constrain` treated same as assert
+  - each positive node (`assert,ask,constrain`) gets an atom term; the atom has the following form:
+    `[sym("id"), sym(name), sym(line) ...previous_vars]`, where
+      - `name` is the name passed to this function
+      - `line` is a value that is unique per positive node within the rule (1,2,...)
+      - `previous_vars` :=  the preceding id variables and the variables appearing within the earlier atoms
+  - explanation:
+    - todo
 
   e.g. if name = "r1"
     ```
@@ -101,9 +108,9 @@ plan: plans/evaluation.md
     becomes
     ```
     - f X1
-      + g (id r1 X)
+      + g (id r1 id1 X)
         - h X2
-          + i (id r1 X1 (id r1 X) X2)
+          + i (id r1 id2 X1 X2)
     ```
 
 ## step algorithm v2
@@ -193,7 +200,8 @@ rule text is *valid* if it parses and fixpoint runs to a result without exhausti
   if the current line is weak and has a type marker: inserts two spaces before the literal type marker
   if text is highlighted, insert two spaces at the start of each highlighted line
 <shift-tab>
-  if first two characters of line are whitespace, delete them
+  if text is highlighted, remove two leading spaces from each highlighted line (if present)
+  otherwise, if first two characters of line are whitespace, delete them
 <return>
   if current line is weak, replace it entirely with a newline
   otherwise, insert newline, indent to level of previous line, insert copy of previous literal type marker followed by space
@@ -209,6 +217,12 @@ rule text is *valid* if it parses and fixpoint runs to a result without exhausti
 <ctrl-x>
   if text is selected, cut it (to the clipboard)
   if no text is selected, cut the current line
+<ctrl-b> <ctrl-f>
+  move cursor back or forward one character
+<ctrl-a> <ctrl-e>
+  move cursor to beginning or end of current line
+<ctrl-p> <ctrl-n>
+  move cursor to previous or next line, preserving column
 
 # editor web server
 plan: plans/editor-web-server.md
