@@ -111,4 +111,92 @@ function substStr(s: Substitution): Record<string, string> {
   console.log("PASS 9: two wildcards match distinct or equal values");
 }
 
+// 10. Pattern ancestry must map to reference ancestry (not any path direction)
+{
+  const pattern = root([node(vari("F"), [sym("foo")], [node(vari("B"), [sym("bar")])])]);
+  // reference has (bar (foo)) — pattern's child relation is reversed here
+  const reference = root([fact(sym("r1"), [sym("bar")], [fact(sym("r2"), [sym("foo")])])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 10: ancestry direction is enforced");
+}
+
+// 11. Pattern parent+child cannot both map to the same single reference node
+{
+  const pattern = root([node(vari("A"), [sym("foo")], [node(vari("B"), [sym("foo")])])]);
+  const reference = root([fact(sym("r"), [sym("foo")])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 11: strict descendant required between pattern parent and child");
+}
+
+// 12. Before: matches temporally-before siblings of the parent image
+{
+  // pattern:
+  //   - turn A
+  //     < move X
+  const pattern = root([
+    node(vari("T"), [sym("turn"), vari("A")], [
+      { id: vari("M"), literal: { literalType: "Before", atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+    ]),
+  ]);
+  // reference:
+  //   + root / + move a / + move b / + turn t
+  const reference = root([
+    fact(sym("ma"), [sym("move"), sym("a")]),
+    fact(sym("mb"), [sym("move"), sym("b")]),
+    fact(sym("t"), [sym("turn"), sym("t")]),
+  ]);
+  const results = unifyTree(pattern, reference);
+  // 2 substs: (T=t, A=t, M=ma, X=a) and (T=t, A=t, M=mb, X=b)
+  assert.equal(results.length, 2);
+  const rows = results.map(substStr).sort((a, b) => (a["M"]! < b["M"]! ? -1 : 1));
+  assert.deepEqual(rows[0], { T: "t", A: "t", M: "ma", X: "a" });
+  assert.deepEqual(rows[1], { T: "t", A: "t", M: "mb", X: "b" });
+  console.log("PASS 12: Before matches temporally-before siblings");
+}
+
+// 13. Before: nothing before first sibling
+{
+  // pattern: - turn A / < move X
+  // reference: + turn t  (no preceding siblings)
+  const pattern = root([
+    node(vari("T"), [sym("turn"), vari("A")], [
+      { id: vari("M"), literal: { literalType: "Before", atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([fact(sym("t"), [sym("turn"), sym("t")])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 13: Before with nothing before → no match");
+}
+
+// 14. Before: descendants of the parent's image are NOT before (ancestor excluded)
+{
+  // pattern: - turn A / < move X
+  // reference: + turn t / + move a   (move is under turn, not before it)
+  const pattern = root([
+    node(vari("T"), [sym("turn"), vari("A")], [
+      { id: vari("M"), literal: { literalType: "Before", atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([
+    fact(sym("t"), [sym("turn"), sym("t")], [fact(sym("ma"), [sym("move"), sym("a")])]),
+  ]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 14: Before excludes descendants of parent image");
+}
+
+// 15. Before at top level of pattern → nothing is before the root, no match
+{
+  const pattern = root([
+    { id: vari("M"), literal: { literalType: "Before", atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+  ]);
+  const reference = root([fact(sym("ma"), [sym("move"), sym("a")])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 15: Before at top level has no anchor → no match");
+}
+
 console.log("All tests passed.");

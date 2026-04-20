@@ -1,5 +1,5 @@
 import { unifyTree, substAtom, substTerm } from "./unify.js";
-import { cloneTree, collectPositiveNodes, deepestAncestorImage, findPath, nodeAt, insertAt } from "./tree.js";
+import { cloneTree, collectPositiveNodes, findPath, nodeAt, insertAt } from "./tree.js";
 import type { Term, Tree } from "./types.js";
 
 function termEq(a: Term, b: Term): boolean {
@@ -29,9 +29,10 @@ export function step(pattern: Tree, reference: Tree): Tree | null {
         pPath = [];
       } else {
         const parent = nodeAt(pattern, posPath.slice(0, -1))!;
-        const P = deepestAncestorImage(parent.id, pattern, refCopy, subst);
-        if (P === null) continue;
-        pPath = findPath(P.id, refCopy)!;
+        const parentRefId = substTerm(parent.id, subst);
+        const found = findPath(parentRefId, refCopy);
+        if (found === null) continue;
+        pPath = found;
       }
 
       const newAtom = substAtom(posNode.literal.atom, subst);

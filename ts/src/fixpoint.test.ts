@@ -105,4 +105,44 @@ const rules = parseRules(`- foo
   console.log("PASS: self-referential id: +[I] card I resolves to + card <id>");
 }
 
+// Before literal: worked example from overview.md "query algorithm update"
+// pattern:
+//   - turn A
+//     < move X
+//       + note A X
+// reference:
+//   -
+//     + move a
+//     + move b
+//     + turn t
+// expected: each `+ move` gets a `+ note t <arg>` child
+{
+  const ref = parseOne(`-
+  + move a
+  + move b
+  + turn t`);
+  const rules = parseRules(`- turn A
+  < move X
+    + note A X`);
+  const { result } = fixpoint(rules, ref);
+  const top = result.children[0]!;
+  const moveA = top.children[0]!;
+  const moveB = top.children[1]!;
+  const turn  = top.children[2]!;
+  assert.deepEqual(moveA.literal.atom.terms, [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "a" }]);
+  assert.deepEqual(moveB.literal.atom.terms, [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "b" }]);
+  // each move has exactly one note child: note t <arg>
+  assert.equal(moveA.children.length, 1);
+  assert.deepEqual(moveA.children[0]!.literal.atom.terms, [
+    { tag: "Symbol", name: "note" }, { tag: "Symbol", name: "t" }, { tag: "Symbol", name: "a" },
+  ]);
+  assert.equal(moveB.children.length, 1);
+  assert.deepEqual(moveB.children[0]!.literal.atom.terms, [
+    { tag: "Symbol", name: "note" }, { tag: "Symbol", name: "t" }, { tag: "Symbol", name: "b" },
+  ]);
+  // turn has no new children inserted
+  assert.equal(turn.children.length, 0);
+  console.log("PASS: Before literal — worked example yields note under each prior move");
+}
+
 console.log("All fixpoint tests passed.");

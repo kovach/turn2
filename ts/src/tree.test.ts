@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { findPath, nodeAt, insertAt, deepestAncestorImage } from "./tree.js";
+import { findPath, nodeAt, insertAt, nodesBefore, isTemporallyBefore } from "./tree.js";
 import { sym, vari, node } from "./types.js";
-import type { Substitution } from "./types.js";
 
 //   root (id "r")
 //     a  (id "a")
@@ -63,66 +62,56 @@ console.log("PASS: insertAt root level");
 assert.throws(() => insertAt(fresh, [99], node(sym("x"), [])), /no node at path/);
 console.log("PASS: insertAt bad path throws");
 
-// --- deepestAncestorImage ---
-
-// Pattern:  R -> C -> N  (linear chain, all variable ids)
-// Reference: r1 -> r2 -> r3 -> r4  (linear chain, symbol ids)
-// Subst: R=r1, C=r3, N=r4
-// For node N: ancestors are R(→r1,[]), C(→r3,[0,0]), N(→r4,[0,0,0])
-// Deepest is r4.
+// --- nodesBefore ---
+// Matches the example in overview.md:
+//   root
+//     a
+//       b
+//     c
+//     d
+//       e
 {
-  const pattern = node(vari("R"), [sym("root")], [
-    node(vari("C"), [sym("c")], [
-      node(vari("N"), [sym("n")]),
-    ]),
-  ]);
-  const reference = node(sym("r1"), [sym("root")], [
-    node(sym("r2"), [sym("r2")], [
-      node(sym("r3"), [sym("r3")], [
-        node(sym("r4"), [sym("r4")]),
-      ]),
-    ]),
-  ]);
-  const subst: Substitution = new Map([
-    ["R", sym("r1")],
-    ["C", sym("r3")],
-    ["N", sym("r4")],
-  ]);
+  const nb = node(sym("b"), [sym("b")]);
+  const na = node(sym("a"), [sym("a")], [nb]);
+  const nc = node(sym("c"), [sym("c")]);
+  const ne = node(sym("e"), [sym("e")]);
+  const nd = node(sym("d"), [sym("d")], [ne]);
+  const nroot = node(sym("root"), [sym("root")], [na, nc, nd]);
 
-  const result = deepestAncestorImage(vari("N"), pattern, reference, subst);
-  assert.deepEqual(result?.id, sym("r4"));
-  console.log("PASS: deepestAncestorImage — deepest of chain");
+  assert.deepEqual(nodesBefore(nroot, na).map((n) => n.id), []);
+  assert.deepEqual(nodesBefore(nroot, nb).map((n) => n.id), []);
+  assert.deepEqual(nodesBefore(nroot, nc).map((n) => n.id), [sym("a"), sym("b")]);
+  assert.deepEqual(nodesBefore(nroot, nd).map((n) => n.id), [sym("a"), sym("b"), sym("c")]);
+  assert.deepEqual(nodesBefore(nroot, ne).map((n) => n.id), [sym("a"), sym("b"), sym("c")]);
+  console.log("PASS: nodesBefore");
 }
 
-// If only the root maps, return the root image.
+// --- isTemporallyBefore ---
+// Matches overview tree:  root / a{b} / c / d{e}
+// Paths: a=[0] b=[0,0] c=[1] d=[2] e=[2,0]
+// Expected < relation (transitive closure of a<c, b<c, c<d, c<e)
 {
-  const pattern = node(vari("R"), [sym("root")], [
-    node(sym("fixed"), [sym("c")], [   // symbol id, won't be in reference
-      node(vari("N"), [sym("n")]),
-    ]),
-  ]);
-  const reference = node(sym("r1"), [sym("root")], [
-    node(sym("r2"), [sym("r2")]),
-  ]);
-  const subst: Substitution = new Map([
-    ["R", sym("r1")],
-    ["N", sym("r2")],  // N maps to r2 but its parent "fixed" doesn't exist in ref
-  ]);
-
-  // Ancestors of N: R→r1([]), fixed→no match, N→r2([0])
-  // Deepest found: r2 at depth 1
-  const result = deepestAncestorImage(vari("N"), pattern, reference, subst);
-  assert.deepEqual(result?.id, sym("r2"));
-  console.log("PASS: deepestAncestorImage — skips unmapped ancestors");
-}
-
-// Node not in pattern → null.
-{
-  const pattern = node(sym("r"), [sym("root")]);
-  const reference = node(sym("r"), [sym("root")]);
-  const result = deepestAncestorImage(sym("missing"), pattern, reference, new Map());
-  assert.equal(result, null);
-  console.log("PASS: deepestAncestorImage — node not in pattern returns null");
+  const a = [0], b = [0, 0], c = [1], d = [2], e = [2, 0];
+  // positive cases
+  assert.equal(isTemporallyBefore(a, c), true);
+  assert.equal(isTemporallyBefore(b, c), true);
+  assert.equal(isTemporallyBefore(c, d), true);
+  assert.equal(isTemporallyBefore(c, e), true);
+  assert.equal(isTemporallyBefore(a, d), true);
+  assert.equal(isTemporallyBefore(b, e), true);
+  // ancestor/descendant excluded
+  assert.equal(isTemporallyBefore(a, b), false); // a is ancestor of b
+  assert.equal(isTemporallyBefore(d, e), false); // d is ancestor of e
+  assert.equal(isTemporallyBefore(b, a), false);
+  // after cases
+  assert.equal(isTemporallyBefore(c, a), false);
+  assert.equal(isTemporallyBefore(d, c), false);
+  // equal
+  assert.equal(isTemporallyBefore(a, a), false);
+  // root
+  assert.equal(isTemporallyBefore(a, []), false);
+  assert.equal(isTemporallyBefore([], a), false);
+  console.log("PASS: isTemporallyBefore");
 }
 
 console.log("All tree tests passed.");

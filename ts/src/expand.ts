@@ -1,5 +1,5 @@
 import type { Term, Tree } from "./types.js";
-import { sym, vari } from "./types.js";
+import { sym, vari, isPositive } from "./types.js";
 import { substAtom } from "./unify.js";
 
 export function idExpand(tree: Tree, name: string): Tree {
@@ -7,9 +7,9 @@ export function idExpand(tree: Tree, name: string): Tree {
   let counter = 1;
 
   function walk(node: Tree): Tree {
-    const isPositive = node.literal.literalType !== "Match";
+    const positive = isPositive(node.literal.literalType);
     let newId: Term;
-    if (isPositive) {
+    if (positive) {
       newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
     } else {
       const isAutoId = node.id.tag === "Variable" && /^\d+$/.test(node.id.name);
@@ -34,7 +34,7 @@ function pruneAndConvert(node: Tree, targetIdx: number, counter: { n: number }):
   if (myIdx > targetIdx) return null;
 
   const literalType =
-    myIdx < targetIdx && node.literal.literalType !== "Match"
+    myIdx < targetIdx && isPositive(node.literal.literalType)
       ? ("Match" as const)
       : node.literal.literalType;
 
@@ -58,7 +58,7 @@ export function expand(pattern: Tree): Tree[] {
   const counter0 = { n: 0 };
   function findPositives(node: Tree): void {
     const idx = counter0.n++;
-    if (node.literal.literalType !== "Match") positiveIdxs.push(idx);
+    if (isPositive(node.literal.literalType)) positiveIdxs.push(idx);
     for (const child of node.children) findPositives(child);
   }
   for (const child of pattern.children) findPositives(child);

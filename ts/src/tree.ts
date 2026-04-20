@@ -1,5 +1,5 @@
-import { substTerm } from "./unify.js";
-import type { Substitution, Term, Tree } from "./types.js";
+import { isPositive } from "./types.js";
+import type { Term, Tree } from "./types.js";
 
 function termEq(a: Term, b: Term): boolean {
   if (a.tag !== b.tag) return false;
@@ -36,8 +36,43 @@ export function cloneTree(tree: Tree): Tree {
 }
 
 export function collectPositiveNodes(tree: Tree): Tree[] {
-  const self = tree.literal.literalType !== "Match" ? [tree] : [];
+  const self = isPositive(tree.literal.literalType) ? [tree] : [];
   return self.concat(tree.children.flatMap(collectPositiveNodes));
+}
+
+// Path-based temporal ordering: a is before b and not an ancestor of b.
+// True iff the first index where the paths diverge has a[i] < b[i].
+// Returns false if a is an ancestor of b, a equals b, or a is after b.
+export function isTemporallyBefore(aPath: number[], bPath: number[]): boolean {
+  const n = Math.min(aPath.length, bPath.length);
+  for (let i = 0; i < n; i++) {
+    if (aPath[i]! < bPath[i]!) return true;
+    if (aPath[i]! > bPath[i]!) return false;
+  }
+  return false;
+}
+
+// Nodes strictly before `target` in the temporal order defined in overview.md:
+// siblings ordered by child index, and nested children inherit the ordering of
+// their ancestor. Equivalent to: pre-order predecessors of target that are not
+// ancestors of target.
+export function nodesBefore(root: Tree, target: Tree): Tree[] {
+  const visited: Tree[] = [];
+  const ancestors = new Set<Tree>();
+  let found = false;
+  function walk(t: Tree): void {
+    if (found) return;
+    if (t === target) { found = true; return; }
+    visited.push(t);
+    ancestors.add(t);
+    for (const c of t.children) {
+      walk(c);
+      if (found) return;
+    }
+    ancestors.delete(t);
+  }
+  walk(root);
+  return visited.filter((n) => !ancestors.has(n));
 }
 
 export function insertAt(tree: Tree, path: number[], child: Tree): void {
@@ -46,31 +81,3 @@ export function insertAt(tree: Tree, path: number[], child: Tree): void {
   parent.children.push(child);
 }
 
-// Given a node N (by id) in pattern, a reference tree, and a substitution from
-// unifyTree, returns the reference node that is deepest among the images of all
-// ancestors of N (including N itself) under the substitution.
-export function deepestAncestorImage(
-  nodeId: Term,
-  pattern: Tree,
-  reference: Tree,
-  subst: Substitution
-): Tree | null {
-  const patPath = findPath(nodeId, pattern);
-  if (patPath === null) return null;
-
-  let deepestNode: Tree | null = null;
-  let deepestDepth = -1;
-
-  for (let len = 0; len <= patPath.length; len++) {
-    const patNode = nodeAt(pattern, patPath.slice(0, len))!;
-    const refId = substTerm(patNode.id, subst);
-    const refPath = findPath(refId, reference);
-    if (refPath === null) continue;
-    if (refPath.length > deepestDepth) {
-      deepestDepth = refPath.length;
-      deepestNode = nodeAt(reference, refPath);
-    }
-  }
-
-  return deepestNode;
-}

@@ -4,7 +4,10 @@ export type Term =
   | { tag: "Atom"; atom: Atom }
   | { tag: "Wildcard" };
 
-export type LiteralType = "Match" | "Assert" | "Ask" | "Constrain";
+export type LiteralType = "Match" | "Before" | "Assert" | "Ask" | "Constrain";
+
+export const isNegative = (t: LiteralType): boolean => t === "Match" || t === "Before";
+export const isPositive = (t: LiteralType): boolean => !isNegative(t);
 
 export interface Atom {
   terms: Term[];

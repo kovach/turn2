@@ -1,4 +1,5 @@
 import type { Atom, Literal, Substitution, Term, Tree } from "./types.js";
+import { isTemporallyBefore } from "./tree.js";
 
 // --- Term substitution ---
 
@@ -82,7 +83,7 @@ function unifyNode(
   ref: Tree,
   subst: Substitution
 ): Substitution | null {
-  if (pat.literal.literalType !== "Match") return null;
+  if (pat.literal.literalType !== "Match" && pat.literal.literalType !== "Before") return null;
   if (ref.literal.literalType !== "Assert" && ref.literal.literalType !== "Ask") return null;
   const s1 = unifyTerms(pat.id, ref.id, subst);
   if (s1 === null) return null;
@@ -104,10 +105,9 @@ function collectNodes(tree: Tree, path: number[]): Candidate[] {
   return out;
 }
 
-function pathsCompatible(a: number[], b: number[]): boolean {
-  const shorter = a.length <= b.length ? a : b;
-  const longer = a.length <= b.length ? b : a;
-  return shorter.every((v, i) => v === longer[i]);
+function isStrictDescendant(ancestor: number[], path: number[]): boolean {
+  if (path.length <= ancestor.length) return false;
+  return ancestor.every((v, i) => v === path[i]);
 }
 
 // --- Main search ---
@@ -124,7 +124,8 @@ function matchChildren(
 ): SearchState[] {
   if (patChildren.length === 0) return [state];
   const [head, ...tail] = patChildren as [Tree, ...Tree[]];
-  if (head.literal.literalType !== "Match") {
+  const ht = head.literal.literalType;
+  if (ht !== "Match" && ht !== "Before") {
     return matchChildren(tail, candidates, state);
   }
   const headResults = matchSubtree(head, candidates, state);
@@ -137,13 +138,17 @@ function matchSubtree(
   { deepest, subst }: SearchState
 ): SearchState[] {
   const results: SearchState[] = [];
+  const isBefore = pat.literal.literalType === "Before";
   for (const { path, node } of candidates) {
-    if (!pathsCompatible(path, deepest)) continue;
+    if (isBefore) {
+      if (!isTemporallyBefore(path, deepest)) continue;
+    } else {
+      if (!isStrictDescendant(deepest, path)) continue;
+    }
     const s = unifyNode(pat, node, subst);
     if (s === null) continue;
-    const newDeepest = path.length >= deepest.length ? path : deepest;
     const childResults = matchChildren(pat.children, candidates, {
-      deepest: newDeepest,
+      deepest: path,
       subst: s,
     });
     results.push(...childResults);

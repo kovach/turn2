@@ -1,14 +1,37 @@
 # todo
 things to add to overview below:
 
-- very basic code overview
-  - (ts plugin?) to enumerate all function names
-    - and print their size in expressions
 - keybinding to generate new test
-  - file format for a behavioral unit test: program + expected output
+  - file format for a behavioral unit test: program <> "\n---\n" <> expected output
   - keybinding to take current file, write it out as a unit test with its current output concatenated
   - editor can load unit test; displays warning if output differs from expected
     - keybinding to update expectation
+
+# query algorithm update
+- add a new literal-type: `before`, denoted with the marker `<`
+- this is a negative literal, like match. it behaves like match, except that it matches nodes that are *temporally before* (see ordering def below) its parent
+```
+- turn A
+  < move X
+    + note A X
+```
+applied to reference tree
+```
++ root
+  + move a
+  + move b
+  + turn
+```
+yields
+
+```
++ root r
+  + move a
+    + note r a
+  + move b
+    + note r b
+  + turn
+```
 
 # query algorithm
 Overview of tree unification types and algorithm
@@ -32,9 +55,8 @@ unify-tree:
   a solution consists of
     - for each `N = Node(I,A,Ns)` in pattern, a Node `f(N) = Node(I',A',Ns')` in reference
     - a single substitution s that unifies each (I,I') and (A,A')
-    - for each path from a node in pattern to the root of pattern, the corresponding reference nodes also lie on a path in reference
-      - **note**: the path need not be in order. the pattern `(foo (bar))` should match the reference `(bar (foo))`
-      - TODO: reverse the above behavior. `(foo (bar))` should no longer match `(bar (foo))`
+    - for each path from a node in pattern to the root of pattern, the corresponding reference nodes also lie on a path in reference, *in the same ancestor order*.
+      that is, if A is an ancestor of B in pattern, then f(A) must be an ancestor of f(B) in reference. so `(foo (bar))` does not match `(bar (foo))`.
 
 to compute unify-tree:
   - init empty substitution
@@ -44,6 +66,175 @@ to compute unify-tree:
 
 notes:
   - we are ignoring the atom-type for now. assume all atoms that show up have type match
+
+# temporal semantics of reference trees
+an ordering on nodes within a tree:
+- if nodes A and B are siblings, and A is before B as a child, then A < B
+- if C is a (nested) child of A, and A < B, then C < B.
+
+```
+- root
+  - a
+    - b
+  - c
+  - d
+    - e
+```
+
+in this tree, the temporal ordering relation is the transitive closure of
+  - a < c
+  - b < c
+  - c < d
+  - c < e
+
+## for substitutions
+we define that a substitution `s` is before a node `n` if every id value in the range of `s` is before `n`
+
+# Temporal semantics of aggregate nodes
+**this feature is currently unimplemented**
+see plans/aggregates.md for partial progress toward specification
+
+Introduce a new syntax to compute an *aggregate* at a particular point of the tree.
+The aggregate is determined by folding a function over the result of a certain local query.
+
+## Example 1
+  ```
+  - root
+    + move a here
+    + move b there
+    + move a there
+    # count -> N
+      < move _ _
+    + note N -- N = 3
+    # count -> N
+      < move a _
+    + note N -- N = 2
+  ```
+
+## Example 2
+  pattern =
+  ```
+  - foo X
+    + bar a 1
+      + ok
+    + bar a 3
+      + ok
+    + bar b 5
+    # sum Y -> Total
+      < bar X Y
+        - ok
+    + result Total
+  ```
+  reference =
+  ```
+    + foo a
+  ```
+  asserts `result 4`
+  but if reference =
+  ```
+    + foo b
+  ```
+  then asserts `result 0`
+
+## Example 3
+  ```
+  + move a here
+  + move b there
+  # last L -> L1
+    < move a L
+  + note L1 -- here
+  + move a there
+  # last L -> L2
+    < move a L
+  + note L2 -- there
+  ```
+
+## Definition
+- the syntax is `# agg-expr\n indented local-pattern ...`
+  - we evaluate local-pattern on every temporal previous tuple, treating each like a root.
+    - any variables appearing in local-pattern that were bound earlier in the
+      outer pattern (in which this expr appears) are fixed; others that are
+      free before this line are bound by the aggregation query.
+    - the result of the local-pattern query is an ordered (by temporal order) list of substitutions
+  - then we evaluate the agg-expr on the result of the local-pattern query
+    - an agg-expr is the name of a ts function followed by zero or more terms followed by "->" and a Term
+      - e.g. `sum X -> Total`
+    - in this case, `function sum(accumulator: Term, X: Term): Term { ... }` is assumed to be a ts function in particular module
+    - the ts function is a fold function, and the end result comes from folding over the local-pattern substitutions
+    - the terms before "->" specify how to map bound values from a given local-pattern substitution to the positional arguments of the agg function
+      - e.g. say the local pattern binds `X=1,Y=2,Z=3`, and the agg-expr is `operate (p X Y) Z`.
+        then the function operate will be called like `operate(acc, t1, t2)` where `t1 = atom(p,1,2)` and `t2=3`
+    - each agg function is also marked by an initial zero value to initialize `accumulator`
+    - the result of the fold is unified against the term to the right of "->"
+- initial aggregate functions to implement:
+  - `count -> N`: count the number of matches
+  - `sum X -> N`: take `X` values bound by local-pattern and sum them
+    - assume that all the `X` values will be `sym(...)` terms applied to string representations of integers; runtime error otherwise
+  - `last A -> B`: takes only the most recent node matching local-pattern. binds that substitution's A value to B
+
+## Definition attempt 2
+  - each occurrence of `# name ...` generates three rules:
+    - the prefix leading up to this node
+    - a query rule containing the local-pattern
+    - and a suffix which matches the aggregate result and contains every node after this one
+  - we explain this with an example:
+    ```
+    -- sum up all the `t X` values appearing below the `foo` node just before a `bar` node, and record the total under `bar`:
+    - foo
+      ...
+      # sum X -> N
+        - t X
+    - bar
+      + note N
+    ```
+    becomes 3 rules total:
+    ```
+    - foo
+      ...
+      +[Id] agg-instance lexId
+
+    - foo
+      ...
+      -[Id] agg-instance lexId
+      - t X
+      + agg-binding lexId Id X
+
+    - foo
+      ...
+      - agg-result lexId Id N
+    - bar
+      + note N
+    ```
+  - the Id can be allocated as usual during `idExpand`, treating a `#` node like a `+` node
+  - the rest of the process is similar to `expand`, except that the suffix refers to `- agg-result` instead of `- agg-instance`
+  - this expansion needs to be done within the `expand` method
+    - they are handled just like `+` nodes, except that when we `pruneAndConvert`, the node goes from `+ agg-instance` to `- agg-result`
+  - in general, `- foo` may be some arbitrary context, and `-t X` may be some arbitrary pattern expression. the latter can refer to variables bound by the former, and the `agg-binding` may capture whichever variables it wishes
+    - this does not require any special handling; it should fall out from the simple manipulation suggested above
+
+  - the agg-result tuple is constructed via special handling inside `fixpoint`
+  - after all rules have hit a fixpoint, we check for any `[Id]agg-instance lexId` that is missing the corresponding `agg-result lexId Id Y`
+  - to compute result,
+    - first collect all `agg-binding Id X` nodes
+    - *sort* them by temporal ordering
+      - if they cannot be ordered, runtime error
+    - fold over them, by temporal ordering, using the approach given in Definition above
+    - save final result N via `+agg-binding Id N`
+
+
+### responses to questions
+
+Q3: do a sort step that attempts to linearize all the substitutions. say that s1 < s2 if every bound id in s1 is less than everyone in s2 (define that helper function). then attempt to order all the local-pattern matches. if they cannot be ordered, runtime error
+Q6: the RHS can be any any term; unify against the result
+Q7: each agg function must have a default value. for last, it will be some special symbol, like sym('undefined')
+
+- lexicalAgg: generate using a counter (I think can share the pre-existing one used for other fresh names; maybe clean this code up for consistency in fresh name generation across pre-processing steps)
+- we need to iterate. after the new feature is implemented , the new `fixpoint` will call the current `fixpoint` followed by the aggregate update in a loop
+  - externally callers will not be aware of the change, use the same "fixpoint" function
+- the `!` that showed up in that example was error. should be `+`
+
+## Misc notes
+- NB: none of the local bound variables are in scope for the remainder of the query pattern; only things to right of "->" are bound
 
 # tree syntax
 
@@ -163,8 +354,6 @@ plan: plans/evaluation.md
 define literal-type match *negative*
 define literal-type assert, ask, constrain *positive*
 
-deepestAncestorImage: see tree.ts
-
 step(pattern, reference) // mutates ref
 - compute unify-tree to get a set of substitutions
 - for each substitution S:
@@ -172,7 +361,7 @@ step(pattern, reference) // mutates ref
   - for each node N containing a positive literal L in pattern:
     - A := S applied to L.atom
     - I := S applied to N.id
-    - P := deepestAncestorImage applied to the parent of N
+    - P := the reference node whose id is S applied to parent(N).id
     - inserts node(I,A,[]) as a child of P in reference
 
 # fixpoint algorithm

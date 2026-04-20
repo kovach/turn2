@@ -19,7 +19,7 @@ function _parseNodes(input: string): Tree[] | ParseError {
   for (const [idx, raw] of input.split("\n").entries()) {
     const lineno = idx + 1;
     const indent = raw.length - raw.trimStart().length;
-    const afterIndent = raw.slice(indent).replace(/#.*$/, "");
+    const afterIndent = raw.slice(indent).replace(/--.*$/, "");
 
     if (afterIndent === "" || afterIndent.trim() === "") continue;
     if (afterIndent[0] === "\t") {
@@ -76,6 +76,7 @@ function _parseNodes(input: string): Tree[] | ParseError {
 function prefixToLiteralType(ch: string | undefined): LiteralType | null {
   switch (ch) {
     case "-": return "Match";
+    case "<": return "Before";
     case "+": return "Assert";
     case "?": return "Ask";
     case "!": return "Constrain";
@@ -160,6 +161,7 @@ export function formatTerm(term: Term): string {
 function literalTypeToPrefix(t: LiteralType): string {
   switch (t) {
     case "Match": return "-";
+    case "Before": return "<";
     case "Assert": return "+";
     case "Ask": return "?";
     case "Constrain": return "!";
