@@ -153,4 +153,68 @@ function literalTypes(tree: Tree): string[] {
   console.log("PASS: two-level integration derives bar and baz");
 }
 
+// --- aggregate expansion ---
+
+// Aggregate node generates 2 rules (emitter + query)
+{
+  const tree = idExpand(parseOne("- foo\n  # sum X -> Total\n    - t X"), "r1");
+  const rules = expand(tree);
+  assert.equal(rules.length, 2, `expected 2 rules, got ${rules.length}`);
+
+  // Rule 1: +[Id] agg-instance lexId
+  const r1 = rules[0]!;
+  const agg1 = r1.children[0]!.children[0]!;
+  assert.equal(agg1.literal.literalType, "Assert");
+  assert.equal(agg1.literal.atom.terms[0]?.tag, "Symbol");
+  if (agg1.literal.atom.terms[0]?.tag === "Symbol") {
+    assert.equal(agg1.literal.atom.terms[0].name, "agg-instance");
+  }
+  console.log("PASS: aggregate rule 1 has + agg-instance");
+
+  // Rule 2: -[Id] agg-instance with local-pattern + agg-binding as children
+  const r2 = rules[1]!;
+  const foo2 = r2.children[0]!;
+  const agg2 = foo2.children[0]!;
+  assert.equal(agg2.literal.literalType, "Match");
+  assert.equal(agg2.literal.atom.terms[0]?.tag, "Symbol");
+  if (agg2.literal.atom.terms[0]?.tag === "Symbol") {
+    assert.equal(agg2.literal.atom.terms[0].name, "agg-instance");
+  }
+
+  // Local-pattern (- t X) is a child of agg-instance
+  const tNode = agg2.children[0];
+  assert.ok(tNode, "expected local-pattern as child of agg-instance");
+  assert.equal(tNode.literal.literalType, "Match");
+
+  // agg-binding is also a child of agg-instance
+  const binding = agg2.children[1];
+  assert.ok(binding, "expected agg-binding as child");
+  assert.equal(binding.literal.literalType, "Assert");
+  if (binding.literal.atom.terms[0]?.tag === "Symbol") {
+    assert.equal(binding.literal.atom.terms[0].name, "agg-binding");
+  }
+  console.log("PASS: aggregate rule 2 has - agg-instance with local-pattern + agg-binding children");
+}
+
+// Aggregate + subsequent positive generates 3 rules
+{
+  const tree = idExpand(parseOne("- foo\n  # sum X -> Total\n    - t X\n  + note Total"), "r1");
+  const rules = expand(tree);
+  assert.equal(rules.length, 3, `expected 3 rules, got ${rules.length}`);
+
+  // Rule 3: suffix with - agg-result
+  const r3 = rules[2]!;
+  const foo3 = r3.children[0]!;
+  // First child should be - agg-result (converted from aggregate)
+  const aggResult = foo3.children[0]!;
+  assert.equal(aggResult.literal.literalType, "Match");
+  if (aggResult.literal.atom.terms[0]?.tag === "Symbol") {
+    assert.equal(aggResult.literal.atom.terms[0].name, "agg-result");
+  }
+  // Second child should be + note Total
+  const note = foo3.children[1]!;
+  assert.equal(note.literal.literalType, "Assert");
+  console.log("PASS: suffix rule has - agg-result");
+}
+
 console.log("All expand tests passed.");

@@ -256,6 +256,7 @@ function literalStyle(t: Literal["literalType"]): [string, string] {
     case "Assert":    return ["+", "lit-assert"];
     case "Ask":       return ["?", "lit-ask"];
     case "Constrain": return ["!", "lit-constrain"];
+    case "Aggregate": return ["#", "lit-aggregate"];
   }
 }
 
@@ -282,10 +283,10 @@ initServer().then(() => {
   patternsEl.focus();
 });
 
-const MARKERS = new Set(["-", "<", "+", "?", "!"]);
+const MARKERS = new Set(["-", "<", "+", "?", "!", "#"]);
 
 function isWeak(line: string): boolean {
-  return /^\s*[-<+?!]?\s*$/.test(line);
+  return /^\s*[-<+?!#]?\s*$/.test(line);
 }
 
 // Use execCommand so edits land on the browser's native undo stack.
@@ -323,7 +324,7 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     handleReturn();
-  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#") && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (handleMarkerKey(e.key)) e.preventDefault();
   } else if (e.key === "s" && e.ctrlKey) {
     e.preventDefault();
@@ -415,7 +416,7 @@ function handleMarkerKey(char: string): boolean {
   const lineEnd = value.indexOf("\n", s);
   const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
   if (!isWeak(line)) return false;
-  const markerMatch = line.match(/^(\s*)([-<+?!])/);
+  const markerMatch = line.match(/^(\s*)([-<+?!#])/);
   if (markerMatch) {
     const markerPos = lineStart + markerMatch[1]!.length;
     if (s >= markerPos) {
@@ -452,7 +453,7 @@ function handleTab() {
     execReplace(s, e, "  ");
   } else {
     // Case 2: line is weak with a type marker
-    const markerMatch = line.match(/^(\s*)([-<+?!])/);
+    const markerMatch = line.match(/^(\s*)([-<+?!#])/);
     if (isWeak(line) && markerMatch) {
       const markerPos = lineStart + markerMatch[1]!.length;
       execReplace(markerPos, markerPos, "  ");

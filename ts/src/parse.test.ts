@@ -212,4 +212,66 @@ function ok(input: string): Tree {
   console.log("PASS: unclosed bracket is error");
 }
 
+// aggregate syntax: # sum X -> Total
+{
+  const tree = ok("# sum X -> Total");
+  const node = tree.children[0]!;
+  assert.equal(node.literal.literalType, "Aggregate");
+  assert(node.aggregateInfo);
+  assert.equal(node.aggregateInfo.funcName, "sum");
+  assert.deepEqual(node.aggregateInfo.args, [{ tag: "Variable", name: "X" }]);
+  assert.deepEqual(node.aggregateInfo.out, { tag: "Variable", name: "Total" });
+  console.log("PASS: aggregate syntax # sum X -> Total");
+}
+
+// aggregate with no args: # count -> N
+{
+  const tree = ok("# count -> N");
+  const node = tree.children[0]!;
+  assert.equal(node.aggregateInfo?.funcName, "count");
+  assert.deepEqual(node.aggregateInfo?.args, []);
+  assert.deepEqual(node.aggregateInfo?.out, { tag: "Variable", name: "N" });
+  console.log("PASS: aggregate with no args");
+}
+
+// aggregate with multiple args: # foo A B -> C
+{
+  const tree = ok("# foo A B -> C");
+  const node = tree.children[0]!;
+  assert.equal(node.aggregateInfo?.funcName, "foo");
+  assert.equal(node.aggregateInfo?.args.length, 2);
+  console.log("PASS: aggregate with multiple args");
+}
+
+// aggregate with local-pattern children
+{
+  const tree = ok("# sum X -> Total\n  - t X");
+  const node = tree.children[0]!;
+  assert.equal(node.literal.literalType, "Aggregate");
+  assert.equal(node.children.length, 1);
+  assert.deepEqual(node.children[0]!.literal.atom.terms, [
+    { tag: "Symbol", name: "t" },
+    { tag: "Variable", name: "X" },
+  ]);
+  console.log("PASS: aggregate with local-pattern children");
+}
+
+// aggregate roundtrip
+{
+  const tree1 = ok("# sum X -> Total\n  - t X");
+  const formatted = formatTree(tree1.children[0]!);
+  const tree2 = ok(formatted);
+  assert.equal(tree2.children[0]!.aggregateInfo?.funcName, "sum");
+  assert.equal(tree2.children[0]!.children.length, 1);
+  console.log("PASS: aggregate roundtrip");
+}
+
+// aggregate missing arrow is error
+{
+  const result = parse("# sum X Total");
+  assert("message" in result);
+  assert((result as { message: string }).message.includes("->"));
+  console.log("PASS: aggregate missing arrow is error");
+}
+
 console.log("All parse tests passed.");

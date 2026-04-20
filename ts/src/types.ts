@@ -4,10 +4,16 @@ export type Term =
   | { tag: "Atom"; atom: Atom }
   | { tag: "Wildcard" };
 
-export type LiteralType = "Match" | "Before" | "Assert" | "Ask" | "Constrain";
+export type LiteralType = "Match" | "Before" | "Assert" | "Ask" | "Constrain" | "Aggregate";
 
 export const isNegative = (t: LiteralType): boolean => t === "Match" || t === "Before";
 export const isPositive = (t: LiteralType): boolean => !isNegative(t);
+
+export interface AggregateInfo {
+  funcName: string;
+  args: Term[];
+  out: Term;
+}
 
 export interface Atom {
   terms: Term[];
@@ -18,10 +24,17 @@ export interface Literal {
   atom: Atom;
 }
 
+export interface MacroInvocation {
+  name: string;
+  args: Term[];
+}
+
 export interface Tree {
   id: Term;
   literal: Literal;
   children: Tree[];
+  aggregateInfo?: AggregateInfo;
+  macroInvocation?: MacroInvocation;
 }
 
 export type Substitution = Map<string, Term>;

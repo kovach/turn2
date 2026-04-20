@@ -1,4 +1,4 @@
-import type { Term, Tree } from "./types.js";
+import type { AggregateInfo, Term, Tree } from "./types.js";
 import { sym, vari, isPositive } from "./types.js";
 import { substAtom } from "./unify.js";
 
@@ -27,52 +27,246 @@ export function idExpand(tree: Tree, name: string): Tree {
   return { ...tree, children };
 }
 
-// Prune the tree to the pre-order prefix ending at targetIdx, converting
-// positive nodes before targetIdx to Match.
-function pruneAndConvert(node: Tree, targetIdx: number, counter: { n: number }): Tree | null {
-  const myIdx = counter.n++;
-  if (myIdx > targetIdx) return null;
+interface AggMeta {
+  lexId: Term;
+  nodeId: Term;
+  info: AggregateInfo;
+  localPattern: Tree[];
+}
 
-  const literalType =
-    myIdx < targetIdx && isPositive(node.literal.literalType)
-      ? ("Match" as const)
-      : node.literal.literalType;
+function pruneAndConvert(
+  node: Tree,
+  targetNode: Tree,
+  state: { found: boolean },
+  aggMap: Map<Tree, AggMeta>,
+): Tree | null {
+  if (state.found) return null;
 
-  if (myIdx === targetIdx) {
-    return { ...node, literal: { ...node.literal, literalType }, children: [] };
+  const aggMeta = aggMap.get(node);
+  const isAgg = node.literal.literalType === "Aggregate";
+
+  if (node === targetNode) {
+    state.found = true;
+    if (isAgg && aggMeta) {
+      return { ...node, literal: { ...node.literal, literalType: "Assert" }, children: [] };
+    }
+    return { ...node, children: [] };
+  }
+
+  // Before target: convert positive to Match, aggregate to agg-result
+  if (isAgg && aggMeta) {
+    const resultId: Term = {
+      tag: "Atom",
+      atom: { terms: [sym("id"), sym("agg-result"), aggMeta.lexId, aggMeta.nodeId] },
+    };
+    return {
+      id: resultId,
+      literal: {
+        literalType: "Match",
+        atom: { terms: [sym("agg-result"), aggMeta.lexId, aggMeta.nodeId, aggMeta.info.out] },
+      },
+      children: [],
+    };
+  }
+
+  let newNode: Tree;
+  if (isPositive(node.literal.literalType)) {
+    newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+  } else {
+    newNode = node;
   }
 
   const children: Tree[] = [];
   for (const child of node.children) {
-    const result = pruneAndConvert(child, targetIdx, counter);
+    const result = pruneAndConvert(child, targetNode, state, aggMap);
     if (result === null) break;
     children.push(result);
   }
-  return { ...node, literal: { ...node.literal, literalType }, children };
+  return { ...newNode, children };
 }
 
-// Given a pattern, return one expanded rule per positive node: a prefix tree
-// ending at that positive node, with all earlier positive nodes converted to Match.
-export function expand(pattern: Tree): Tree[] {
-  const positiveIdxs: number[] = [];
-  const counter0 = { n: 0 };
-  function findPositives(node: Tree): void {
-    const idx = counter0.n++;
-    if (isPositive(node.literal.literalType)) positiveIdxs.push(idx);
-    for (const child of node.children) findPositives(child);
-  }
-  for (const child of pattern.children) findPositives(child);
+let expandCounter = 0;
 
-  return positiveIdxs.map((targetIdx) => {
-    const counter = { n: 0 };
+export function expand(pattern: Tree): Tree[] {
+  const positiveNodes: Tree[] = [];
+  const aggMap = new Map<Tree, AggMeta>();
+
+  function findPositivesAndAggs(node: Tree): void {
+    if (isPositive(node.literal.literalType)) {
+      positiveNodes.push(node);
+      if (node.literal.literalType === "Aggregate" && node.aggregateInfo) {
+        aggMap.set(node, {
+          lexId: sym(`agg_${node.aggregateInfo.funcName}_${expandCounter++}`),
+          nodeId: node.id,
+          info: node.aggregateInfo,
+          localPattern: node.children,
+        });
+      }
+    }
+    for (const child of node.children) findPositivesAndAggs(child);
+  }
+  for (const child of pattern.children) findPositivesAndAggs(child);
+
+  const rules: Tree[] = [];
+
+  for (const targetNode of positiveNodes) {
+    const aggMeta = aggMap.get(targetNode);
+
+    if (aggMeta) {
+      rules.push(buildAggRule1(pattern, targetNode, aggMeta, aggMap));
+      rules.push(buildAggRule2(pattern, targetNode, aggMeta, aggMap));
+    } else {
+      const state = { found: false };
+      const children: Tree[] = [];
+      for (const child of pattern.children) {
+        const result = pruneAndConvert(child, targetNode, state, aggMap);
+        if (result === null) break;
+        children.push(result);
+      }
+      rules.push({ ...pattern, children });
+    }
+  }
+
+  return rules;
+}
+
+function buildAggRule1(
+  pattern: Tree,
+  targetNode: Tree,
+  aggMeta: AggMeta,
+  aggMap: Map<Tree, AggMeta>,
+): Tree {
+  const state = { found: false };
+
+  function prune(node: Tree): Tree | null {
+    if (state.found) return null;
+
+    const isAgg = node.literal.literalType === "Aggregate";
+    const priorAgg = aggMap.get(node);
+
+    if (node === targetNode) {
+      state.found = true;
+      return {
+        id: aggMeta.nodeId,
+        literal: {
+          literalType: "Assert",
+          atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
+        },
+        children: [],
+      };
+    }
+
+    let newNode: Tree;
+    if (isAgg && priorAgg) {
+      newNode = {
+        id: priorAgg.nodeId,
+        literal: {
+          literalType: "Match",
+          atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
+        },
+        children: [],
+      };
+    } else if (isPositive(node.literal.literalType)) {
+      newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+    } else {
+      newNode = node;
+    }
+
     const children: Tree[] = [];
-    for (const child of pattern.children) {
-      const result = pruneAndConvert(child, targetIdx, counter);
+    for (const child of node.children) {
+      const result = prune(child);
       if (result === null) break;
       children.push(result);
     }
-    return { ...pattern, children };
-  });
+    return { ...newNode, children };
+  }
+
+  const children: Tree[] = [];
+  for (const child of pattern.children) {
+    const result = prune(child);
+    if (result === null) break;
+    children.push(result);
+  }
+  return { ...pattern, children };
+}
+
+function buildAggRule2(
+  pattern: Tree,
+  targetNode: Tree,
+  aggMeta: AggMeta,
+  aggMap: Map<Tree, AggMeta>,
+): Tree {
+  const state = { found: false };
+
+  function collectIds(nodes: Tree[]): Term[] {
+    return nodes.flatMap((n) => [n.id, ...collectIds(n.children)]);
+  }
+  const localPatternIds = collectIds(aggMeta.localPattern);
+
+  const bindingId: Term = {
+    tag: "Atom",
+    atom: { terms: [sym("id"), sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...localPatternIds] },
+  };
+  const aggBinding: Tree = {
+    id: bindingId,
+    literal: {
+      literalType: "Assert",
+      atom: { terms: [sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...aggMeta.info.args] },
+    },
+    children: [],
+  };
+
+  function prune(node: Tree): Tree | null {
+    if (state.found) return null;
+
+    const isAgg = node.literal.literalType === "Aggregate";
+    const priorAgg = aggMap.get(node);
+
+    if (node === targetNode) {
+      state.found = true;
+      return {
+        id: aggMeta.nodeId,
+        literal: {
+          literalType: "Match",
+          atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
+        },
+        children: [...aggMeta.localPattern, aggBinding],
+      };
+    }
+
+    let newNode: Tree;
+    if (isAgg && priorAgg) {
+      newNode = {
+        id: priorAgg.nodeId,
+        literal: {
+          literalType: "Match",
+          atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
+        },
+        children: [],
+      };
+    } else if (isPositive(node.literal.literalType)) {
+      newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+    } else {
+      newNode = node;
+    }
+
+    const children: Tree[] = [];
+    for (const child of node.children) {
+      const result = prune(child);
+      if (result === null) break;
+      children.push(result);
+    }
+    return { ...newNode, children };
+  }
+
+  const children: Tree[] = [];
+  for (const child of pattern.children) {
+    const result = prune(child);
+    if (result === null) break;
+    children.push(result);
+  }
+
+  return { ...pattern, children };
 }
 
 export function expandAll(patterns: Tree[]): Tree[] {

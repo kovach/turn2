@@ -145,4 +145,90 @@ const rules = parseRules(`- foo
   console.log("PASS: Before literal — worked example yields note under each prior move");
 }
 
+// --- Aggregate tests ---
+
+// Simple count aggregate: count all `+ t X` nodes
+{
+  const ref = parseOne(`-
+  + t 1
+  + t 2
+  + t 3`);
+  const rules = parseRules(`# count -> N
+  < t _
++ note N`);
+  const { result } = fixpoint(rules, ref);
+  const note = collect(result, "Assert").find((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "note";
+  });
+  assert.ok(note, "note node not found");
+  const peano3 = {
+    tag: "Atom",
+    atom: { terms: [{ tag: "Symbol", name: "s" }, {
+      tag: "Atom",
+      atom: { terms: [{ tag: "Symbol", name: "s" }, {
+        tag: "Atom",
+        atom: { terms: [{ tag: "Symbol", name: "s" }, { tag: "Symbol", name: "z" }] },
+      }] },
+    }] },
+  };
+  assert.deepEqual(note!.literal.atom.terms[1], peano3);
+  console.log("PASS: simple count aggregate");
+}
+
+// Sum aggregate
+{
+  const ref = parseOne(`-
+  + t 1
+  + t 2
+  + t 3`);
+  const rules = parseRules(`# sum X -> N
+  < t X
++ note N`);
+  const { result } = fixpoint(rules, ref);
+  const note = collect(result, "Assert").find((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "note";
+  });
+  assert.ok(note, "note node not found");
+  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "6" });
+  console.log("PASS: sum aggregate");
+}
+
+// Last aggregate
+{
+  const ref = parseOne(`-
+  + t a
+  + t b
+  + t c`);
+  const rules = parseRules(`# last X -> L
+  < t X
++ note L`);
+  const { result } = fixpoint(rules, ref);
+  const note = collect(result, "Assert").find((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "note";
+  });
+  assert.ok(note, "note node not found");
+  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "c" });
+  console.log("PASS: last aggregate");
+}
+
+// Empty aggregate (no bindings) → zero value
+{
+  const ref = parseOne(`-
+  + other 1`);
+  const rules = parseRules(`# count -> N
+  < t _
++ note N`);
+  const { result } = fixpoint(rules, ref);
+  const note = collect(result, "Assert").find((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "note";
+  });
+  assert.ok(note, "note node not found");
+  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "z" });
+  console.log("PASS: empty aggregate returns zero");
+}
+
 console.log("All fixpoint tests passed.");

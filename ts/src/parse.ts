@@ -1,5 +1,6 @@
-import type { Atom, Literal, LiteralType, Term, Tree } from "./types.js";
+import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Term, Tree } from "./types.js";
 import { idExpand } from "./expand.js";
+import { expandMacros } from "./macros.js";
 
 export interface ParseError {
   line: number;
@@ -45,10 +46,35 @@ function _parseNodes(input: string): Tree[] | ParseError {
     }
 
     const rest = afterIndent.slice(atomStart).trim();
-    const terms: Term[] = rest === "" ? [] : parseTerms(tokenize(rest));
+
+    let terms: Term[] = [];
+    let aggregateInfo: AggregateInfo | undefined;
+    let macroInvocation: MacroInvocation | undefined;
+
+    if (rest.startsWith("@")) {
+      const tokens = tokenize(rest.slice(1));
+      if (tokens.length === 0) {
+        return { line: lineno, message: "macro invocation requires a name" };
+      }
+      const name = tokens[0]!;
+      const args = tokens.length > 1 ? parseTerms(tokens.slice(1)) : [];
+      macroInvocation = { name, args };
+    } else if (literalType === "Aggregate") {
+      const parsed = parseAggregateLine(rest, lineno);
+      if ("message" in parsed) return parsed;
+      aggregateInfo = parsed;
+    } else {
+      terms = rest === "" ? [] : parseTerms(tokenize(rest));
+    }
 
     const literal: Literal = { literalType, atom: { terms } };
-    const node: Tree = { id: explicitId ?? { tag: "Variable", name: String(lineno) }, literal, children: [] };
+    const node: Tree = {
+      id: explicitId ?? { tag: "Variable", name: String(lineno) },
+      literal,
+      children: [],
+      ...(aggregateInfo && { aggregateInfo }),
+      ...(macroInvocation && { macroInvocation }),
+    };
 
     while (stack.length > 0 && stack[stack.length - 1]!.indent >= indent) {
       const { node: completed } = stack.pop()!;
@@ -80,12 +106,42 @@ function prefixToLiteralType(ch: string | undefined): LiteralType | null {
     case "+": return "Assert";
     case "?": return "Ask";
     case "!": return "Constrain";
+    case "#": return "Aggregate";
     default: return null;
   }
 }
 
 function tokenize(s: string): string[] {
   return s.replace(/\(/g, " ( ").replace(/\)/g, " ) ").trim().split(/\s+/).filter((t) => t.length > 0);
+}
+
+function parseAggregateLine(rest: string, lineno: number): AggregateInfo | ParseError {
+  const arrowIdx = rest.indexOf("->");
+  if (arrowIdx === -1) {
+    return { line: lineno, message: "aggregate requires '->' separating args from output" };
+  }
+
+  const beforeArrow = rest.slice(0, arrowIdx).trim();
+  const afterArrow = rest.slice(arrowIdx + 2).trim();
+
+  if (beforeArrow === "") {
+    return { line: lineno, message: "aggregate requires function name before '->'" };
+  }
+  if (afterArrow === "") {
+    return { line: lineno, message: "aggregate requires output term after '->'" };
+  }
+
+  const tokens = tokenize(beforeArrow);
+  const funcName = tokens[0]!;
+  const args = tokens.length > 1 ? parseTerms(tokens.slice(1)) : [];
+
+  const outTokens = tokenize(afterArrow);
+  const outTerms = parseTerms(outTokens);
+  if (outTerms.length !== 1) {
+    return { line: lineno, message: "aggregate output must be a single term" };
+  }
+
+  return { funcName, args, out: outTerms[0]! };
 }
 
 function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
@@ -127,7 +183,8 @@ export function parsePatterns(input: string): Tree[] | ParseError {
     if ("message" in result) {
       return { line: startLine + result.line - 1, message: result.message };
     }
-    trees.push(idExpand(result, `r${ruleIndex++}`));
+    const expanded = expandMacros(result);
+    trees.push(idExpand(expanded, `r${ruleIndex++}`));
   }
   return trees;
 }
@@ -135,7 +192,15 @@ export function parsePatterns(input: string): Tree[] | ParseError {
 // --- Formatting ---
 
 export function formatTree(tree: Tree, indent = 0): string {
-  return "  ".repeat(indent) + formatLiteral(tree.literal) + "\n" +
+  let line: string;
+  if (tree.aggregateInfo) {
+    const { funcName, args, out } = tree.aggregateInfo;
+    const argsStr = args.length > 0 ? " " + args.map(formatTerm).join(" ") : "";
+    line = `# ${funcName}${argsStr} -> ${formatTerm(out)}`;
+  } else {
+    line = formatLiteral(tree.literal);
+  }
+  return "  ".repeat(indent) + line + "\n" +
     tree.children.map((c) => formatTree(c, indent + 1)).join("");
 }
 
@@ -165,5 +230,6 @@ function literalTypeToPrefix(t: LiteralType): string {
     case "Assert": return "+";
     case "Ask": return "?";
     case "Constrain": return "!";
+    case "Aggregate": return "#";
   }
 }

@@ -1,0 +1,59 @@
+import type { Term, Tree } from "./types.js";
+import { sym, vari } from "./types.js";
+
+export interface MacroDef {
+  expand: (args: Term[], children: Tree[], fresh: () => string) => Tree;
+}
+
+let macroCounter = 0;
+
+export function resetMacroCounter(): void {
+  macroCounter = 0;
+}
+
+const macros = new Map<string, MacroDef>([
+  ["at", {
+    expand: ([x, y], _children, fresh) => {
+      const l = vari(fresh());
+      return {
+        id: vari(fresh()),
+        literal: { literalType: "Aggregate", atom: { terms: [] } },
+        aggregateInfo: { funcName: "last", args: [l], out: y! },
+        children: [{
+          id: vari(fresh()),
+          literal: { literalType: "Before", atom: { terms: [sym("move"), x!, l] } },
+          children: [],
+        }],
+      };
+    },
+  }],
+]);
+
+export function expandMacro(name: string, args: Term[], children: Tree[]): Tree | null {
+  const def = macros.get(name);
+  if (!def) return null;
+  const fresh = () => `_m${macroCounter++}`;
+  return def.expand(args, children, fresh);
+}
+
+export function expandMacros(tree: Tree): Tree {
+  return { ...tree, children: expandChildren(tree.children) };
+}
+
+function expandChildren(children: Tree[]): Tree[] {
+  const result: Tree[] = [];
+  for (const child of children) {
+    if (child.macroInvocation) {
+      const { name, args } = child.macroInvocation;
+      const expanded = expandMacro(name, args, []);
+      if (!expanded) {
+        throw new Error(`Unknown macro: @${name}`);
+      }
+      result.push(expanded);
+      result.push(...expandChildren(child.children));
+    } else {
+      result.push({ ...child, children: expandChildren(child.children) });
+    }
+  }
+  return result;
+}

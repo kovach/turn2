@@ -1,10 +1,9 @@
 import { step } from "./step.js";
 import { expandAll } from "./expand.js";
+import { closeAggregates } from "./aggregate-fold.js";
 import type { Tree } from "./types.js";
 
-export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result: Tree; steps: number } {
-  const patterns = expandAll(rawPatterns);
-  let ref = initial;
+function innerFixpoint(patterns: Tree[], ref: Tree, gas: number): { result: Tree; steps: number } {
   let changed: boolean;
   let steps = 0;
   do {
@@ -20,6 +19,28 @@ export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result
     if (changed) steps++;
   } while (changed);
   return { result: ref, steps };
+}
+
+export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result: Tree; steps: number } {
+  const patterns = expandAll(rawPatterns);
+  let ref = initial;
+  let totalSteps = 0;
+  let outerChanged: boolean;
+
+  do {
+    // Inner fixpoint: apply rules until stable
+    const { result, steps } = innerFixpoint(patterns, ref, gas - totalSteps);
+    ref = result;
+    totalSteps += steps;
+
+    if (totalSteps >= gas) break;
+
+    // Close aggregates: compute agg-result for any unclosed agg-instance
+    outerChanged = closeAggregates(ref);
+    if (outerChanged) totalSteps++;
+  } while (outerChanged);
+
+  return { result: ref, steps: totalSteps };
 }
 
 export function nilTree(): Tree {
