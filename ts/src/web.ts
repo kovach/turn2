@@ -1,5 +1,6 @@
-import { parsePatterns, formatTerm } from "./parse.js";
+import { parsePatterns, formatTerm, buildSpanIndex } from "./parse.js";
 import { fixpoint0 } from "./fixpoint.js";
+import { expandTerm, type HashconsState } from "./hashcons.js";
 import type { Tree, Literal, Term } from "./types.js";
 
 const patternsEl = document.getElementById("patterns") as HTMLTextAreaElement;
@@ -18,8 +19,114 @@ let pendingSync = false;               // attached: PUT not yet called with curr
 let fileList: string[] = [];
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastValid = true;
+let lastHc: HashconsState | null = null;
 
-const GAS = 20;
+// Source-output linking state
+let patternSpanIndex: Map<number, Tree[]> = new Map();
+let idToLineMap: Map<string, number> = new Map();
+let currentLine: number | null = null;
+
+const GAS = 100;
+
+// --- Source-output linking helpers ---
+
+function getSourceInfo(id: Term): { rule: string; lineId: string } | null {
+  // Expand refs to get the actual atom
+  let term = id;
+  if (term.tag === "Ref" && lastHc) {
+    term = expandTerm(term, lastHc);
+  }
+  if (term.tag !== "Atom") return null;
+  const terms = term.atom.terms;
+  if (terms.length < 3) return null;
+  if (terms[0]?.tag !== "Symbol" || terms[0].name !== "id") return null;
+  if (terms[1]?.tag !== "Symbol") return null;
+  if (terms[2]?.tag !== "Symbol") return null;
+  return { rule: terms[1].name, lineId: terms[2].name };
+}
+
+function buildIdToLineMap(expandedPatterns: Tree[]): Map<string, number> {
+  const map = new Map<string, number>();
+  function walk(node: Tree) {
+    if (node.span && node.id.tag === "Atom") {
+      const info = getSourceInfo(node.id);
+      if (info) {
+        map.set(`${info.rule}:${info.lineId}`, node.span.line);
+      }
+    }
+    node.children.forEach(walk);
+  }
+  expandedPatterns.forEach(walk);
+  return map;
+}
+
+function updateCursorLine() {
+  const pos = patternsEl.selectionStart;
+  const before = patternsEl.value.slice(0, pos);
+  currentLine = before.split("\n").length;
+  highlightResultNodes();
+}
+
+function highlightResultNodes() {
+  resultEl.querySelectorAll(".source-highlight").forEach(el =>
+    el.classList.remove("source-highlight")
+  );
+
+  if (currentLine === null) return;
+
+  const patternNodes = patternSpanIndex.get(currentLine) ?? [];
+  const hasPositive = patternNodes.some(n =>
+    n.literal.literalType === "Assert" ||
+    n.literal.literalType === "Ask" ||
+    n.literal.literalType === "Constrain" ||
+    n.literal.literalType === "Aggregate"
+  );
+
+  if (!hasPositive) return;
+
+  const matches = resultEl.querySelectorAll(`[data-source-line="${currentLine}"]`);
+  matches.forEach(el => el.classList.add("source-highlight"));
+
+  const first = resultEl.querySelector(".source-highlight");
+  if (first) first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// Source line highlight overlay
+const sourceHighlightEl = document.createElement("div");
+sourceHighlightEl.className = "source-line-highlight";
+patternsEl.parentElement!.style.position = "relative";
+patternsEl.parentElement!.insertBefore(sourceHighlightEl, patternsEl);
+
+function getLineMetrics(): { lineHeight: number; paddingTop: number } {
+  const style = getComputedStyle(patternsEl);
+  return {
+    lineHeight: parseFloat(style.lineHeight),
+    paddingTop: parseFloat(style.paddingTop),
+  };
+}
+
+function highlightSourceLine(line: number) {
+  const { lineHeight, paddingTop } = getLineMetrics();
+  const top = patternsEl.offsetTop + paddingTop + (line - 1) * lineHeight - patternsEl.scrollTop;
+
+  sourceHighlightEl.style.display = "block";
+  sourceHighlightEl.style.top = `${top}px`;
+  sourceHighlightEl.style.height = `${lineHeight}px`;
+}
+
+function scrollToSourceLine(line: number) {
+  const { lineHeight, paddingTop } = getLineMetrics();
+  const lineTop = paddingTop + (line - 1) * lineHeight;
+  const viewportHeight = patternsEl.clientHeight;
+
+  // Center the line in the viewport
+  patternsEl.scrollTop = lineTop - viewportHeight / 2 + lineHeight / 2;
+  requestAnimationFrame(() => highlightSourceLine(line));
+}
+
+function clearSourceHighlight() {
+  sourceHighlightEl.style.display = "none";
+}
 
 function updateSyncStatus() {
   if (mode === "detached") {
@@ -154,23 +261,32 @@ async function cycleFile(dir: 1 | -1) {
 
 // --- Click interaction ---
 
-let selectedAsk: string | null = null;
+let clickableTerms: Map<number, Term> = new Map();
+let nextClickableKey = 0;
+let selectedAskKey: number | null = null;
 
 resultEl.addEventListener("click", (e) => {
   const target = (e.target as Element).closest("[data-literal-type]");
   if (!target) { clearSelection(); return; }
+
+  // Scroll to source line if available
+  const sourceLineAttr = target.getAttribute("data-source-line");
+  if (sourceLineAttr) {
+    scrollToSourceLine(parseInt(sourceLineAttr, 10));
+  }
+
   const lt = target.getAttribute("data-literal-type")!;
-  const id = target.getAttribute("data-id")!;
+  const key = parseInt(target.getAttribute("data-term-key")!, 10);
   if (lt === "Ask") {
-    if (selectedAsk === id) {
+    if (selectedAskKey === key) {
       clearSelection();
     } else {
       clearSelection();
-      selectedAsk = id;
+      selectedAskKey = key;
       target.classList.add("node-selected");
     }
-  } else if (lt === "Assert" && selectedAsk !== null) {
-    assertClick(selectedAsk, id);
+  } else if (lt === "Assert" && selectedAskKey !== null) {
+    assertClick(selectedAskKey, key);
     clearSelection();
   } else {
     clearSelection();
@@ -178,25 +294,97 @@ resultEl.addEventListener("click", (e) => {
 });
 
 function clearSelection() {
-  selectedAsk = null;
+  selectedAskKey = null;
   resultEl.querySelectorAll(".node-selected").forEach((el) => el.classList.remove("node-selected"));
 }
 
-function assertClick(askId: string, assertId: string) {
+function compressTerms(terms: Term[]): { bindings: string[]; results: string[] } {
+  const counts = new Map<string, number>();
+  const termByKey = new Map<string, Term>();
+
+  function collectSubterms(t: Term): void {
+    if (t.tag !== "Atom") return;
+    const key = formatTerm(t);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    termByKey.set(key, t);
+    for (const sub of t.atom.terms) {
+      collectSubterms(sub);
+    }
+  }
+
+  for (const term of terms) {
+    collectSubterms(term);
+  }
+
+  // Shared = appears more than once, or is a top-level Atom
+  const shared = new Set<string>();
+  for (const [key, count] of counts) {
+    if (count > 1) shared.add(key);
+  }
+  for (const term of terms) {
+    if (term.tag === "Atom") shared.add(formatTerm(term));
+  }
+
+  if (shared.size === 0) {
+    return { bindings: [], results: terms.map(formatTerm) };
+  }
+
+  // Sort by length (shorter = inner = processed first)
+  const sharedList = [...shared].sort((a, b) => a.length - b.length);
+  const varMap = new Map<string, string>();
+  let varCounter = 1;
+  for (const key of sharedList) {
+    varMap.set(key, `V${varCounter++}`);
+  }
+
+  function rewrite(t: Term): Term {
+    if (t.tag !== "Atom") return t;
+    const key = formatTerm(t);
+    if (varMap.has(key)) {
+      return { tag: "Variable", name: varMap.get(key)! };
+    }
+    return { tag: "Atom", atom: { terms: t.atom.terms.map(rewrite) } };
+  }
+
+  const bindings: string[] = [];
+  for (const key of sharedList) {
+    const varName = varMap.get(key)!;
+    const original = termByKey.get(key)!;
+    if (original.tag !== "Atom") continue;
+    const rewrittenInner = original.atom.terms.map(rewrite);
+    const rewrittenTerm: Term = { tag: "Atom", atom: { terms: rewrittenInner } };
+    bindings.push(`= ${varName} ${formatTerm(rewrittenTerm)}`);
+  }
+
+  const results = terms.map(t => formatTerm(rewrite(t)));
+
+  return { bindings, results };
+}
+
+function assertClick(askKey: number, assertKey: number) {
+  const askTerm = clickableTerms.get(askKey);
+  const assertTerm = clickableTerms.get(assertKey);
+  if (!askTerm || !assertTerm) return;
+
+  const { bindings, results } = compressTerms([askTerm, assertTerm]);
+  const lines = [...bindings, `+ is ${results[0]} ${results[1]}`];
+  const text = "\n\n" + lines.join("\n");
+
   patternsEl.focus();
   patternsEl.setSelectionRange(patternsEl.value.length, patternsEl.value.length);
-  document.execCommand("insertText", false, `\n\n+ is ${askId} ${assertId}`);
+  document.execCommand("insertText", false, text);
 }
 
 // --- Rendering ---
 
 function showError(msg: string) {
   errorBar.textContent = msg;
-  errorBar.style.display = "block";
+  errorBar.classList.add("has-error");
 }
 
 function clearError() {
-  errorBar.style.display = "none";
+  errorBar.textContent = "no issues";
+  errorBar.classList.remove("has-error");
 }
 
 function run() {
@@ -206,15 +394,25 @@ function run() {
     showError(`Patterns — line ${parsedPatterns.line}: ${parsedPatterns.message}`);
     resultEl.innerHTML = "";
     iterationsEl.textContent = "";
+    patternSpanIndex = new Map();
+    idToLineMap = new Map();
     return;
   }
 
   clearError();
 
-  const { result, steps } = fixpoint0(parsedPatterns);
+  patternSpanIndex = buildSpanIndex(parsedPatterns);
+
+  const { result, steps, hc, expandedPatterns } = fixpoint0(parsedPatterns, GAS);
   lastValid = steps < GAS;
+  lastHc = hc;
+  idToLineMap = buildIdToLineMap(expandedPatterns);
+  clickableTerms = new Map();
+  nextClickableKey = 0;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
   resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
+
+  highlightResultNodes();
 }
 
 function renderTree(tree: Tree, depth: number): string {
@@ -226,22 +424,38 @@ function renderTree(tree: Tree, depth: number): string {
 function renderNode(tree: Tree): string {
   const lt = tree.literal.literalType;
   const [prefix, cls] = literalStyle(lt);
-  const terms = tree.literal.atom.terms.map(renderTerm).join(" ");
+  const terms = tree.literal.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
   const body = terms === "" ? prefix : `${prefix} ${terms}`;
+
+  // Add source line attribute for linking
+  const sourceInfo = getSourceInfo(tree.id);
+  const sourceLine = sourceInfo ? idToLineMap.get(`${sourceInfo.rule}:${sourceInfo.lineId}`) : null;
+  const sourceAttr = sourceLine ? ` data-source-line="${sourceLine}"` : "";
+
   const clickable = lt === "Ask" || lt === "Assert";
   if (clickable) {
-    const id = formatTerm(tree.id);
-    return `<span class="${cls} node-clickable" data-id="${id}" data-literal-type="${lt}">${body}</span>`;
+    const expandedId = lastHc ? expandTerm(tree.id, lastHc) : tree.id;
+    const termKey = nextClickableKey++;
+    clickableTerms.set(termKey, expandedId);
+    return `<span class="${cls} node-clickable" data-term-key="${termKey}" data-literal-type="${lt}"${sourceAttr}>${body}</span>`;
   }
-  return `<span class="${cls}">${body}</span>`;
+  return `<span class="${cls}"${sourceAttr}>${body}</span>`;
 }
 
-function renderTerm(term: Term): string {
+function renderTerm(term: Term, isPredicate = false): string {
+  // Expand refs to show full atom structure
+  if (term.tag === "Ref" && lastHc) {
+    const expanded = expandTerm(term, lastHc);
+    if (expanded.tag === "Atom") {
+      return `(${expanded.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
+    }
+  }
   switch (term.tag) {
-    case "Symbol":   return `<span class="lit-symbol">${esc(term.name)}</span>`;
+    case "Symbol":   return `<span class="${isPredicate ? "lit-predicate" : "lit-symbol"}">${esc(term.name)}</span>`;
     case "Variable": return `<span class="lit-variable">${esc(term.name)}</span>`;
-    case "Atom":     return `(${term.atom.terms.map(renderTerm).join(" ")})`;
+    case "Atom":     return `(${term.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
     case "Wildcard": return `<span class="lit-wildcard">_</span>`;
+    case "Ref":      return `<span class="lit-ref">*${term.id}</span>`;
   }
 }
 
@@ -257,6 +471,7 @@ function literalStyle(t: Literal["literalType"]): [string, string] {
     case "Ask":       return ["?", "lit-ask"];
     case "Constrain": return ["!", "lit-constrain"];
     case "Aggregate": return ["#", "lit-aggregate"];
+    case "Equal":     return ["=", "lit-equal"];
   }
 }
 
@@ -277,16 +492,45 @@ patternsEl.addEventListener("input", () => {
 });
 
 patternsEl.addEventListener("keydown", onKey);
+patternsEl.addEventListener("keyup", updateCursorLine);
+patternsEl.addEventListener("click", updateCursorLine);
+patternsEl.addEventListener("scroll", () => {
+  if (sourceHighlightEl.style.display !== "none") {
+    clearSourceHighlight();
+  }
+});
+
+// Reverse direction: hover on result → highlight source + sibling outputs
+resultEl.addEventListener("mouseover", (e) => {
+  const target = (e.target as Element).closest("[data-source-line]");
+  if (!target) return;
+  const line = parseInt(target.getAttribute("data-source-line")!, 10);
+  highlightSourceLine(line);
+  // Highlight all outputs from the same source line
+  resultEl.querySelectorAll(`[data-source-line="${line}"]`).forEach(el =>
+    el.classList.add("hover-highlight")
+  );
+});
+
+resultEl.addEventListener("mouseout", (e) => {
+  const target = (e.target as Element).closest("[data-source-line]");
+  if (target) {
+    clearSourceHighlight();
+    resultEl.querySelectorAll(".hover-highlight").forEach(el =>
+      el.classList.remove("hover-highlight")
+    );
+  }
+});
 
 initServer().then(() => {
   if (mode === "detached") run();
   patternsEl.focus();
 });
 
-const MARKERS = new Set(["-", "<", "+", "?", "!", "#"]);
+const MARKERS = new Set(["-", "<", "+", "?", "!", "#", "="]);
 
 function isWeak(line: string): boolean {
-  return /^\s*[-<+?!#]?\s*$/.test(line);
+  return /^\s*[-<+?!#=]?\s*$/.test(line);
 }
 
 // Use execCommand so edits land on the browser's native undo stack.
@@ -324,7 +568,7 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     handleReturn();
-  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#" || e.key === "=") && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (handleMarkerKey(e.key)) e.preventDefault();
   } else if (e.key === "s" && e.ctrlKey) {
     e.preventDefault();
@@ -416,7 +660,7 @@ function handleMarkerKey(char: string): boolean {
   const lineEnd = value.indexOf("\n", s);
   const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
   if (!isWeak(line)) return false;
-  const markerMatch = line.match(/^(\s*)([-<+?!#])/);
+  const markerMatch = line.match(/^(\s*)([-<+?!#=])/);
   if (markerMatch) {
     const markerPos = lineStart + markerMatch[1]!.length;
     if (s >= markerPos) {
@@ -453,7 +697,7 @@ function handleTab() {
     execReplace(s, e, "  ");
   } else {
     // Case 2: line is weak with a type marker
-    const markerMatch = line.match(/^(\s*)([-<+?!#])/);
+    const markerMatch = line.match(/^(\s*)([-<+?!#=])/);
     if (isWeak(line) && markerMatch) {
       const markerPos = lineStart + markerMatch[1]!.length;
       execReplace(markerPos, markerPos, "  ");

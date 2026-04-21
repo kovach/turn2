@@ -1,4 +1,4 @@
-import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Term, Tree } from "./types.js";
+import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Span, Term, Tree } from "./types.js";
 import { idExpand } from "./expand.js";
 import { expandMacros } from "./macros.js";
 
@@ -35,10 +35,13 @@ function _parseNodes(input: string): Tree[] | ParseError {
 
     let explicitId: Term | null = null;
     let atomStart = 1;
-    if (afterIndent[1] === "[") {
-      const close = afterIndent.indexOf("]", 2);
+    // Skip optional space between prefix and [
+    let bracketStart = 1;
+    if (afterIndent[1] === " " && afterIndent[2] === "[") bracketStart = 2;
+    if (afterIndent[bracketStart] === "[") {
+      const close = afterIndent.indexOf("]", bracketStart + 1);
       if (close === -1) return { line: lineno, message: "unclosed '[' in node id" };
-      const idTokens = tokenize(afterIndent.slice(2, close));
+      const idTokens = tokenize(afterIndent.slice(bracketStart + 1, close));
       const idTerms = parseTerms(idTokens);
       if (idTerms.length !== 1) return { line: lineno, message: "node id must be a single term" };
       explicitId = idTerms[0]!;
@@ -72,6 +75,7 @@ function _parseNodes(input: string): Tree[] | ParseError {
       id: explicitId ?? { tag: "Variable", name: String(lineno) },
       literal,
       children: [],
+      span: { line: lineno },
       ...(aggregateInfo && { aggregateInfo }),
       ...(macroInvocation && { macroInvocation }),
     };
@@ -107,6 +111,7 @@ function prefixToLiteralType(ch: string | undefined): LiteralType | null {
     case "?": return "Ask";
     case "!": return "Constrain";
     case "#": return "Aggregate";
+    case "=": return "Equal";
     default: return null;
   }
 }
@@ -154,6 +159,8 @@ function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
       terms.push({ tag: "Atom", atom: { terms: inner } });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
+    } else if (/^\*\d+$/.test(tok)) {
+      terms.push({ tag: "Ref", id: parseInt(tok.slice(1), 10) });
     } else {
       terms.push(
         tok[0] !== undefined && /[A-Z]/.test(tok[0])
@@ -163,6 +170,15 @@ function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
     }
   }
   return terms;
+}
+
+function adjustSpans(tree: Tree, offset: number): Tree {
+  const newSpan = tree.span ? { ...tree.span, line: tree.span.line + offset } : undefined;
+  return {
+    ...tree,
+    ...(newSpan && { span: newSpan }),
+    children: tree.children.map(c => adjustSpans(c, offset)),
+  };
 }
 
 export function parsePatterns(input: string): Tree[] | ParseError {
@@ -183,7 +199,9 @@ export function parsePatterns(input: string): Tree[] | ParseError {
     if ("message" in result) {
       return { line: startLine + result.line - 1, message: result.message };
     }
-    const expanded = expandMacros(result);
+    // Adjust spans to be absolute line numbers
+    const adjusted = adjustSpans(result, startLine - 1);
+    const expanded = expandMacros(adjusted);
     trees.push(idExpand(expanded, `r${ruleIndex++}`));
   }
   return trees;
@@ -220,6 +238,7 @@ export function formatTerm(term: Term): string {
     case "Variable": return term.name;
     case "Atom": return `(${formatAtom(term.atom)})`;
     case "Wildcard": return "_";
+    case "Ref": return `*${term.id}`;
   }
 }
 
@@ -231,5 +250,20 @@ function literalTypeToPrefix(t: LiteralType): string {
     case "Ask": return "?";
     case "Constrain": return "!";
     case "Aggregate": return "#";
+    case "Equal": return "=";
   }
+}
+
+export function buildSpanIndex(trees: Tree[]): Map<number, Tree[]> {
+  const index = new Map<number, Tree[]>();
+  function walk(t: Tree) {
+    if (t.span) {
+      const list = index.get(t.span.line) ?? [];
+      list.push(t);
+      index.set(t.span.line, list);
+    }
+    t.children.forEach(walk);
+  }
+  trees.forEach(walk);
+  return index;
 }

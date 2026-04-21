@@ -270,5 +270,6 @@ function buildAggRule2(
 }
 
 export function expandAll(patterns: Tree[]): Tree[] {
+  expandCounter = 0;
   return patterns.flatMap(expand);
 }

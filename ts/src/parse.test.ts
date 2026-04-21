@@ -40,14 +40,16 @@ function ok(input: string): Tree {
   console.log("PASS: doc example");
 }
 
-// all four prefixes
+// all prefixes
 {
-  const tree = ok("- a\n+ b\n? c\n! d");
-  assert.equal(tree.children.length, 4);
+  const tree = ok("- a\n+ b\n? c\n! d\n< e\n= f g");
+  assert.equal(tree.children.length, 6);
   assert.equal(tree.children[0]!.literal.literalType, "Match");
   assert.equal(tree.children[1]!.literal.literalType, "Assert");
   assert.equal(tree.children[2]!.literal.literalType, "Ask");
   assert.equal(tree.children[3]!.literal.literalType, "Constrain");
+  assert.equal(tree.children[4]!.literal.literalType, "Before");
+  assert.equal(tree.children[5]!.literal.literalType, "Equal");
   console.log("PASS: all prefixes");
 }
 
@@ -183,6 +185,15 @@ function ok(input: string): Tree {
   console.log("PASS: explicit id syntax -[Id] foo");
 }
 
+// explicit id syntax with space: - [Id] foo
+{
+  const tree = ok("- [Id] foo");
+  const node = tree.children[0]!;
+  assert.deepEqual(node.id, { tag: "Variable", name: "Id" });
+  assert.deepEqual(node.literal.atom.terms, [{ tag: "Symbol", name: "foo" }]);
+  console.log("PASS: explicit id syntax - [Id] foo");
+}
+
 // explicit id as symbol: -[myid] foo
 {
   const tree = ok("-[myid] foo");
@@ -272,6 +283,41 @@ function ok(input: string): Tree {
   assert("message" in result);
   assert((result as { message: string }).message.includes("->"));
   console.log("PASS: aggregate missing arrow is error");
+}
+
+// spans are preserved
+{
+  const tree = ok("- foo\n  + bar");
+  // root has no span (synthetic)
+  assert.equal(tree.span, undefined);
+  assert.deepEqual(tree.children[0]!.span, { line: 1 });
+  assert.deepEqual(tree.children[0]!.children[0]!.span, { line: 2 });
+  console.log("PASS: spans are preserved");
+}
+
+// spans with blank lines
+{
+  const tree = ok("\n- foo\n\n  + bar");
+  assert.deepEqual(tree.children[0]!.span, { line: 2 });
+  assert.deepEqual(tree.children[0]!.children[0]!.span, { line: 4 });
+  console.log("PASS: spans with blank lines");
+}
+
+// parsePatterns adjusts spans for multi-pattern files
+{
+  const { parsePatterns } = await import("./parse.js");
+  const input = "+ a\n  + b\n\n- a\n  + c";
+  const result = parsePatterns(input);
+  assert(!("message" in result));
+  const patterns = result as Tree[];
+  assert.equal(patterns.length, 2);
+  // First pattern: lines 1-2
+  assert.deepEqual(patterns[0]!.children[0]!.span, { line: 1 });
+  assert.deepEqual(patterns[0]!.children[0]!.children[0]!.span, { line: 2 });
+  // Second pattern: lines 4-5
+  assert.deepEqual(patterns[1]!.children[0]!.span, { line: 4 });
+  assert.deepEqual(patterns[1]!.children[0]!.children[0]!.span, { line: 5 });
+  console.log("PASS: parsePatterns adjusts spans for multi-pattern files");
 }
 
 console.log("All parse tests passed.");

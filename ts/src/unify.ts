@@ -1,5 +1,6 @@
 import type { Atom, Literal, Substitution, Term, Tree } from "./types.js";
-import { isTemporallyBefore } from "./tree.js";
+import { findPath, isTemporallyBefore } from "./tree.js";
+import { hashconsTerm, type HashconsState } from "./hashcons.js";
 
 // --- Term substitution ---
 
@@ -20,6 +21,12 @@ export function substAtom(atom: Atom, subst: Substitution): Atom {
 
 // --- Term unification ---
 
+let _hcState: HashconsState | null = null;
+
+export function setUnifyHashcons(hc: HashconsState | null): void {
+  _hcState = hc;
+}
+
 export function unifyTerms(
   a: Term,
   b: Term,
@@ -32,6 +39,10 @@ export function unifyTerms(
 
   if (sa.tag === "Symbol" && sb.tag === "Symbol") {
     return sa.name === sb.name ? subst : null;
+  }
+
+  if (sa.tag === "Ref" && sb.tag === "Ref") {
+    return sa.id === sb.id ? subst : null;
   }
 
   if (sa.tag === "Variable") {
@@ -49,6 +60,16 @@ export function unifyTerms(
 
   if (sa.tag === "Atom" && sb.tag === "Atom") {
     return unifyAtoms(sa.atom, sb.atom, subst);
+  }
+
+  // Atom vs Ref: look up the ref to get the stored atom
+  if (sa.tag === "Atom" && sb.tag === "Ref" && _hcState) {
+    const refAtom = _hcState.refToAtom.get(sb.id);
+    if (refAtom) return unifyAtoms(sa.atom, refAtom, subst);
+  }
+  if (sa.tag === "Ref" && sb.tag === "Atom" && _hcState) {
+    const refAtom = _hcState.refToAtom.get(sa.id);
+    if (refAtom) return unifyAtoms(refAtom, sb.atom, subst);
   }
 
   return null;
@@ -115,6 +136,7 @@ function isStrictDescendant(ancestor: number[], path: number[]): boolean {
 interface SearchState {
   deepest: number[];
   subst: Substitution;
+  root: Tree;
 }
 
 function matchChildren(
@@ -122,34 +144,78 @@ function matchChildren(
   candidates: Candidate[],
   state: SearchState
 ): SearchState[] {
-  if (patChildren.length === 0) return [state];
-  const [head, ...tail] = patChildren as [Tree, ...Tree[]];
+  return matchChildrenFrom(patChildren, 0, candidates, state);
+}
+
+function matchChildrenFrom(
+  patChildren: Tree[],
+  idx: number,
+  candidates: Candidate[],
+  state: SearchState
+): SearchState[] {
+  if (idx >= patChildren.length) return [state];
+  const head = patChildren[idx]!;
   const ht = head.literal.literalType;
-  if (ht !== "Match" && ht !== "Before") {
-    return matchChildren(tail, candidates, state);
+
+  if (ht === "Equal") {
+    const terms = head.literal.atom.terms;
+    if (terms.length !== 2) return [];
+    const unified = unifyTerms(terms[0]!, terms[1]!, state.subst);
+    if (unified === null) return [];
+    return matchChildrenFrom(patChildren, idx + 1, candidates, { ...state, subst: unified });
   }
-  const headResults = matchSubtree(head, candidates, state);
-  return headResults.flatMap((s) => matchChildren(tail, candidates, { deepest: state.deepest, subst: s.subst }));
+
+  if (ht !== "Match" && ht !== "Before") {
+    return matchChildrenFrom(patChildren, idx + 1, candidates, state);
+  }
+
+  const anchor = computeAnchor(patChildren, idx, state);
+  const headResults = matchSubtree(head, candidates, state, anchor);
+  return headResults.flatMap((s) =>
+    matchChildrenFrom(patChildren, idx + 1, candidates, { ...state, subst: s.subst })
+  );
+}
+
+function computeAnchor(
+  siblings: Tree[],
+  idx: number,
+  state: SearchState
+): number[] {
+  const node = siblings[idx]!;
+  if (node.literal.literalType !== "Before") return state.deepest;
+
+  for (let i = idx - 1; i >= 0; i--) {
+    const sib = siblings[i]!;
+    const lt = sib.literal.literalType;
+    if (lt === "Match" || lt === "Before") {
+      const boundId = substTerm(sib.id, state.subst);
+      const path = findPath(boundId, state.root);
+      if (path !== null) return path;
+    }
+  }
+  return state.deepest;
 }
 
 function matchSubtree(
   pat: Tree,
   candidates: Candidate[],
-  { deepest, subst }: SearchState
+  state: SearchState,
+  anchor: number[]
 ): SearchState[] {
   const results: SearchState[] = [];
   const isBefore = pat.literal.literalType === "Before";
   for (const { path, node } of candidates) {
     if (isBefore) {
-      if (!isTemporallyBefore(path, deepest)) continue;
+      if (!isTemporallyBefore(path, anchor)) continue;
     } else {
-      if (!isStrictDescendant(deepest, path)) continue;
+      if (!isStrictDescendant(state.deepest, path)) continue;
     }
-    const s = unifyNode(pat, node, subst);
+    const s = unifyNode(pat, node, state.subst);
     if (s === null) continue;
     const childResults = matchChildren(pat.children, candidates, {
       deepest: path,
       subst: s,
+      root: state.root,
     });
     results.push(...childResults);
   }
@@ -166,5 +232,6 @@ export function unifyTree(pattern: Tree, reference: Tree): Substitution[] {
   return matchChildren(pattern.children, candidates, {
     deepest: [],
     subst: rootSubst,
+    root: reference,
   }).map((s) => s.subst);
 }

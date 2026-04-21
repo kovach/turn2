@@ -7,17 +7,35 @@ things to add to overview below:
   - editor can load unit test; displays warning if output differs from expected
     - keybinding to update expectation
 
-# nesting aggregates
+# hashcons for ids
+plan: plans/hashcons.md
 
+[TODO]:
+  - new term type ref
+  - for each atom term occurring within a node being asserted to output tree, hashcons it
+    - example: hashcons dictionary empty. output contains (id x y). this gets hashcon's to ref(1).
+      output node contains only ref(1)
+    - new tuple contains (id (id x y) z)
+      first arguments are hashconzed, yielding ref(1) and sym(z)
+      now tuple (sym(id) ref(1) sym(z)) is hashconsed to ref(2)
 
+  - invariant: atom term never refers to other atom terms (only refs)
+    - thus: hashcons dictionary is not needed during unification.
+      we know that unequal refs refer to distinct atoms, and when unifying a variable with a ref, we just bind it to the ref
+
+# fringe
+define the *fringe* of a value to be the set of all nodes in a tree whose atoms contain that value
 ```
-- @at _ L
-+ occupied L
-
-# count -> N
-  # last L -> L
-    < move X L
+  + root
+    + card c
+    + card:name c n
+    + card c2
 ```
+the fringe of `c` is `(card c) (card:name c n)`.
+
+the union-fringe of a set of values is the union of their fringes;
+the intersection-fringe of a set of values is the set of nodes that each refer to all the values.
+
 # query algorithm
 Overview of tree unification types and algorithm
 
@@ -54,8 +72,18 @@ notes:
 
 ## other literal types
 ### before
+- plans/before.md
+
 - add a new literal-type: `before`, denoted with the marker `<`
-- this is a negative literal, like match. it behaves like match, except that it matches nodes that are *temporally before* (see ordering def below) its parent
+- this is a negative literal, like match.
+  it behaves like match, except that it matches nodes that are *temporally before* (see ordering def below) its *previous sibling*, or its parent if it has no previous sibling
+  ```
+  + a
+    + b
+    + c
+  ```
+  the previous sibling of c is b
+
 ```
 - turn A
   < move X
@@ -78,6 +106,22 @@ yields
     + note r b
   + turn
 ```
+
+```
+- a
+  - c
+  < b
+  + ok
+```
+applied to
+```
++ a
+  + b
+  + c
+  + d
+```
+
+adds `ok` to the tree
 
 
 # temporal semantics of reference trees
@@ -248,6 +292,28 @@ suppose a list of patterns and a reference tree R, initially nilTree
 
 # editor GUI notes
 - use standard text area actions so that any text insertion or keybinding action (see below) can be undone with ctrl+z
+
+## linking source code with output
+plan: plans/source-output-linking.md
+
+when cursor is on a `+` line, highlight the set of corresponding assertions in the result.
+- use the span info from the parser to determine the pattern node
+- from the pattern node, get the id term
+- from the id term structure, find the result nodes matching it
+
+example: suppose pattern text is
+```
+- foo X       (line 1)
+  + bar X     (line 2)
+```
+after idExpand with name "r1", the `+ bar X` node gets id `(id r1 id1 X1)`.
+when this rule fires (say X=a), the result tree gets a node with id `(id r1 id1 a)`.
+the prefix `(id r1 id1 ...)` is stable — it identifies the source pattern node.
+so: parse the result node id, extract `r1` and `id1`, look up which source line produced that (line 2).
+
+heuristics:
+- try to scroll so that they are all in view. if they don't fit, scroll to the earliest ones
+- apply css class to highlight their background
 
 ## terminology
 define a line to be *weak* if it consists of optinoal whitespace, optional literal type marker (!/+/?/-), optional whitespace

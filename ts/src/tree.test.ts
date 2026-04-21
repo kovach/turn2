@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { findPath, nodeAt, insertAt, nodesBefore, isTemporallyBefore } from "./tree.js";
-import { sym, vari, node } from "./types.js";
+import { findPath, nodeAt, insertAt, nodesBefore, isTemporallyBefore, fringe, unionFringe, intersectionFringe } from "./tree.js";
+import { sym, vari, node, fact } from "./types.js";
 
 //   root (id "r")
 //     a  (id "a")
@@ -112,6 +112,52 @@ console.log("PASS: insertAt bad path throws");
   assert.equal(isTemporallyBefore(a, []), false);
   assert.equal(isTemporallyBefore([], a), false);
   console.log("PASS: isTemporallyBefore");
+}
+
+// --- fringe tests ---
+// Tree from overview.md:
+//   + root
+//     + card c
+//     + card:name c n
+//     + card c2
+{
+  const c = sym("c");
+  const n = sym("n");
+  const c2 = sym("c2");
+  const fringeTree = fact(sym("root"), [sym("root")], [
+    fact(sym("id1"), [sym("card"), c]),
+    fact(sym("id2"), [sym("card:name"), c, n]),
+    fact(sym("id3"), [sym("card"), c2]),
+  ]);
+
+  // fringe of c is nodes containing c: (card c) and (card:name c n)
+  const fringeC = [...fringe(c, fringeTree)];
+  assert.equal(fringeC.length, 2);
+  assert.deepEqual(fringeC[0]!.literal.atom.terms, [sym("card"), c]);
+  assert.deepEqual(fringeC[1]!.literal.atom.terms, [sym("card:name"), c, n]);
+  console.log("PASS: fringe");
+
+  // fringe of n is just (card:name c n)
+  const fringeN = [...fringe(n, fringeTree)];
+  assert.equal(fringeN.length, 1);
+  assert.deepEqual(fringeN[0]!.literal.atom.terms, [sym("card:name"), c, n]);
+  console.log("PASS: fringe single match");
+
+  // union-fringe of {c, n} is the union: both nodes with c plus the one with n
+  const union = [...unionFringe([c, n], fringeTree)];
+  assert.equal(union.length, 2); // (card c) has c, (card:name c n) has both
+  console.log("PASS: unionFringe");
+
+  // intersection-fringe of {c, n} is nodes containing BOTH c and n
+  const intersection = [...intersectionFringe([c, n], fringeTree)];
+  assert.equal(intersection.length, 1);
+  assert.deepEqual(intersection[0]!.literal.atom.terms, [sym("card:name"), c, n]);
+  console.log("PASS: intersectionFringe");
+
+  // intersection-fringe of {c, c2} is empty (no node contains both)
+  const intersectionEmpty = [...intersectionFringe([c, c2], fringeTree)];
+  assert.equal(intersectionEmpty.length, 0);
+  console.log("PASS: intersectionFringe empty");
 }
 
 console.log("All tree tests passed.");

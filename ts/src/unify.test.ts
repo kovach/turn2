@@ -199,4 +199,112 @@ function substStr(s: Substitution): Record<string, string> {
   console.log("PASS 15: Before at top level has no anchor → no match");
 }
 
+// 16. Before uses previous sibling as anchor, not parent
+// pattern: - a / - c / < b   (Before should match things before c, not before a)
+// reference: + a / + b / + c / + d
+// b is before c, so < b should match
+{
+  const pattern = root([
+    node(vari("A"), [sym("a")], [
+      node(vari("C"), [sym("c")], []),
+      { id: vari("B"), literal: { literalType: "Before", atom: { terms: [sym("b")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([
+    fact(sym("ra"), [sym("a")], [
+      fact(sym("rb"), [sym("b")]),
+      fact(sym("rc"), [sym("c")]),
+      fact(sym("rd"), [sym("d")]),
+    ]),
+  ]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 1);
+  assert.deepEqual(substStr(results[0]!), { A: "ra", C: "rc", B: "rb" });
+  console.log("PASS 16: Before uses previous sibling as anchor");
+}
+
+// 17. Before with no previous sibling falls back to parent
+// pattern: - a / < b   (no sibling before <b, so anchor is parent a)
+// reference: + a / + b / + c
+// b is before a? No. So no match.
+{
+  const pattern = root([
+    node(vari("A"), [sym("a")], [
+      { id: vari("B"), literal: { literalType: "Before", atom: { terms: [sym("b")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([
+    fact(sym("ra"), [sym("a")]),
+    fact(sym("rb"), [sym("b")]),
+    fact(sym("rc"), [sym("c")]),
+  ]);
+  const results = unifyTree(pattern, reference);
+  // b is a sibling of a, and b is before a? No, b comes after a in child order
+  // So no match
+  assert.equal(results.length, 0);
+  console.log("PASS 17: Before with no previous sibling falls back to parent anchor");
+}
+
+// 18. Before skips positive siblings when finding anchor
+// pattern: - a / + x / < b   (+ x is positive, skip it, anchor is parent a)
+// reference: + a / + b
+{
+  const pattern = root([
+    node(vari("A"), [sym("a")], [
+      fact(sym("x"), [sym("x")]),
+      { id: vari("B"), literal: { literalType: "Before", atom: { terms: [sym("b")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([
+    fact(sym("rb"), [sym("b")]),
+    fact(sym("ra"), [sym("a")]),
+  ]);
+  const results = unifyTree(pattern, reference);
+  // b is before a, so should match
+  assert.equal(results.length, 1);
+  assert.deepEqual(substStr(results[0]!), { A: "ra", B: "rb" });
+  console.log("PASS 18: Before skips positive siblings when finding anchor");
+}
+
+// 19. Equal: unifies two terms
+{
+  const pattern = root([
+    node(vari("A"), [sym("foo"), vari("X")], [
+      { id: sym("eq"), literal: { literalType: "Equal", atom: { terms: [vari("X"), sym("bar")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([fact(sym("r1"), [sym("foo"), sym("bar")])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 1);
+  assert.deepEqual(substStr(results[0]!), { A: "r1", X: "bar" });
+  console.log("PASS 19: Equal unifies two terms");
+}
+
+// 20. Equal: fails when terms don't unify
+{
+  const pattern = root([
+    node(vari("A"), [sym("foo"), vari("X")], [
+      { id: sym("eq"), literal: { literalType: "Equal", atom: { terms: [vari("X"), sym("bar")] } }, children: [] },
+    ]),
+  ]);
+  const reference = root([fact(sym("r1"), [sym("foo"), sym("baz")])]);
+  const results = unifyTree(pattern, reference);
+  assert.equal(results.length, 0);
+  console.log("PASS 20: Equal fails when terms don't unify");
+}
+
+// 21. Equal: unifies two variables
+{
+  const pattern = root([
+    node(vari("A"), [sym("pair"), vari("X"), vari("Y")], [
+      { id: sym("eq"), literal: { literalType: "Equal", atom: { terms: [vari("X"), vari("Y")] } }, children: [] },
+    ]),
+  ]);
+  const ref1 = root([fact(sym("r1"), [sym("pair"), sym("a"), sym("a")])]);
+  const ref2 = root([fact(sym("r2"), [sym("pair"), sym("a"), sym("b")])]);
+  assert.equal(unifyTree(pattern, ref1).length, 1);
+  assert.equal(unifyTree(pattern, ref2).length, 0);
+  console.log("PASS 21: Equal unifies two variables");
+}
+
 console.log("All tests passed.");

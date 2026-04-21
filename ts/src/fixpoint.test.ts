@@ -33,7 +33,7 @@ const rules = parseRules(`- foo
 // basic: bar is asserted under foo
 {
   const { result } = fixpoint(rules, ref);
-  const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Atom");
+  const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Ref");
   assert.equal(inserted.length, 1);
   assert.deepEqual(inserted[0]!.literal.atom.terms, [{ tag: "Symbol", name: "bar" }]);
   console.log("PASS: fixpoint asserts bar under foo");
@@ -43,7 +43,7 @@ const rules = parseRules(`- foo
 {
   const { result: r1 } = fixpoint(rules, ref);
   const { result: r2 } = fixpoint(rules, r1);
-  const inserted = collect(r2, "Assert").filter((n) => n.id.tag === "Atom");
+  const inserted = collect(r2, "Assert").filter((n) => n.id.tag === "Ref");
   assert.equal(inserted.length, 1);
   console.log("PASS: fixpoint is idempotent");
 }
@@ -145,6 +145,26 @@ const rules = parseRules(`- foo
   console.log("PASS: Before literal — worked example yields note under each prior move");
 }
 
+// Before uses previous sibling as anchor (overview.md example)
+{
+  const ref = parseOne(`-
+  + a
+    + b
+    + c
+    + d`);
+  const rules = parseRules(`- a
+  - c
+  < b
+  + ok`);
+  const { result } = fixpoint(rules, ref);
+  const oks = collect(result, "Assert").filter((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "ok";
+  });
+  assert.equal(oks.length, 1, "expected exactly one ok node");
+  console.log("PASS: Before uses previous sibling as anchor");
+}
+
 // --- Aggregate tests ---
 
 // Simple count aggregate: count all `+ t X` nodes
@@ -162,17 +182,9 @@ const rules = parseRules(`- foo
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
-  const peano3 = {
-    tag: "Atom",
-    atom: { terms: [{ tag: "Symbol", name: "s" }, {
-      tag: "Atom",
-      atom: { terms: [{ tag: "Symbol", name: "s" }, {
-        tag: "Atom",
-        atom: { terms: [{ tag: "Symbol", name: "s" }, { tag: "Symbol", name: "z" }] },
-      }] },
-    }] },
-  };
-  assert.deepEqual(note!.literal.atom.terms[1], peano3);
+  // Count of 3 produces (s (s (s z))) which gets hashconsed to a Ref
+  const countTerm = note!.literal.atom.terms[1];
+  assert.equal(countTerm?.tag, "Ref", "expected count result to be a Ref (hashconsed Peano numeral)");
   console.log("PASS: simple count aggregate");
 }
 
@@ -229,6 +241,37 @@ const rules = parseRules(`- foo
   assert.ok(note, "note node not found");
   assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "z" });
   console.log("PASS: empty aggregate returns zero");
+}
+
+// Multiple sibling aggregates with empty bindings
+{
+  const ref = parseOne(`+ a`);
+  const rules = parseRules(`- a
+  + b
+  + c
+
+- b
+  # count -> N
+    < act
+  + note b N
+
+- c
+  # count -> N
+    < act
+  + note c N`);
+  const { result } = fixpoint(rules, ref);
+  const notes = collect(result, "Assert").filter((c) => {
+    const t = c.literal.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "note";
+  });
+  assert.equal(notes.length, 2, "expected two note nodes");
+  const noteB = notes.find((n) => n.literal.atom.terms[1]?.tag === "Symbol" && n.literal.atom.terms[1].name === "b");
+  const noteC = notes.find((n) => n.literal.atom.terms[1]?.tag === "Symbol" && n.literal.atom.terms[1].name === "c");
+  assert.ok(noteB, "note b not found");
+  assert.ok(noteC, "note c not found");
+  assert.deepEqual(noteB!.literal.atom.terms[2], { tag: "Symbol", name: "z" });
+  assert.deepEqual(noteC!.literal.atom.terms[2], { tag: "Symbol", name: "z" });
+  console.log("PASS: multiple sibling aggregates with empty bindings");
 }
 
 console.log("All fixpoint tests passed.");

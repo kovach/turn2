@@ -134,7 +134,16 @@ After each inner fixpoint settles:
 
 1. Collect every `agg-instance lexId` node, noting its id `Id` and parent.
 
-2. For each `(lexId, Id)` pair with no matching `agg-result lexId Id _`:
+2. Filter to *paused* instances: those with no matching `agg-result lexId Id _`.
+
+3. **Select the earliest tier**: Sort paused instances by temporal order.
+   Take the first instance, then include any others that are temporally
+   *incomparable* to it (i.e., siblings or cousins at the same depth that
+   cannot be ordered). Stop when we reach an instance that is temporally
+   *after* the first. This ensures aggregates compute in dependency order —
+   a later aggregate that references an earlier one's result will wait.
+
+4. For each instance in the earliest tier:
    a. Gather all `agg-binding lexId Id ...args` nodes (both `lexId` and
       `Id` must match).
    b. Sort bindings by temporal order (see below). Runtime error if any
@@ -143,8 +152,9 @@ After each inner fixpoint settles:
    d. Insert `+ agg-result lexId Id <acc>` as a sibling of the
       `agg-instance` node (same parent).
 
-3. If step 2 inserted anything, re-run inner fixpoint so consumer rules
-   fire. Loop until nothing new is produced.
+5. If step 4 inserted anything, re-run inner fixpoint so consumer rules
+   fire. Loop until nothing new is produced. Remaining paused instances
+   (those not in the earliest tier) will be processed in subsequent rounds.
 
 ### Ordering
 

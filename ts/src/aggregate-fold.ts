@@ -1,19 +1,8 @@
 import type { Term, Tree } from "./types.js";
 import { sym } from "./types.js";
-import { findPath, isTemporallyBefore } from "./tree.js";
+import { findPath, isTemporallyBefore, termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
-
-function termEq(a: Term, b: Term): boolean {
-  if (a.tag !== b.tag) return false;
-  if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
-  if (a.tag === "Variable" && b.tag === "Variable") return a.name === b.name;
-  if (a.tag === "Atom" && b.tag === "Atom") {
-    const at = a.atom.terms, bt = b.atom.terms;
-    return at.length === bt.length && at.every((t, i) => termEq(t, bt[i]!));
-  }
-  if (a.tag === "Wildcard") return true;
-  return false;
-}
+import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
 
 function isSymbol(t: Term, name: string): boolean {
   return t.tag === "Symbol" && t.name === name;
@@ -112,14 +101,35 @@ function sortBindings(bindings: AggBinding[], root: Tree): AggBinding[] {
   });
 }
 
-export function closeAggregates(ref: Tree): boolean {
+function selectEarliestTier(paused: AggInstance[]): AggInstance[] {
+  if (paused.length === 0) return [];
+  if (paused.length === 1) return paused;
+
+  const sorted = [...paused].sort((a, b) => {
+    if (isTemporallyBefore(a.path, b.path)) return -1;
+    if (isTemporallyBefore(b.path, a.path)) return 1;
+    return 0; // incomparable — same tier
+  });
+
+  const earliest: AggInstance[] = [sorted[0]!];
+  for (let i = 1; i < sorted.length; i++) {
+    if (isTemporallyBefore(sorted[0]!.path, sorted[i]!.path)) {
+      break; // this and all subsequent are after the first
+    }
+    earliest.push(sorted[i]!);
+  }
+  return earliest;
+}
+
+export function closeAggregates(ref: Tree, hc: HashconsState): boolean {
   const { instances, bindings, results } = collectAggNodes(ref);
+
+  const paused = instances.filter((i) => !hasResult(i, results));
+  const earliest = selectEarliestTier(paused);
 
   let changed = false;
 
-  for (const instance of instances) {
-    if (hasResult(instance, results)) continue;
-
+  for (const instance of earliest) {
     const matchingBindings = getBindingsForInstance(instance, bindings);
     const sorted = sortBindings(matchingBindings, ref);
 
@@ -138,15 +148,18 @@ export function closeAggregates(ref: Tree): boolean {
     }
 
     // Insert + agg-result lexId instanceId acc as sibling of agg-instance
-    const resultId: Term = {
+    const rawResultId: Term = {
       tag: "Atom",
       atom: { terms: [sym("id"), sym("agg-result"), instance.lexId, instance.instanceId] },
     };
+    const rawAtom = { terms: [sym("agg-result"), instance.lexId, instance.instanceId, acc] };
+    const resultId = hashconsTerm(rawResultId, hc);
+    const resultAtom = hashconsAtom(rawAtom, hc);
     const resultNode: Tree = {
       id: resultId,
       literal: {
         literalType: "Assert",
-        atom: { terms: [sym("agg-result"), instance.lexId, instance.instanceId, acc] },
+        atom: resultAtom,
       },
       children: [],
     };

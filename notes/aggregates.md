@@ -120,13 +120,15 @@ The aggregate is determined by folding a function over the result of a certain l
     - this does not require any special handling; it should fall out from the simple manipulation suggested above
 
   - the agg-result tuple is constructed via special handling inside `fixpoint`
-  - after all rules have hit a fixpoint, we check for any `[Id]agg-instance lexId` that is missing the corresponding `agg-result lexId Id Y`
-  - to compute result,
-    - first collect all `agg-binding Id X` nodes
-    - *sort* them by temporal ordering
-      - if they cannot be ordered, runtime error
-    - fold over them, by temporal ordering, using the approach given in Definition above
-    - save final result N via `+agg-binding Id N`
+  - after all rules have hit a fixpoint, we check for any `[Id]agg-instance lexId` that is missing the corresponding `agg-result lexId Id Y`. call this aggregate *paused*
+  - [TODO]select the one that is temporally earliest. if more than one is, take both. compute their results
+    - to compute result,
+      - first collect all `agg-binding Id X` nodes
+      - *sort* them by temporal ordering
+        - if they cannot be ordered, runtime error
+      - fold over them, by temporal ordering, using the approach given in Definition above
+      - save final result N via `+agg-binding Id N`
+  - restart fixpoint, starting with normal rules (any remaining paused aggregates wait)
 
 ## Misc notes
 - NB: none of the local bound variables are in scope for the remainder of the query pattern; only things to right of "->" are bound

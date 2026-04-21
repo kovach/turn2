@@ -146,7 +146,7 @@ function literalTypes(tree: Tree): string[] {
     return self.concat(tree.children.flatMap((c) => collect(c, type)));
   }
 
-  const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Atom");
+  const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Ref");
   const atoms = inserted.map((n) => n.literal.atom.terms.map((t) => ("name" in t ? t.name : "?")).join(" "));
   assert.ok(atoms.includes("bar"), `expected "bar" in ${JSON.stringify(atoms)}`);
   assert.ok(atoms.includes("baz"), `expected "baz" in ${JSON.stringify(atoms)}`);

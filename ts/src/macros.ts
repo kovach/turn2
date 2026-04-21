@@ -49,7 +49,8 @@ function expandChildren(children: Tree[]): Tree[] {
       if (!expanded) {
         throw new Error(`Unknown macro: @${name}`);
       }
-      result.push(expanded);
+      // Inherit span from macro invocation site
+      result.push({ ...expanded, ...(child.span && { span: child.span }) });
       result.push(...expandChildren(child.children));
     } else {
       result.push({ ...child, children: expandChildren(child.children) });

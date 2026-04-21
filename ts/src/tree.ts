@@ -1,15 +1,38 @@
 import { isPositive } from "./types.js";
 import type { Term, Tree } from "./types.js";
+import type { HashconsState } from "./hashcons.js";
 
-function termEq(a: Term, b: Term): boolean {
-  if (a.tag !== b.tag) return false;
-  if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
-  if (a.tag === "Variable" && b.tag === "Variable") return a.name === b.name;
-  if (a.tag === "Atom" && b.tag === "Atom") {
-    const at = a.atom.terms, bt = b.atom.terms;
-    return at.length === bt.length && at.every((t, i) => termEq(t, bt[i]!));
+let _hcState: HashconsState | null = null;
+
+export function setTreeHashcons(hc: HashconsState | null): void {
+  _hcState = hc;
+}
+
+function atomEq(aTerms: Term[], bTerms: Term[]): boolean {
+  if (aTerms.length !== bTerms.length) return false;
+  return aTerms.every((t, i) => termEq(t, bTerms[i]!));
+}
+
+export function termEq(a: Term, b: Term): boolean {
+  if (a.tag === b.tag) {
+    if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
+    if (a.tag === "Variable" && b.tag === "Variable") return a.name === b.name;
+    if (a.tag === "Ref" && b.tag === "Ref") return a.id === b.id;
+    if (a.tag === "Atom" && b.tag === "Atom") return atomEq(a.atom.terms, b.atom.terms);
+    if (a.tag === "Wildcard") return true;
+    return false;
   }
-  if (a.tag === "Wildcard") return true;
+  // Cross-type: Atom vs Ref - look up ref to compare
+  if (_hcState) {
+    if (a.tag === "Atom" && b.tag === "Ref") {
+      const refAtom = _hcState.refToAtom.get(b.id);
+      return refAtom ? atomEq(a.atom.terms, refAtom.terms) : false;
+    }
+    if (a.tag === "Ref" && b.tag === "Atom") {
+      const refAtom = _hcState.refToAtom.get(a.id);
+      return refAtom ? atomEq(refAtom.terms, b.atom.terms) : false;
+    }
+  }
   return false;
 }
 
@@ -79,5 +102,45 @@ export function insertAt(tree: Tree, path: number[], child: Tree): void {
   const parent = nodeAt(tree, path);
   if (parent === null) throw new Error(`no node at path [${path}]`);
   parent.children.push(child);
+}
+
+// --- Fringe functions ---
+
+function termContains(term: Term, value: Term): boolean {
+  if (termEq(term, value)) return true;
+  if (term.tag === "Atom") {
+    return term.atom.terms.some((t) => termContains(t, value));
+  }
+  return false;
+}
+
+function atomContainsValue(tree: Tree, value: Term): boolean {
+  return tree.literal.atom.terms.some((t) => termContains(t, value));
+}
+
+function* walkTree(tree: Tree): Generator<Tree> {
+  yield tree;
+  for (const child of tree.children) {
+    yield* walkTree(child);
+  }
+}
+
+export function* fringe(value: Term, tree: Tree): Generator<Tree> {
+  for (const node of walkTree(tree)) {
+    if (atomContainsValue(node, value)) yield node;
+  }
+}
+
+export function* unionFringe(values: Term[], tree: Tree): Generator<Tree> {
+  for (const node of walkTree(tree)) {
+    if (values.some((v) => atomContainsValue(node, v))) yield node;
+  }
+}
+
+export function* intersectionFringe(values: Term[], tree: Tree): Generator<Tree> {
+  if (values.length === 0) return;
+  for (const node of walkTree(tree)) {
+    if (values.every((v) => atomContainsValue(node, v))) yield node;
+  }
 }
 

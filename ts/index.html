@@ -44,11 +44,16 @@
     }
 
     #error-bar {
-      display: none;
       padding: 4px 16px;
+      background: #1e1e1e;
+      color: #555;
+      font-size: 12px;
+      border-bottom: 1px solid #333;
+    }
+
+    #error-bar.has-error {
       background: #3a1a1a;
       color: #f87171;
-      font-size: 12px;
       border-bottom: 1px solid #5a2a2a;
     }
 
@@ -100,6 +105,8 @@
       line-height: 1.6;
       resize: none;
       tab-size: 2;
+      white-space: nowrap;
+      overflow-x: auto;
     }
 
     textarea:focus {
@@ -131,19 +138,72 @@
       font-size: 13px;
       line-height: 1.6;
       white-space: pre;
+      color: #fff;
     }
 
-    .lit-match    { color: #9cdcfe; }
-    .lit-before   { color: #c586c0; }
-    .lit-assert   { color: #4ec9b0; }
-    .lit-ask      { color: #dcdcaa; }
-    .lit-constrain { color: #f48771; }
-    .lit-symbol   { color: #ce9178; }
+    .lit-match    { color: #fff; }
+    .lit-before   { color: #fff; }
+    .lit-assert   { color: #fff; }
+    .lit-ask      { color: #fff; }
+    .lit-constrain { color: #fff; }
+    .lit-symbol   { color: #fff; }
     .lit-variable { color: #4fc1ff; }
-    .lit-wildcard { color: #666; }
+    .lit-wildcard { color: #fff; }
+    .lit-predicate { color: #f5a623; }
 
     .node-clickable { cursor: pointer; }
     .node-selected  { background: #3a3a1a; outline: 1px solid #dcdcaa; border-radius: 2px; }
+
+    /* Source-output linking */
+    .source-highlight {
+      background-color: rgba(59, 130, 246, 0.3);
+      border-radius: 2px;
+    }
+
+    .hover-highlight {
+      background-color: rgba(168, 85, 247, 0.3);
+      border-radius: 2px;
+    }
+
+    .source-line-highlight {
+      position: absolute;
+      left: 0;
+      right: 0;
+      background-color: rgba(59, 130, 246, 0.25);
+      pointer-events: none;
+      z-index: 1;
+      display: none;
+    }
+
+    .pane {
+      position: relative;
+    }
+
+    textarea {
+      position: relative;
+      z-index: 2;
+      background: transparent;
+    }
+
+    .pane::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #1a1a1a;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    textarea:focus {
+      background: transparent;
+    }
+
+    .pane:has(textarea:focus)::before {
+      background: #1c1c1c;
+    }
   </style>
 </head>
 <body>
@@ -152,7 +212,7 @@
     <span id="file-name"></span>
     <span id="sync-status"></span>
   </header>
-  <div id="error-bar"></div>
+  <div id="error-bar">no issues</div>
   <div class="workspace">
     <div class="editors">
       <div class="pane">
