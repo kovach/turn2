@@ -102,6 +102,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname.startsWith("/data/") && pathname.endsWith(".js")) {
+    const file = pathname.slice(6);
+    if (file.includes("..") || file.includes("/")) {
+      res.writeHead(400); res.end("Invalid path");
+      return;
+    }
+    try {
+      const content = fs.readFileSync(path.join(dataDir, file));
+      res.writeHead(200, { "Content-Type": "application/javascript" });
+      res.end(content);
+    } catch { res.writeHead(404); res.end("Not found"); }
+    return;
+  }
+
   res.writeHead(404);
   res.end("Not found");
 });

@@ -47,7 +47,7 @@ export function unifyTerms(
 
   if (sa.tag === "Variable") {
     if (sb.tag === "Variable" && sa.name === sb.name) return subst;
-    const next = new Map(subst);
+    const next = new Map(subst); // TODO perf
     next.set(sa.name, sb);
     return next;
   }

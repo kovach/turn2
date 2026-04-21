@@ -1,27 +1,36 @@
-# todo
-things to add to overview below:
+# nice display for natural numbers
 
-- keybinding to generate new test
-  - file format for a behavioral unit test: program <> "\n---\n" <> expected output
-  - keybinding to take current file, write it out as a unit test with its current output concatenated
-  - editor can load unit test; displays warning if output differs from expected
-    - keybinding to update expectation
+# display as ttt board
+plan: plans/display-ttt.md
+
+- a program might have program-specific display functions written in ts
+- parse this from a triple-dash-comment block at the file top:
+```
+---
+--- display: ttt.ts
+---
+```
+
+## notes on ttt demo
+display functions for the tic-tac-toe application written at `ts/data/ttt.sl`
+- a `cell R C` should be a square at row R (vertical) and column C (horizontal) across page
+- a `fill (cell R C) M` should show `x` or `o` (value of `M`) on top of the cell
+- clicking a cell that is not filled should carry out what is currently done by clicking the most recent ask followed by clicking a tuple in the result pane
 
 # hashcons for ids
 plan: plans/hashcons.md
 
-[TODO]:
-  - new term type ref
-  - for each atom term occurring within a node being asserted to output tree, hashcons it
-    - example: hashcons dictionary empty. output contains (id x y). this gets hashcon's to ref(1).
-      output node contains only ref(1)
-    - new tuple contains (id (id x y) z)
-      first arguments are hashconzed, yielding ref(1) and sym(z)
-      now tuple (sym(id) ref(1) sym(z)) is hashconsed to ref(2)
+- new term type ref
+- for each atom term occurring within a node being asserted to output tree, hashcons it
+  - example: hashcons dictionary empty. output contains (id x y). this gets hashcon's to ref(1).
+    output node contains only ref(1)
+  - new tuple contains (id (id x y) z)
+    first arguments are hashconzed, yielding ref(1) and sym(z)
+    now tuple (sym(id) ref(1) sym(z)) is hashconsed to ref(2)
 
-  - invariant: atom term never refers to other atom terms (only refs)
-    - thus: hashcons dictionary is not needed during unification.
-      we know that unequal refs refer to distinct atoms, and when unifying a variable with a ref, we just bind it to the ref
+- invariant: atom term never refers to other atom terms (only refs)
+  - thus: hashcons dictionary is not needed during unification.
+    we know that unequal refs refer to distinct atoms, and when unifying a variable with a ref, we just bind it to the ref
 
 # fringe
 define the *fringe* of a value to be the set of all nodes in a tree whose atoms contain that value
@@ -35,6 +44,8 @@ the fringe of `c` is `(card c) (card:name c n)`.
 
 the union-fringe of a set of values is the union of their fringes;
 the intersection-fringe of a set of values is the set of nodes that each refer to all the values.
+
+TODO: use this for constraining choices
 
 # query algorithm
 Overview of tree unification types and algorithm

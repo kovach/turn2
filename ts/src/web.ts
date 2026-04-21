@@ -9,6 +9,9 @@ const errorBar = document.getElementById("error-bar") as HTMLDivElement;
 const iterationsEl = document.getElementById("iterations") as HTMLSpanElement;
 const fileNameEl = document.getElementById("file-name") as HTMLSpanElement;
 const syncStatusEl = document.getElementById("sync-status") as HTMLSpanElement;
+const displayPaneEl = document.getElementById("display-pane") as HTMLDivElement;
+const displayEl = document.getElementById("display") as HTMLDivElement;
+const rightColumnEl = displayPaneEl.parentElement as HTMLDivElement;
 
 // --- Server sync state ---
 
@@ -27,6 +30,102 @@ let idToLineMap: Map<string, number> = new Map();
 let currentLine: number | null = null;
 
 const GAS = 100;
+
+// --- Frontmatter parsing ---
+
+interface Frontmatter {
+  display?: string;
+}
+
+function parseFrontmatter(source: string): { frontmatter: Frontmatter; body: string } {
+  // Frontmatter is slide comments: --- delimiters with --- key: value lines
+  // e.g.:
+  //   ---
+  //   --- display: ttt.js
+  //   ---
+  // The entire source remains as body (frontmatter lines are valid comments)
+  const frontmatter: Frontmatter = {};
+  const match = source.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (match) {
+    for (const line of match[1]!.split("\n")) {
+      // Parse lines like "--- key: value"
+      const kvMatch = line.match(/^---\s+(\w+):\s*(.*)$/);
+      if (kvMatch) {
+        const key = kvMatch[1]!;
+        const value = kvMatch[2]!;
+        if (key === "display") {
+          frontmatter.display = value;
+        }
+      }
+    }
+  }
+  return { frontmatter, body: source };
+}
+
+// --- Display Module System ---
+
+interface DisplayModule {
+  render(root: Tree, hc: HashconsState): {
+    element: HTMLElement;
+    clicks: Map<HTMLElement, { askId: Term; targetId: Term }>;
+  } | null;
+}
+
+interface DisplayAPI {
+  expandTerm: typeof expandTerm;
+  formatTerm: typeof formatTerm;
+  addStyles: (css: string) => void;
+}
+
+let currentDisplayModule: DisplayModule | null = null;
+let currentDisplayName: string | null = null;
+const injectedStyles = new Set<string>();
+
+function addStyles(css: string): void {
+  if (injectedStyles.has(css)) return;
+  injectedStyles.add(css);
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+}
+
+async function loadDisplay(name: string | undefined): Promise<DisplayModule | null> {
+  if (!name) {
+    currentDisplayModule = null;
+    currentDisplayName = null;
+    return null;
+  }
+
+  if (name === currentDisplayName && currentDisplayModule) {
+    return currentDisplayModule;
+  }
+
+  try {
+    const module = await import(`/data/${name}`);
+    const api: DisplayAPI = { expandTerm, formatTerm, addStyles };
+    currentDisplayModule = module.create(api);
+    currentDisplayName = name;
+    return currentDisplayModule;
+  } catch (e) {
+    console.warn(`Failed to load display module: ${name}`, e);
+    currentDisplayModule = null;
+    currentDisplayName = null;
+    return null;
+  }
+}
+
+function handleDisplayClick(askId: Term, targetId: Term) {
+  const expandedAsk = lastHc ? expandTerm(askId, lastHc) : askId;
+  const expandedTarget = lastHc ? expandTerm(targetId, lastHc) : targetId;
+
+  const { bindings, results } = compressTerms([expandedAsk, expandedTarget]);
+  const lines = [...bindings, `+ is ${results[0]} ${results[1]}`];
+  const text = "\n\n" + lines.join("\n");
+
+  patternsEl.focus();
+  patternsEl.setSelectionRange(patternsEl.value.length, patternsEl.value.length);
+  document.execCommand("insertText", false, text);
+}
 
 // --- Source-output linking helpers ---
 
@@ -387,12 +486,16 @@ function clearError() {
   errorBar.classList.remove("has-error");
 }
 
-function run() {
-  const parsedPatterns = parsePatterns(patternsEl.value);
+async function run() {
+  const { frontmatter, body } = parseFrontmatter(patternsEl.value);
+  const parsedPatterns = parsePatterns(body);
   if ("message" in parsedPatterns) {
     lastValid = false;
     showError(`Patterns — line ${parsedPatterns.line}: ${parsedPatterns.message}`);
     resultEl.innerHTML = "";
+    displayEl.innerHTML = "";
+    displayPaneEl.style.display = "none";
+    rightColumnEl.classList.remove("has-display");
     iterationsEl.textContent = "";
     patternSpanIndex = new Map();
     idToLineMap = new Map();
@@ -411,6 +514,40 @@ function run() {
   nextClickableKey = 0;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
   resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
+
+  // Render custom display if specified
+  const display = await loadDisplay(frontmatter.display);
+  if (display) {
+    try {
+      const renderResult = display.render(result, hc);
+      if (renderResult) {
+        displayEl.innerHTML = "";
+        displayEl.appendChild(renderResult.element);
+
+        // Wire up click handlers
+        for (const [el, intent] of renderResult.clicks) {
+          el.addEventListener("click", () => {
+            handleDisplayClick(intent.askId, intent.targetId);
+          });
+        }
+
+        displayPaneEl.style.display = "flex";
+        rightColumnEl.classList.add("has-display");
+      } else {
+        displayEl.innerHTML = "";
+        displayPaneEl.style.display = "none";
+        rightColumnEl.classList.remove("has-display");
+      }
+    } catch (e) {
+      displayEl.innerHTML = `<div style="color: #f87171; padding: 1em;">Display error: ${e}</div>`;
+      displayPaneEl.style.display = "flex";
+      rightColumnEl.classList.add("has-display");
+    }
+  } else {
+    displayEl.innerHTML = "";
+    displayPaneEl.style.display = "none";
+    rightColumnEl.classList.remove("has-display");
+  }
 
   highlightResultNodes();
 }
