@@ -2,44 +2,36 @@ import { isPositive } from "./types.js";
 import type { Term, Tree } from "./types.js";
 import type { HashconsState } from "./hashcons.js";
 
-let _hcState: HashconsState | null = null;
-
-export function setTreeHashcons(hc: HashconsState | null): void {
-  _hcState = hc;
-}
-
-function atomEq(aTerms: Term[], bTerms: Term[]): boolean {
+function atomEq(aTerms: Term[], bTerms: Term[], hc: HashconsState): boolean {
   if (aTerms.length !== bTerms.length) return false;
-  return aTerms.every((t, i) => termEq(t, bTerms[i]!));
+  return aTerms.every((t, i) => termEq(t, bTerms[i]!, hc));
 }
 
-export function termEq(a: Term, b: Term): boolean {
+export function termEq(a: Term, b: Term, hc: HashconsState): boolean {
   if (a.tag === b.tag) {
     if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
     if (a.tag === "Variable" && b.tag === "Variable") return a.name === b.name;
     if (a.tag === "Ref" && b.tag === "Ref") return a.id === b.id;
-    if (a.tag === "Atom" && b.tag === "Atom") return atomEq(a.atom.terms, b.atom.terms);
+    if (a.tag === "Atom" && b.tag === "Atom") return atomEq(a.atom.terms, b.atom.terms, hc);
     if (a.tag === "Wildcard") return true;
     return false;
   }
   // Cross-type: Atom vs Ref - look up ref to compare
-  if (_hcState) {
-    if (a.tag === "Atom" && b.tag === "Ref") {
-      const refAtom = _hcState.refToAtom.get(b.id);
-      return refAtom ? atomEq(a.atom.terms, refAtom.terms) : false;
-    }
-    if (a.tag === "Ref" && b.tag === "Atom") {
-      const refAtom = _hcState.refToAtom.get(a.id);
-      return refAtom ? atomEq(refAtom.terms, b.atom.terms) : false;
-    }
+  if (a.tag === "Atom" && b.tag === "Ref") {
+    const refAtom = hc.refToAtom.get(b.id);
+    return refAtom ? atomEq(a.atom.terms, refAtom.terms, hc) : false;
+  }
+  if (a.tag === "Ref" && b.tag === "Atom") {
+    const refAtom = hc.refToAtom.get(a.id);
+    return refAtom ? atomEq(refAtom.terms, b.atom.terms, hc) : false;
   }
   return false;
 }
 
-export function findPath(id: Term, tree: Tree, path: number[] = []): number[] | null {
-  if (termEq(tree.id, id)) return path;
+export function findPath(id: Term, tree: Tree, hc: HashconsState, path: number[] = []): number[] | null {
+  if (termEq(tree.id, id, hc)) return path;
   for (let i = 0; i < tree.children.length; i++) {
-    const result = findPath(id, tree.children[i]!, [...path, i]);
+    const result = findPath(id, tree.children[i]!, hc, [...path, i]);
     if (result !== null) return result;
   }
   return null;
@@ -102,16 +94,16 @@ export function insertAt(tree: Tree, path: number[], child: Tree): void {
 
 // --- Fringe functions ---
 
-function termContains(term: Term, value: Term): boolean {
-  if (termEq(term, value)) return true;
+function termContains(term: Term, value: Term, hc: HashconsState): boolean {
+  if (termEq(term, value, hc)) return true;
   if (term.tag === "Atom") {
-    return term.atom.terms.some((t) => termContains(t, value));
+    return term.atom.terms.some((t) => termContains(t, value, hc));
   }
   return false;
 }
 
-function atomContainsValue(tree: Tree, value: Term): boolean {
-  return tree.literal.atom.terms.some((t) => termContains(t, value));
+function atomContainsValue(tree: Tree, value: Term, hc: HashconsState): boolean {
+  return tree.literal.atom.terms.some((t) => termContains(t, value, hc));
 }
 
 function* walkTree(tree: Tree): Generator<Tree> {
@@ -121,22 +113,22 @@ function* walkTree(tree: Tree): Generator<Tree> {
   }
 }
 
-export function* fringe(value: Term, tree: Tree): Generator<Tree> {
+export function* fringe(value: Term, tree: Tree, hc: HashconsState): Generator<Tree> {
   for (const node of walkTree(tree)) {
-    if (atomContainsValue(node, value)) yield node;
+    if (atomContainsValue(node, value, hc)) yield node;
   }
 }
 
-export function* unionFringe(values: Term[], tree: Tree): Generator<Tree> {
+export function* unionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<Tree> {
   for (const node of walkTree(tree)) {
-    if (values.some((v) => atomContainsValue(node, v))) yield node;
+    if (values.some((v) => atomContainsValue(node, v, hc))) yield node;
   }
 }
 
-export function* intersectionFringe(values: Term[], tree: Tree): Generator<Tree> {
+export function* intersectionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<Tree> {
   if (values.length === 0) return;
   for (const node of walkTree(tree)) {
-    if (values.every((v) => atomContainsValue(node, v))) yield node;
+    if (values.every((v) => atomContainsValue(node, v, hc))) yield node;
   }
 }
 

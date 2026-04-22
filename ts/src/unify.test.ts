@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { collectMatches as unifyTree, setUnifyHashcons, unifyTerms, substTerm } from "./unify.js";
+import { collectMatches as unifyTree, unifyTerms, substTerm } from "./unify.js";
 import { sym, vari, node, fact, root, before, equal, newTrail } from "./types.js";
 import { createHashcons, expandTerm } from "./hashcons.js";
 import type { Term, Atom } from "./types.js";
@@ -311,29 +311,26 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 // 22. Trail invariant: binding Variable ← Atom stores a Ref (hashconsed)
 {
   const hc = createHashcons();
-  setUnifyHashcons(hc);
   const trail = newTrail();
   const a: Atom = { terms: [sym("id"), sym("r1"), sym("id2")] };
-  const ok = unifyTerms(vari("V1"), { tag: "Atom", atom: a }, trail);
+  const ok = unifyTerms(vari("V1"), { tag: "Atom", atom: a }, trail, hc);
   assert.equal(ok, true);
   const bound = substTerm(vari("V1"), trail);
   assert.equal(bound.tag, "Ref", "V1 binding must be a Ref, not a raw Atom");
   // Expanding the Ref recovers the original atom
   const expanded = expandTerm(bound, hc);
   assert.deepEqual(expanded, { tag: "Atom", atom: a });
-  setUnifyHashcons(null);
   console.log("PASS 22: trail stores Ref (not raw Atom) for Variable ← Atom");
 }
 
 // 23. Trail invariant: inner bound variables are resolved before hashconsing
 {
   const hc = createHashcons();
-  setUnifyHashcons(hc);
   const trail = newTrail();
   // V1 ← (id r1 id2)
-  assert.equal(unifyTerms(vari("V1"), { tag: "Atom", atom: { terms: [sym("id"), sym("r1"), sym("id2")] } }, trail), true);
+  assert.equal(unifyTerms(vari("V1"), { tag: "Atom", atom: { terms: [sym("id"), sym("r1"), sym("id2")] } }, trail, hc), true);
   // V2 ← (id r2 V1) — V1 is bound, so V2's body must freeze V1's Ref
-  assert.equal(unifyTerms(vari("V2"), { tag: "Atom", atom: { terms: [sym("id"), sym("r2"), vari("V1")] } }, trail), true);
+  assert.equal(unifyTerms(vari("V2"), { tag: "Atom", atom: { terms: [sym("id"), sym("r2"), vari("V1")] } }, trail, hc), true);
   const boundV2 = substTerm(vari("V2"), trail);
   assert.equal(boundV2.tag, "Ref");
   const expanded = expandTerm(boundV2, hc);
@@ -341,20 +338,17 @@ function substStr(s: Map<string, Term>): Record<string, string> {
     tag: "Atom",
     atom: { terms: [sym("id"), sym("r2"), { tag: "Atom", atom: { terms: [sym("id"), sym("r1"), sym("id2")] } }] },
   });
-  setUnifyHashcons(null);
   console.log("PASS 23: trail hashconses inner bound variables");
 }
 
 // 24. Trail invariant: binding an atom with free variables throws
 {
   const hc = createHashcons();
-  setUnifyHashcons(hc);
   const trail = newTrail();
   assert.throws(
-    () => unifyTerms(vari("V1"), { tag: "Atom", atom: { terms: [sym("f"), vari("Y")] } }, trail),
+    () => unifyTerms(vari("V1"), { tag: "Atom", atom: { terms: [sym("f"), vari("Y")] } }, trail, hc),
     /free variable/,
   );
-  setUnifyHashcons(null);
   console.log("PASS 24: binding Atom with free variable throws");
 }
 

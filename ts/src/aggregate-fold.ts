@@ -1,6 +1,6 @@
 import type { Term, Tree } from "./types.js";
 import { sym, assert_ } from "./types.js";
-import { findPath, isTemporallyBefore, termEq } from "./tree.js";
+import { isTemporallyBefore, termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
 import { indexedInsertAt, type IndexedTree } from "./unify.js";
@@ -80,15 +80,15 @@ function collectAggNodes(
   return { instances, bindings, results };
 }
 
-function hasResult(instance: AggInstance, results: AggResult[]): boolean {
+function hasResult(instance: AggInstance, results: AggResult[], hc: HashconsState): boolean {
   return results.some(
-    (r) => termEq(r.lexId, instance.lexId) && termEq(r.instanceId, instance.instanceId),
+    (r) => termEq(r.lexId, instance.lexId, hc) && termEq(r.instanceId, instance.instanceId, hc),
   );
 }
 
-function getBindingsForInstance(instance: AggInstance, bindings: AggBinding[]): AggBinding[] {
+function getBindingsForInstance(instance: AggInstance, bindings: AggBinding[], hc: HashconsState): AggBinding[] {
   return bindings.filter(
-    (b) => termEq(b.lexId, instance.lexId) && termEq(b.instanceId, instance.instanceId),
+    (b) => termEq(b.lexId, instance.lexId, hc) && termEq(b.instanceId, instance.instanceId, hc),
   );
 }
 
@@ -125,13 +125,13 @@ function selectEarliestTier(paused: AggInstance[]): AggInstance[] {
 export function closeAggregates(ref: IndexedTree, hc: HashconsState, iteration: number = 1): boolean {
   const { instances, bindings, results } = collectAggNodes(ref.root);
 
-  const paused = instances.filter((i) => !hasResult(i, results));
+  const paused = instances.filter((i) => !hasResult(i, results, hc));
   const earliest = selectEarliestTier(paused);
 
   let changed = false;
 
   for (const instance of earliest) {
-    const matchingBindings = getBindingsForInstance(instance, bindings);
+    const matchingBindings = getBindingsForInstance(instance, bindings, hc);
     const sorted = sortBindings(matchingBindings, ref.root);
 
     // Look up aggregator by examining the atom

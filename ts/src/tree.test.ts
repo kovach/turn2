@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { findPath, nodeAt, insertAt, nodesBefore, isTemporallyBefore, fringe, unionFringe, intersectionFringe } from "./tree.js";
 import { sym, vari, node, fact } from "./types.js";
+import { createHashcons } from "./hashcons.js";
+
+const hc = createHashcons();
 
 //   root (id "r")
 //     a  (id "a")
@@ -17,18 +20,18 @@ const tree = node(sym("r"), [sym("root")], [
 
 // --- findPath ---
 
-assert.deepEqual(findPath(sym("r"), tree), []);
-assert.deepEqual(findPath(sym("a"), tree), [0]);
-assert.deepEqual(findPath(sym("b"), tree), [1]);
-assert.deepEqual(findPath(sym("p"), tree), [0, 0]);
-assert.deepEqual(findPath(sym("q"), tree), [0, 1]);
-assert.equal(findPath(sym("missing"), tree), null);
+assert.deepEqual(findPath(sym("r"), tree, hc), []);
+assert.deepEqual(findPath(sym("a"), tree, hc), [0]);
+assert.deepEqual(findPath(sym("b"), tree, hc), [1]);
+assert.deepEqual(findPath(sym("p"), tree, hc), [0, 0]);
+assert.deepEqual(findPath(sym("q"), tree, hc), [0, 1]);
+assert.equal(findPath(sym("missing"), tree, hc), null);
 console.log("PASS: findPath");
 
 // variable id
 const vTree = node(vari("X"), [sym("x")]);
-assert.deepEqual(findPath(vari("X"), vTree), []);
-assert.equal(findPath(sym("X"), vTree), null);
+assert.deepEqual(findPath(vari("X"), vTree, hc), []);
+assert.equal(findPath(sym("X"), vTree, hc), null);
 console.log("PASS: findPath variable id");
 
 // --- nodeAt ---
@@ -131,31 +134,31 @@ console.log("PASS: insertAt bad path throws");
   ]);
 
   // fringe of c is nodes containing c: (card c) and (card:name c n)
-  const fringeC = [...fringe(c, fringeTree)];
+  const fringeC = [...fringe(c, fringeTree, hc)];
   assert.equal(fringeC.length, 2);
   assert.deepEqual(fringeC[0]!.literal.atom.terms, [sym("card"), c]);
   assert.deepEqual(fringeC[1]!.literal.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: fringe");
 
   // fringe of n is just (card:name c n)
-  const fringeN = [...fringe(n, fringeTree)];
+  const fringeN = [...fringe(n, fringeTree, hc)];
   assert.equal(fringeN.length, 1);
   assert.deepEqual(fringeN[0]!.literal.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: fringe single match");
 
   // union-fringe of {c, n} is the union: both nodes with c plus the one with n
-  const union = [...unionFringe([c, n], fringeTree)];
+  const union = [...unionFringe([c, n], fringeTree, hc)];
   assert.equal(union.length, 2); // (card c) has c, (card:name c n) has both
   console.log("PASS: unionFringe");
 
   // intersection-fringe of {c, n} is nodes containing BOTH c and n
-  const intersection = [...intersectionFringe([c, n], fringeTree)];
+  const intersection = [...intersectionFringe([c, n], fringeTree, hc)];
   assert.equal(intersection.length, 1);
   assert.deepEqual(intersection[0]!.literal.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: intersectionFringe");
 
   // intersection-fringe of {c, c2} is empty (no node contains both)
-  const intersectionEmpty = [...intersectionFringe([c, c2], fringeTree)];
+  const intersectionEmpty = [...intersectionFringe([c, c2], fringeTree, hc)];
   assert.equal(intersectionEmpty.length, 0);
   console.log("PASS: intersectionFringe empty");
 }

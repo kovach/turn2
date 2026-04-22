@@ -1,7 +1,7 @@
 import type { Atom, Literal, MatchConstraint, Term, Trail, Tree } from "./types.js";
 import { newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
 import { findPath, isTemporallyBefore, nodeAt } from "./tree.js";
-import { hashconsTerm, type HashconsState } from "./hashcons.js";
+import { hashconsTerm, createHashcons, type HashconsState } from "./hashcons.js";
 
 export const unifyStats = {
   c: 0,
@@ -53,12 +53,6 @@ export function substAtom(atom: Atom, trail: Trail): Atom {
 // in `mark = trailLength(...)` / `trailUnwind(..., mark)` so that partial bindings
 // from a failed branch never leak into the next one.
 
-let _hcState: HashconsState | null = null;
-
-export function setUnifyHashcons(hc: HashconsState | null): void {
-  _hcState = hc;
-}
-
 // Invariant: a variable on the trail is never bound to a raw Atom. Atoms
 // passed to trailPush get fully substituted and hashconsed to a Ref first,
 // so later substTerm calls bottom out on the Ref instead of re-walking the
@@ -73,15 +67,14 @@ function assertGround(atom: Atom, trail: Trail): void {
   }
 }
 
-function bindable(t: Term, trail: Trail): Term {
+function bindable(t: Term, trail: Trail, hc: HashconsState): Term {
   if (t.tag !== "Atom") return t;
-  if (!_hcState) throw new Error("unify: hashcons state required to bind Atom");
   const substituted = substAtom(t.atom, trail);
   assertGround(substituted, trail);
-  return hashconsTerm({ tag: "Atom", atom: substituted }, _hcState);
+  return hashconsTerm({ tag: "Atom", atom: substituted }, hc);
 }
 
-export function unifyTerms(a: Term, b: Term, trail: Trail): boolean {
+export function unifyTerms(a: Term, b: Term, trail: Trail, hc: HashconsState): boolean {
   const sa = resolveVar(a, trail);
   const sb = resolveVar(b, trail);
 
@@ -92,49 +85,49 @@ export function unifyTerms(a: Term, b: Term, trail: Trail): boolean {
 
   if (sa.tag === "Variable") {
     if (sb.tag === "Variable" && sa.name === sb.name) return true;
-    trailPush(trail, sa.name, bindable(sb, trail));
+    trailPush(trail, sa.name, bindable(sb, trail, hc));
     return true;
   }
 
   if (sb.tag === "Variable") {
-    trailPush(trail, sb.name, bindable(sa, trail));
+    trailPush(trail, sb.name, bindable(sa, trail, hc));
     return true;
   }
 
   if (sa.tag === "Atom" && sb.tag === "Atom") {
-    return unifyAtoms(sa.atom, sb.atom, trail);
+    return unifyAtoms(sa.atom, sb.atom, trail, hc);
   }
 
   // Atom vs Ref: look up the ref to get the stored atom
-  if (sa.tag === "Atom" && sb.tag === "Ref" && _hcState) {
-    const refAtom = _hcState.refToAtom.get(sb.id);
-    if (refAtom) return unifyAtoms(sa.atom, refAtom, trail);
+  if (sa.tag === "Atom" && sb.tag === "Ref") {
+    const refAtom = hc.refToAtom.get(sb.id);
+    if (refAtom) return unifyAtoms(sa.atom, refAtom, trail, hc);
   }
-  if (sa.tag === "Ref" && sb.tag === "Atom" && _hcState) {
-    const refAtom = _hcState.refToAtom.get(sa.id);
-    if (refAtom) return unifyAtoms(refAtom, sb.atom, trail);
+  if (sa.tag === "Ref" && sb.tag === "Atom") {
+    const refAtom = hc.refToAtom.get(sa.id);
+    if (refAtom) return unifyAtoms(refAtom, sb.atom, trail, hc);
   }
 
   return false;
 }
 
-function unifyAtoms(pa: Atom, ra: Atom, trail: Trail): boolean {
+function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolean {
   if (pa.terms.length !== ra.terms.length) return false;
   for (let i = 0; i < pa.terms.length; i++) {
-    if (!unifyTerms(pa.terms[i]!, ra.terms[i]!, trail)) return false;
+    if (!unifyTerms(pa.terms[i]!, ra.terms[i]!, trail, hc)) return false;
   }
   return true;
 }
 
 // --- Node unification (id + literal) ---
 
-function unifyNode(pat: Tree, ref: Tree, trail: Trail): boolean {
+function unifyNode(pat: Tree, ref: Tree, trail: Trail, hc: HashconsState): boolean {
   const patTag = pat.literal.literalType.tag;
   const refTag = ref.literal.literalType.tag;
   if (patTag !== "Match" && patTag !== "Before") return false;
   if (refTag !== "Assert" && refTag !== "Ask") return false;
-  if (!unifyTerms(pat.id, ref.id, trail)) return false;
-  return unifyAtoms(pat.literal.atom, ref.literal.atom, trail);
+  if (!unifyTerms(pat.id, ref.id, trail, hc)) return false;
+  return unifyAtoms(pat.literal.atom, ref.literal.atom, trail, hc);
 }
 
 // --- Reference tree enumeration ---
@@ -238,6 +231,7 @@ interface SearchState {
   root: Tree;
   index: SymbolIndex;
   iteration: number;
+  hc: HashconsState;
 }
 
 type Visit = () => void;
@@ -263,7 +257,7 @@ function matchChildrenFrom(
     // must see. The unwind runs after the recursive call returns — later
     // siblings observe the binding during descent, and it disappears on return.
     const mark = trailLength(state.trail);
-    if (unifyTerms(terms[0]!, terms[1]!, state.trail)) {
+    if (unifyTerms(terms[0]!, terms[1]!, state.trail, state.hc)) {
       matchChildrenFrom(patChildren, idx + 1, state, visit);
     }
     trailUnwind(state.trail, mark);
@@ -301,7 +295,7 @@ function computeAnchor(
     const lt = sib.literal.literalType.tag;
     if (lt === "Match" || lt === "Before") {
       const boundId = substTerm(sib.id, state.trail);
-      const path = findPath(boundId, state.root);
+      const path = findPath(boundId, state.root, state.hc);
       if (path !== null) return path;
     }
   }
@@ -332,7 +326,7 @@ function matchSubtree(
       if (!isStrictDescendant(prevDeepest, path)) continue;
     }
     const mark = trailLength(state.trail);
-    if (unifyNode(pat, node, state.trail)) {
+    if (unifyNode(pat, node, state.trail, state.hc)) {
       state.deepest = path;
       matchChildren(pat.children, state, visit);
     }
@@ -360,6 +354,7 @@ export function unifyTree(
   reference: IndexedTree,
   trail: Trail,
   iteration: number,
+  hc: HashconsState,
   visit: (trail: Trail) => void,
 ): void {
   const lt = pattern.literal.literalType;
@@ -367,7 +362,7 @@ export function unifyTree(
   if (!passesConstraint(reference.root, lt.constraint, iteration)) return;
 
   const mark = trailLength(trail);
-  if (!unifyTerms(pattern.id, reference.root.id, trail)) {
+  if (!unifyTerms(pattern.id, reference.root.id, trail, hc)) {
     trailUnwind(trail, mark);
     return;
   }
@@ -377,6 +372,7 @@ export function unifyTree(
     root: reference.root,
     index: reference.index,
     iteration,
+    hc,
   };
   matchChildren(pattern.children, state, () => visit(trail));
   trailUnwind(trail, mark);
@@ -391,8 +387,9 @@ export function collectMatches(
 ): Array<Map<string, Term>> {
   const out: Array<Map<string, Term>> = [];
   const trail = newTrail();
+  const hc = createHashcons();
   const itree = buildIndexedTree(reference);
-  unifyTree(pattern, itree, trail, iteration, (t) => {
+  unifyTree(pattern, itree, trail, iteration, hc, (t) => {
     const row = new Map<string, Term>();
     // Tail-first so shadowing picks the most recent binding.
     for (let i = t.names.length - 1; i >= 0; i--) {

@@ -1,5 +1,5 @@
-import { unifyTree, substAtom, substTerm, setUnifyHashcons, indexedInsertAt, type IndexedTree } from "./unify.js";
-import { collectPositiveNodes, findPath, nodeAt, setTreeHashcons, termEq } from "./tree.js";
+import { unifyTree, substAtom, substTerm, indexedInsertAt, type IndexedTree } from "./unify.js";
+import { collectPositiveNodes, findPath, nodeAt, termEq } from "./tree.js";
 import { hashconsTerm, hashconsAtom, expandTerm, type HashconsState } from "./hashcons.js";
 import { formatLiteral } from "./parse.js";
 import type { Atom, Trail, Tree } from "./types.js";
@@ -29,14 +29,12 @@ const sharedTrail: Trail = newTrail();
 // so they are invisible to passesConstraint during this same pass (see
 // unify.ts notes on walkAllCandidates and the symbol-index loop).
 export function step(pattern: Tree, reference: IndexedTree, hc: HashconsState, iteration: number = 1): boolean {
-  setUnifyHashcons(hc);
-  setTreeHashcons(hc);
   const positives = collectPositiveNodes(pattern);
   let anyInserted = false;
 
-  unifyTree(pattern, reference, sharedTrail, iteration, (trail) => {
+  unifyTree(pattern, reference, sharedTrail, iteration, hc, (trail) => {
     for (const posNode of positives) {
-      const posPath = findPath(posNode.id, pattern)!;
+      const posPath = findPath(posNode.id, pattern, hc)!;
 
       let pPath: number[];
       if (posPath.length === 0) {
@@ -44,7 +42,7 @@ export function step(pattern: Tree, reference: IndexedTree, hc: HashconsState, i
       } else {
         const parent = nodeAt(pattern, posPath.slice(0, -1))!;
         const parentRefId = substTerm(parent.id, trail);
-        const found = findPath(parentRefId, reference.root);
+        const found = findPath(parentRefId, reference.root, hc);
         if (found === null) continue;
         pPath = found;
       }
@@ -54,7 +52,7 @@ export function step(pattern: Tree, reference: IndexedTree, hc: HashconsState, i
       const newAtom = hashconsAtom(rawAtom, hc);
       const newId = hashconsTerm(rawId, hc);
       const parentNode = nodeAt(reference.root, pPath)!;
-      if (parentNode.children.some((c) => termEq(c.id, newId))) {
+      if (parentNode.children.some((c) => termEq(c.id, newId, hc))) {
         stepStats.dedupSkipped++;
         continue;
       }
