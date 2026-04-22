@@ -1,3 +1,65 @@
+# fix agg-instance nesting
+plan: TODO
+
+- motivating case: the "last aggregate" test in `ts/src/fixpoint.test.ts`
+  (currently skipped behind `if (false)`) trips the
+  `sortBindings` throw for non-commutative aggregators. The three
+  `agg-binding` siblings under a single `agg-instance` are not
+  orderable via `before`: each `bnd_i` gets only `before:after(t_i, bnd_i)`
+  and nothing links `bnd_a → bnd_b → bnd_c` to each other.
+  Transitive-closing `before` does not fix it — the graph is divergent
+  (`t_a → {bnd_a, t_b}`), not a linear chain through the bindings.
+- the agg-instance layout needs to change so the per-match bindings
+  inherit the ordering of the matched anchors (e.g. restructure so each
+  match lands in its own instance, or emit an explicit sibling-chain
+  edge among bindings, or fold by the anchor id rather than the binding id).
+
+# new temporal relationships/removing totally ordered child requirement
+plan: plans/temporal-relationships.md
+
+- currently we assume each new node is inserted as a "last" child of its parent, and each node has a unique tree path from the root to itself by following these parent/child links
+- we want to change the semantics to remove these restrictions:
+  - after the change, it will be possible to assert `parent:child(x, y)` for any pair of nodes, although we expect this relation to be a valid partial order
+  - we will keep the `children` array as an index optimization to efficiently iterate the child nodes of a parent,
+    - but (!) the index ordering no longer connotes temporal order
+    - instead, a new `before:after(x, y)` relation will hold atomic facts about temporal order
+  - the logic for matching candidate nodes will mostly stay the same, but the implementation will differ.
+  - first we introduce some new ideas about what the nodes represent
+
+- This change will make more explicit several temporal relationships that are implicit in the code so far.
+  In brief, each tree node represents an interval of time, and these intervals can be nested or sequential:
+  - Example (1):
+    ```
+    + [A] a
+      + [B] b
+      + [C] c
+    ```
+    - this pattern creates three intervals. A contains B, and A contains C.
+    - we interpret sequential `+` sibling nodes as being temporally sequential: so the interval B is before C
+    - graphically, the result looks like `(A (B --) (C --) )`
+    - a query like
+      ```
+      - [A] a
+        - [C] c
+        - [B] b
+      ```
+      - matches any `c` and `b` both contained within an `a` — two
+        Match siblings impose no ordering constraint between
+        themselves.
+  - Overview of temporal relationships:
+    - *containment*: A contains B if A=B or A is an immediate parent of C and C contains B (transitive reflexive closure of parent:child)
+    - *before*: A is before B if there exist A',B' with `before:after(A',B')` and A' contains A and B' contains B
+    - *prior*: A is prior to B if A is before B or B contains A
+    - *overlap*: A and B overlap if there exists a C such that A contains C and B contains C
+      - note that every interval contains itself, so overlaps itself, and if A contains B, then they overlap
+  - We will introduce a new literal type, `,`, which matches so long as the given atom overlaps the parent anchor
+    ```
+    - [A] a
+      , [C] c
+      , [B] b
+    ```
+    this matches against example (1).
+
 # relational storage
 plan: plans/relational-storage.md
 

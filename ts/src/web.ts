@@ -3,6 +3,38 @@ import { fixpoint0 } from "./fixpoint.js";
 import { expandTerm, type HashconsState } from "./hashcons.js";
 import type { Tree, Literal, Term, Atom } from "./types.js";
 
+// Single source of truth for line-leading markers. The `Record<LiteralTag, …>`
+// shape makes TS fail this file if a new LiteralType is added without a marker
+// entry here; the rest of the keyboard/highlight pipeline is derived from it.
+// The only out-of-file companion is a `.lit-<name>` CSS rule in ts/index.html.
+type LiteralTag = Literal["literalType"]["tag"];
+
+const LITERAL_MARKERS: Record<LiteralTag, { char: string; cssClass: string }> = {
+  Match:     { char: "-", cssClass: "lit-match" },
+  Before:    { char: "<", cssClass: "lit-before" },
+  Overlap:   { char: ",", cssClass: "lit-overlap" },
+  Assert:    { char: "+", cssClass: "lit-assert" },
+  Ask:       { char: "?", cssClass: "lit-ask" },
+  Constrain: { char: "!", cssClass: "lit-constrain" },
+  Aggregate: { char: "#", cssClass: "lit-aggregate" },
+  Equal:     { char: "=", cssClass: "lit-equal" },
+};
+
+// Non-literal line markers (e.g. comments). These participate in keyboard
+// handling but don't appear as `LiteralType` tags, so they live alongside
+// the table rather than inside it.
+const EXTRA_MARKER_CHARS: string[] = ["/"];
+
+const MARKER_CHARS: string[] = [
+  ...Object.values(LITERAL_MARKERS).map((m) => m.char),
+  ...EXTRA_MARKER_CHARS,
+];
+const MARKER_CHAR_SET: Set<string> = new Set(MARKER_CHARS);
+// Char class built from MARKER_CHARS. `-` is escaped so it can't be read as
+// a character range; `,`, `<`, `+`, etc. are safe verbatim inside a class.
+const MARKER_CLASS: string = MARKER_CHARS.map((c) => (c === "-" ? "\\-" : c)).join("");
+const MARKER_REGEX = new RegExp(`^(\\s*)([${MARKER_CLASS}])`);
+
 // expandTerm may only be used on Refs whose stored atom is NOT id-headed.
 // `(id …)` terms carry the previousVars chain and can be exponentially shared;
 // expanding one fully materializes that DAG as a tree. User terms (e.g.
@@ -594,15 +626,8 @@ function esc(s: string): string {
 }
 
 function literalStyle(t: Literal["literalType"]): [string, string] {
-  switch (t.tag) {
-    case "Match":     return ["-", "lit-match"];
-    case "Before":    return ["<", "lit-before"];
-    case "Assert":    return ["+", "lit-assert"];
-    case "Ask":       return ["?", "lit-ask"];
-    case "Constrain": return ["!", "lit-constrain"];
-    case "Aggregate": return ["#", "lit-aggregate"];
-    case "Equal":     return ["=", "lit-equal"];
-  }
+  const m = LITERAL_MARKERS[t.tag];
+  return [m.char, m.cssClass];
 }
 
 // --- Input and key handling ---
@@ -672,10 +697,10 @@ initServer().then(() => {
   patternsEl.setSelectionRange(0, 0);
 });
 
-const MARKERS = new Set(["-", "<", "+", "?", "!", "#", "=", "/"]);
 
+const WEAK_REGEX = new RegExp(`^\\s*[${MARKER_CLASS}]?\\s*$`);
 function isWeak(line: string): boolean {
-  return /^\s*[-<+?!#=/]?\s*$/.test(line);
+  return WEAK_REGEX.test(line);
 }
 
 // Use execCommand so edits land on the browser's native undo stack.
@@ -713,7 +738,7 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     handleReturn();
-  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#" || e.key === "=" || e.key === "/") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  } else if (MARKER_CHAR_SET.has(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (handleMarkerKey(e.key)) e.preventDefault();
   } else if (e.key === "s" && e.ctrlKey) {
     e.preventDefault();
@@ -805,7 +830,7 @@ function handleMarkerKey(char: string): boolean {
   const lineEnd = value.indexOf("\n", s);
   const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
   if (!isWeak(line)) return false;
-  const markerMatch = line.match(/^(\s*)([-<+?!#=/])/);
+  const markerMatch = line.match(MARKER_REGEX);
   if (markerMatch) {
     const markerPos = lineStart + markerMatch[1]!.length;
     if (s >= markerPos) {
@@ -871,7 +896,7 @@ function handleReturn() {
     execReplace(lineStart, e, "\n");
   } else {
     const indent = line.match(/^(\s*)/)![1]!;
-    const marker = MARKERS.has(line.trimStart()[0] ?? "") ? line.trimStart()[0]! + " " : "";
+    const marker = MARKER_CHAR_SET.has(line.trimStart()[0] ?? "") ? line.trimStart()[0]! + " " : "";
     execReplace(s, e, "\n" + indent + marker);
   }
 }

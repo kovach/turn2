@@ -1,9 +1,8 @@
-import type { Atom, MatchConstraint, Term, Trail, Tree } from "./types.js";
+import type { Atom, MatchConstraint, NodeId, Term, Trail, Tree } from "./types.js";
 import { newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
-import { isTemporallyBefore } from "./tree.js";
-import { hashconsTerm, createHashcons, type HashconsState } from "./hashcons.js";
+import { hashconsTerm, tokenOfId, createHashcons, type HashconsState } from "./hashcons.js";
 import type { Candidate, NodeRow, RefStore, SymbolIndex } from "./refstore.js";
-import { allCandidates, buildRefStore, getNode, getRoot } from "./refstore.js";
+import { allCandidates, before, buildRefStore, getNode, getRoot, idKey, overlap, strictlyContains } from "./refstore.js";
 
 export type { Candidate, SymbolIndex } from "./refstore.js";
 
@@ -128,7 +127,7 @@ function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolea
 function unifyNode(pat: Tree, ref: NodeRow, trail: Trail, hc: HashconsState): boolean {
   const patTag = pat.literal.literalType.tag;
   const refTag = ref.literal.literalType.tag;
-  if (patTag !== "Match" && patTag !== "Before") return false;
+  if (patTag !== "Match" && patTag !== "Before" && patTag !== "Overlap") return false;
   if (refTag !== "Assert" && refTag !== "Ask") return false;
   if (!unifyTerms(pat.id, ref.id, trail, hc)) return false;
   return unifyAtoms(pat.literal.atom, ref.literal.atom, trail, hc);
@@ -148,11 +147,6 @@ function unifyNode(pat: Tree, ref: NodeRow, trail: Trail, hc: HashconsState): bo
 // inserted rows (gen === iteration falls outside every constraint:
 // any/delta/old). If the constraint model ever grows a case that *should*
 // see same-iteration nodes, this invariant has to be revisited.
-
-function isStrictDescendant(ancestor: number[], path: number[]): boolean {
-  if (path.length <= ancestor.length) return false;
-  return ancestor.every((v, i) => v === path[i]);
-}
 
 // --- Constraint checking ---
 
@@ -175,7 +169,10 @@ function passesConstraint(row: { gen: number }, constraint: MatchConstraint, ite
 // needs nested unification, it should pass a fresh trail to the inner call.
 
 interface SearchState {
-  deepest: number[];
+  // NodeId of the nearest pattern ancestor's reference image. Candidates for
+  // a Match child must be strictly contained by this node. Initialised to
+  // the reference root at unifyTree entry.
+  deepest: NodeId;
   trail: Trail;
   store: RefStore;
   iteration: number;
@@ -212,7 +209,7 @@ function matchChildrenFrom(
     return;
   }
 
-  if (ht.tag !== "Match" && ht.tag !== "Before") {
+  if (ht.tag !== "Match" && ht.tag !== "Before" && ht.tag !== "Overlap") {
     matchChildrenFrom(patChildren, idx + 1, state, visit);
     return;
   }
@@ -234,17 +231,17 @@ function computeAnchor(
   siblings: Tree[],
   idx: number,
   state: SearchState,
-): number[] {
+): NodeId {
   const node = siblings[idx]!;
   if (node.literal.literalType.tag !== "Before") return state.deepest;
 
   for (let i = idx - 1; i >= 0; i--) {
     const sib = siblings[i]!;
     const lt = sib.literal.literalType.tag;
-    if (lt === "Match" || lt === "Before") {
+    if (lt === "Match" || lt === "Before" || lt === "Overlap") {
       const boundId = substTerm(sib.id, state.trail);
       const row = getNode(state.store, boundId, state.hc);
-      if (row) return row.path;
+      if (row) return idKey(row.id, state.hc);
     }
   }
   return state.deepest;
@@ -253,12 +250,11 @@ function computeAnchor(
 function matchSubtree(
   pat: Tree,
   state: SearchState,
-  anchor: number[],
+  anchor: NodeId,
   visit: Visit,
 ): void {
   const lt = pat.literal.literalType;
-  const isBefore = lt.tag === "Before";
-  const constraint = (lt.tag === "Match" || lt.tag === "Before") ? lt.constraint : "any";
+  const constraint = (lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap") ? lt.constraint : "any";
 
   const firstTerm = pat.literal.atom.terms[0];
   const candidates: Iterable<Candidate> = (firstTerm?.tag === "Symbol")
@@ -266,16 +262,19 @@ function matchSubtree(
     : allCandidates(state.store);
 
   const prevDeepest = state.deepest;
-  for (const { path, node } of candidates) {
+  for (const { node } of candidates) {
     if (!passesConstraint(node, constraint, state.iteration)) continue;
-    if (isBefore) {
-      if (!isTemporallyBefore(path, anchor)) continue;
+    const candId = idKey(node.id, state.hc);
+    if (lt.tag === "Before") {
+      if (!before(state.store, candId, anchor)) continue;
+    } else if (lt.tag === "Overlap") {
+      if (!overlap(state.store, prevDeepest, candId)) continue;
     } else {
-      if (!isStrictDescendant(prevDeepest, path)) continue;
+      if (!strictlyContains(state.store, prevDeepest, candId)) continue;
     }
     const mark = trailLength(state.trail);
     if (unifyNode(pat, node, state.trail, state.hc)) {
-      state.deepest = path;
+      state.deepest = candId;
       matchChildren(pat.children, state, visit);
     }
     trailUnwind(state.trail, mark);
@@ -316,7 +315,7 @@ export function unifyTree(
     return;
   }
   const state: SearchState = {
-    deepest: [],
+    deepest: tokenOfId(root.id, hc),
     trail,
     store: reference,
     iteration,

@@ -162,12 +162,12 @@ export function buildRefStore(initial: Tree, hc: HashconsState): RefStore {
 // caller stamping `row.gen = iteration` so passesConstraint hides the fresh
 // row from the live matching pass.
 //
-// Emits `parent:child(parentId, row.id)`, and — as a transitional bridge
-// until explicit-predecessor rule syntax lands — `before:after(lastSibling,
-// row)` when the parent already has children. See
-// plans/temporal-relationships.md §Migration shape for the follow-up.
-// step.ts layers additional explicit `before:after` edges on top via
-// `addBeforeAfter`; duplicates collapse in the Set.
+// Emits only `parent:child(parentId, row.id)`. Temporal sequencing is the
+// caller's job: step.ts writes `before:after` edges explicitly via
+// `addBeforeAfter` based on pattern source (see
+// plans/temporal-relationships.md §Step.ts). Inserts whose ordering is
+// genuinely unconstrained get no temporal edge — `children` is a pure
+// iteration index and conveys no temporal meaning.
 export function insertChild(
   store: RefStore,
   parentId: Term,
@@ -180,7 +180,6 @@ export function insertChild(
   }
   const siblings = store.children.get(parentKey) ?? [];
   const key = idKey(row.id, hc);
-  const prevSiblingKey = siblings.length > 0 ? idKey(siblings[siblings.length - 1]!.id, hc) : null;
   store.nodes.set(key, row);
   siblings.push(row);
   store.children.set(parentKey, siblings);
@@ -188,10 +187,6 @@ export function insertChild(
   store.parentOf.set(key, parentKey);
   addEdge(store.parentChild, parentKey, key);
   addEdge(store.parentsOf, key, parentKey);
-  if (prevSiblingKey !== null) {
-    addEdge(store.beforeAfter, prevSiblingKey, key);
-    addEdge(store.afterBefore, key, prevSiblingKey);
-  }
 
   const firstTerm = row.literal.atom.terms[0];
   if (firstTerm?.tag === "Symbol") {

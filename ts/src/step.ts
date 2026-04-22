@@ -4,7 +4,7 @@ import { hashconsTerm, hashconsAtom, expandTerm, type HashconsState } from "./ha
 import { formatLiteral } from "./parse.js";
 import type { Atom, Trail, Tree } from "./types.js";
 import { newTrail } from "./types.js";
-import { hasNode, insertChild, type RefStore } from "./refstore.js";
+import { addBeforeAfter, hasNode, insertChild, type RefStore } from "./refstore.js";
 
 export const stepStats = {
   dedupSkipped: 0,
@@ -34,7 +34,7 @@ export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iter
   let anyInserted = false;
 
   unifyTree(pattern, reference, sharedTrail, iteration, hc, (trail) => {
-    for (const { node: posNode, parent: posParent } of positives) {
+    for (const { node: posNode, parent: posParent, prevBindableSibling } of positives) {
       const parentRefId = hashconsTerm(substTerm(posParent.id, trail), hc);
       if (!hasNode(reference, parentRefId, hc)) continue;
 
@@ -55,6 +55,17 @@ export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iter
         literal: { literalType: posNode.literal.literalType, atom: newAtom },
         gen: iteration,
       }, hc);
+
+      // Emit `before:after(prevSibling, new)` iff the positive node's
+      // pattern-preceding sibling binds an id — this is the "positive as
+      // sibling of match" case in plans/temporal-relationships.md §Step.ts.
+      if (prevBindableSibling !== null) {
+        const prevId = hashconsTerm(substTerm(prevBindableSibling.id, trail), hc);
+        if (hasNode(reference, prevId, hc)) {
+          addBeforeAfter(reference, prevId, newId, hc);
+        }
+      }
+
       stepStats.inserted++;
       anyInserted = true;
     }

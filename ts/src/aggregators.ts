@@ -4,6 +4,7 @@ import { sym } from "./types.js";
 export interface Aggregator {
   zero: Term;
   fold: (acc: Term, ...args: Term[]) => Term;
+  commutative: boolean;
 }
 
 function parseIntTerm(t: Term): number {
@@ -23,6 +24,7 @@ export const aggregators: Map<string, Aggregator> = new Map([
     {
       zero: sym("z"),
       fold: (acc: Term) => ({ tag: "Atom", atom: { terms: [sym("s"), acc] } }),
+      commutative: true,
     },
   ],
   [
@@ -34,6 +36,7 @@ export const aggregators: Map<string, Aggregator> = new Map([
         const b = parseIntTerm(x);
         return sym(String(a + b));
       },
+      commutative: true,
     },
   ],
   [
@@ -41,6 +44,7 @@ export const aggregators: Map<string, Aggregator> = new Map([
     {
       zero: sym("none"),
       fold: (_acc: Term, x: Term) => x,
+      commutative: false,
     },
   ],
 ]);

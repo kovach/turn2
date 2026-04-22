@@ -9,11 +9,11 @@ export function idExpand(tree: Tree, name: string): Tree {
   function walk(node: Tree): Tree {
     const lt = node.literal.literalType;
     const positive = isPositive(lt);
-    // Only Match/Before actually bind their node id against the reference tree
-    // at match time. Equal (and any other non-positive non-Match non-Before
-    // literal) has no id binding, so its auto-X would stay free and leak into
-    // downstream positives' ids. Exclude it from previousVars.
-    const bindsId = lt.tag === "Match" || lt.tag === "Before";
+    // Only Match/Before/Overlap actually bind their node id against the reference
+    // tree at match time. Equal (and any other non-positive non-Match non-Before
+    // non-Overlap literal) has no id binding, so its auto-X would stay free and
+    // leak into downstream positives' ids. Exclude it from previousVars.
+    const bindsId = lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap";
     let newId: Term;
     if (positive) {
       newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
@@ -292,7 +292,7 @@ export function expandAll(patterns: Tree[]): Tree[] {
 
 function countMatchNodes(tree: Tree): number {
   const lt = tree.literal.literalType;
-  const self = (lt.tag === "Match" || lt.tag === "Before") ? 1 : 0;
+  const self = (lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap") ? 1 : 0;
   return self + tree.children.reduce((acc, c) => acc + countMatchNodes(c), 0);
 }
 
@@ -304,6 +304,8 @@ function cloneWithConstraints(tree: Tree, constraints: MatchConstraint[], pos: {
     newLiteralType = { tag: "Match", constraint: constraints[pos.i++]! };
   } else if (lt.tag === "Before") {
     newLiteralType = { tag: "Before", constraint: constraints[pos.i++]! };
+  } else if (lt.tag === "Overlap") {
+    newLiteralType = { tag: "Overlap", constraint: constraints[pos.i++]! };
   } else {
     newLiteralType = lt;
   }

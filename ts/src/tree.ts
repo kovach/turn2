@@ -28,20 +28,31 @@ export function termEq(a: Term, b: Term, hc: HashconsState): boolean {
   return false;
 }
 
-// Positive descendants of `pattern`, each carried with its parent and path.
+// Positive descendants of `pattern`, each carried with its parent, path, and
+// its immediately preceding "bindable" (Match/Before/Overlap) sibling in the
+// pattern tree if any. The latter is what drives the `before:after` edge
+// emitted at insertion time — see plans/temporal-relationships.md §Step.ts.
 // Pattern roots are Match, so the root itself is never positive; every
 // returned entry has a non-null parent.
 export interface PositiveNode {
   node: Tree;
   parent: Tree;
   path: number[];
+  prevBindableSibling: Tree | null;
 }
 
 export function collectPositiveNodes(pattern: Tree): PositiveNode[] {
   const out: PositiveNode[] = [];
   function walk(node: Tree, parent: Tree | null, path: number[]): void {
     if (parent !== null && isPositive(node.literal.literalType)) {
-      out.push({ node, parent, path });
+      const selfIdx = path[path.length - 1]!;
+      let prev: Tree | null = null;
+      for (let i = selfIdx - 1; i >= 0; i--) {
+        const sib = parent.children[i]!;
+        const t = sib.literal.literalType.tag;
+        if (t === "Match" || t === "Before" || t === "Overlap") { prev = sib; break; }
+      }
+      out.push({ node, parent, path, prevBindableSibling: prev });
     }
     for (let i = 0; i < node.children.length; i++) {
       walk(node.children[i]!, node, [...path, i]);

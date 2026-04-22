@@ -16,13 +16,15 @@ export interface AggregateInfo {
 export type LiteralType =
   | { tag: "Match"; constraint: MatchConstraint }
   | { tag: "Before"; constraint: MatchConstraint }
+  | { tag: "Overlap"; constraint: MatchConstraint }
   | { tag: "Assert" }
   | { tag: "Ask" }
   | { tag: "Constrain" }
   | { tag: "Aggregate"; info: AggregateInfo }
   | { tag: "Equal" };
 
-export const isNegative = (t: LiteralType): boolean => t.tag === "Match" || t.tag === "Before" || t.tag === "Equal";
+export const isNegative = (t: LiteralType): boolean =>
+  t.tag === "Match" || t.tag === "Before" || t.tag === "Overlap" || t.tag === "Equal";
 export const isPositive = (t: LiteralType): boolean => !isNegative(t);
 
 export interface Atom {
@@ -99,6 +101,7 @@ export const literal = (literalType: LiteralType, terms: Term[]): Literal => ({
 });
 export const match = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Match", constraint });
 export const before = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Before", constraint });
+export const overlap = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Overlap", constraint });
 export const assert_ = (): LiteralType => ({ tag: "Assert" });
 export const ask = (): LiteralType => ({ tag: "Ask" });
 export const constrain = (): LiteralType => ({ tag: "Constrain" });

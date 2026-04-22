@@ -1,5 +1,5 @@
 import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Span, Term, Tree } from "./types.js";
-import { match, before, assert_, ask, constrain, aggregate, equal } from "./types.js";
+import { match, before, overlap, assert_, ask, constrain, aggregate, equal } from "./types.js";
 import { idExpand } from "./expand.js";
 import { expandMacros } from "./macros.js";
 
@@ -104,12 +104,13 @@ function _parseNodes(input: string): Tree[] | ParseError {
   return roots;
 }
 
-type LiteralTag = "Match" | "Before" | "Assert" | "Ask" | "Constrain" | "Aggregate" | "Equal";
+type LiteralTag = "Match" | "Before" | "Overlap" | "Assert" | "Ask" | "Constrain" | "Aggregate" | "Equal";
 
 function prefixToTag(ch: string | undefined): LiteralTag | null {
   switch (ch) {
     case "-": return "Match";
     case "<": return "Before";
+    case ",": return "Overlap";
     case "+": return "Assert";
     case "?": return "Ask";
     case "!": return "Constrain";
@@ -123,6 +124,7 @@ function tagToLiteralType(tag: LiteralTag, aggInfo?: AggregateInfo): LiteralType
   switch (tag) {
     case "Match": return match();
     case "Before": return before();
+    case "Overlap": return overlap();
     case "Assert": return assert_();
     case "Ask": return ask();
     case "Constrain": return constrain();
@@ -296,6 +298,7 @@ function literalTypeToPrefix(t: LiteralType): string {
   switch (t.tag) {
     case "Match": return "-";
     case "Before": return "<";
+    case "Overlap": return ",";
     case "Assert": return "+";
     case "Ask": return "?";
     case "Constrain": return "!";

@@ -1,9 +1,9 @@
 import type { Term } from "./types.js";
 import { sym, assert_ } from "./types.js";
-import { isTemporallyBefore, termEq } from "./tree.js";
+import { termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
-import { insertChild, parentIdOf, type NodeRow, type RefStore } from "./refstore.js";
+import { before, idKey, insertChild, parentIdOf, prior, type NodeRow, type RefStore } from "./refstore.js";
 
 function isSymbol(t: Term, name: string): boolean {
   return t.tag === "Symbol" && t.name === name;
@@ -87,29 +87,39 @@ function getBindingsForInstance(instance: AggInstance, bindings: AggBinding[], h
   );
 }
 
-function sortBindings(bindings: AggBinding[]): AggBinding[] {
+function sortBindings(ref: RefStore, hc: HashconsState, bindings: AggBinding[], commutative: boolean): AggBinding[] {
   return [...bindings].sort((a, b) => {
-    if (isTemporallyBefore(a.row.path, b.row.path)) return -1;
-    if (isTemporallyBefore(b.row.path, a.row.path)) return 1;
+    const aId = idKey(a.row.id, hc);
+    const bId = idKey(b.row.id, hc);
+    if (before(ref, aId, bId)) return -1;
+    if (before(ref, bId, aId)) return 1;
+    if (commutative) return 0;
     throw new Error(
-      `cannot order agg-bindings: paths [${a.row.path}] and [${b.row.path}] are incomparable`,
+      `cannot order agg-bindings: nodes ${idKey(a.row.id, hc)} and ${idKey(b.row.id, hc)} are temporally incomparable`,
     );
   });
 }
 
-function selectEarliestTier(paused: AggInstance[]): AggInstance[] {
+// Scheduling uses `prior` (= before ∪ contains⁻¹) rather than `before`: a
+// nested `agg-instance` must close first so the outer fold observes its
+// `agg-result`. The `contains⁻¹` component is what captures that.
+function selectEarliestTier(ref: RefStore, hc: HashconsState, paused: AggInstance[]): AggInstance[] {
   if (paused.length === 0) return [];
   if (paused.length === 1) return paused;
 
   const sorted = [...paused].sort((a, b) => {
-    if (isTemporallyBefore(a.row.path, b.row.path)) return -1;
-    if (isTemporallyBefore(b.row.path, a.row.path)) return 1;
+    const aId = idKey(a.row.id, hc);
+    const bId = idKey(b.row.id, hc);
+    if (prior(ref, aId, bId)) return -1;
+    if (prior(ref, bId, aId)) return 1;
     return 0; // incomparable — same tier
   });
 
   const earliest: AggInstance[] = [sorted[0]!];
+  const firstId = idKey(sorted[0]!.row.id, hc);
   for (let i = 1; i < sorted.length; i++) {
-    if (isTemporallyBefore(sorted[0]!.row.path, sorted[i]!.row.path)) {
+    const nextId = idKey(sorted[i]!.row.id, hc);
+    if (prior(ref, firstId, nextId)) {
       break; // this and all subsequent are after the first
     }
     earliest.push(sorted[i]!);
@@ -121,23 +131,20 @@ export function closeAggregates(ref: RefStore, hc: HashconsState, iteration: num
   const { instances, bindings, results } = collectAggNodes(ref, hc);
 
   const paused = instances.filter((i) => !hasResult(i, results, hc));
-  const earliest = selectEarliestTier(paused);
+  const earliest = selectEarliestTier(ref, hc, paused);
 
   let changed = false;
 
   for (const instance of earliest) {
     const matchingBindings = getBindingsForInstance(instance, bindings, hc);
-    const sorted = sortBindings(matchingBindings);
 
-    // Look up aggregator by examining the atom
-    // The aggregator name needs to come from somewhere... but we only have lexId
-    // For now, we need to track the funcName somehow.
-    // Let's encode it in the lexId: agg_funcName_N
+    // Aggregator funcName is encoded in the lexId as agg_funcName_N.
     const lexIdStr = instance.lexId.tag === "Symbol" ? instance.lexId.name : "";
     const m = lexIdStr.match(/^agg_([^_]+)_/);
     const funcName = m ? m[1]! : "count";
 
     const agg = getAggregator(funcName);
+    const sorted = sortBindings(ref, hc, matchingBindings, agg.commutative);
     let acc = agg.zero;
     for (const binding of sorted) {
       acc = agg.fold(acc, ...binding.args);
