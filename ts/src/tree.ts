@@ -28,27 +28,27 @@ export function termEq(a: Term, b: Term, hc: HashconsState): boolean {
   return false;
 }
 
-export function findPath(id: Term, tree: Tree, hc: HashconsState, path: number[] = []): number[] | null {
-  if (termEq(tree.id, id, hc)) return path;
-  for (let i = 0; i < tree.children.length; i++) {
-    const result = findPath(id, tree.children[i]!, hc, [...path, i]);
-    if (result !== null) return result;
-  }
-  return null;
+// Positive descendants of `pattern`, each carried with its parent and path.
+// Pattern roots are Match, so the root itself is never positive; every
+// returned entry has a non-null parent.
+export interface PositiveNode {
+  node: Tree;
+  parent: Tree;
+  path: number[];
 }
 
-export function nodeAt(tree: Tree, path: number[]): Tree | null {
-  let node = tree;
-  for (const idx of path) {
-    if (idx >= node.children.length) return null;
-    node = node.children[idx]!;
+export function collectPositiveNodes(pattern: Tree): PositiveNode[] {
+  const out: PositiveNode[] = [];
+  function walk(node: Tree, parent: Tree | null, path: number[]): void {
+    if (parent !== null && isPositive(node.literal.literalType)) {
+      out.push({ node, parent, path });
+    }
+    for (let i = 0; i < node.children.length; i++) {
+      walk(node.children[i]!, node, [...path, i]);
+    }
   }
-  return node;
-}
-
-export function collectPositiveNodes(tree: Tree): Tree[] {
-  const self = isPositive(tree.literal.literalType) ? [tree] : [];
-  return self.concat(tree.children.flatMap(collectPositiveNodes));
+  walk(pattern, null, []);
+  return out;
 }
 
 // Path-based temporal ordering: a is before b and not an ancestor of b.
@@ -63,36 +63,7 @@ export function isTemporallyBefore(aPath: number[], bPath: number[]): boolean {
   return false;
 }
 
-// Nodes strictly before `target` in the temporal order defined in overview.md:
-// siblings ordered by child index, and nested children inherit the ordering of
-// their ancestor. Equivalent to: pre-order predecessors of target that are not
-// ancestors of target.
-export function nodesBefore(root: Tree, target: Tree): Tree[] {
-  const visited: Tree[] = [];
-  const ancestors = new Set<Tree>();
-  let found = false;
-  function walk(t: Tree): void {
-    if (found) return;
-    if (t === target) { found = true; return; }
-    visited.push(t);
-    ancestors.add(t);
-    for (const c of t.children) {
-      walk(c);
-      if (found) return;
-    }
-    ancestors.delete(t);
-  }
-  walk(root);
-  return visited.filter((n) => !ancestors.has(n));
-}
-
-export function insertAt(tree: Tree, path: number[], child: Tree): void {
-  const parent = nodeAt(tree, path);
-  if (parent === null) throw new Error(`no node at path [${path}]`);
-  parent.children.push(child);
-}
-
-// --- Fringe functions ---
+// --- Fringe functions (operate on nested pattern Trees) ---
 
 function termContains(term: Term, value: Term, hc: HashconsState): boolean {
   if (termEq(term, value, hc)) return true;
@@ -131,4 +102,3 @@ export function* intersectionFringe(values: Term[], tree: Tree, hc: HashconsStat
     if (values.every((v) => atomContainsValue(node, v, hc))) yield node;
   }
 }
-

@@ -39,6 +39,11 @@ export interface MacroInvocation {
   args: Term[];
 }
 
+// Integer key space for hashconsed terms and RefStore rows. Disjoint ranges
+// per tag (assigned by `tokenOfId` in hashcons.ts): Ref → +N, Wildcard → 0,
+// Symbol → odd negatives, Variable → even negatives.
+export type NodeId = number;
+
 export interface Span {
   line: number;      // 1-indexed line in original input
   startCol?: number;

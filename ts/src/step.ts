@@ -1,9 +1,10 @@
-import { unifyTree, substAtom, substTerm, indexedInsertAt, type IndexedTree } from "./unify.js";
-import { collectPositiveNodes, findPath, nodeAt, termEq } from "./tree.js";
+import { unifyTree, substAtom, substTerm } from "./unify.js";
+import { collectPositiveNodes } from "./tree.js";
 import { hashconsTerm, hashconsAtom, expandTerm, type HashconsState } from "./hashcons.js";
 import { formatLiteral } from "./parse.js";
 import type { Atom, Trail, Tree } from "./types.js";
 import { newTrail } from "./types.js";
+import { hasNode, insertChild, type RefStore } from "./refstore.js";
 
 export const stepStats = {
   dedupSkipped: 0,
@@ -25,44 +26,35 @@ function prettyAtom(atom: Atom, hc: HashconsState): Atom {
 // after warmup, unification runs allocation-free on the trail itself.
 const sharedTrail: Trail = newTrail();
 
-// Mutates `reference` in place. Newly inserted nodes carry gen === iteration,
+// Mutates `reference` in place. Newly inserted rows carry gen === iteration,
 // so they are invisible to passesConstraint during this same pass (see
-// unify.ts notes on walkAllCandidates and the symbol-index loop).
-export function step(pattern: Tree, reference: IndexedTree, hc: HashconsState, iteration: number = 1): boolean {
+// unify.ts notes on the mutation-during-iteration invariant).
+export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iteration: number = 1): boolean {
   const positives = collectPositiveNodes(pattern);
   let anyInserted = false;
 
   unifyTree(pattern, reference, sharedTrail, iteration, hc, (trail) => {
-    for (const posNode of positives) {
-      const posPath = findPath(posNode.id, pattern, hc)!;
-
-      let pPath: number[];
-      if (posPath.length === 0) {
-        pPath = [];
-      } else {
-        const parent = nodeAt(pattern, posPath.slice(0, -1))!;
-        const parentRefId = substTerm(parent.id, trail);
-        const found = findPath(parentRefId, reference.root, hc);
-        if (found === null) continue;
-        pPath = found;
-      }
+    for (const { node: posNode, parent: posParent } of positives) {
+      const parentRefId = hashconsTerm(substTerm(posParent.id, trail), hc);
+      if (!hasNode(reference, parentRefId, hc)) continue;
 
       const rawAtom = substAtom(posNode.literal.atom, trail);
       const rawId = substTerm(posNode.id, trail);
       const newAtom = hashconsAtom(rawAtom, hc);
       const newId = hashconsTerm(rawId, hc);
-      const parentNode = nodeAt(reference.root, pPath)!;
-      if (parentNode.children.some((c) => termEq(c.id, newId, hc))) {
+
+      // Global id uniqueness: hashconsed ids are content-addressed, so if
+      // this id exists anywhere in the store the row is a duplicate.
+      if (hasNode(reference, newId, hc)) {
         stepStats.dedupSkipped++;
         continue;
       }
 
-      indexedInsertAt(reference, pPath, {
+      insertChild(reference, parentRefId, {
         id: newId,
         literal: { literalType: posNode.literal.literalType, atom: newAtom },
-        children: [],
         gen: iteration,
-      });
+      }, hc);
       stepStats.inserted++;
       anyInserted = true;
     }

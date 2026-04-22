@@ -1,93 +1,10 @@
 import assert from "node:assert/strict";
-import { findPath, nodeAt, insertAt, nodesBefore, isTemporallyBefore, fringe, unionFringe, intersectionFringe } from "./tree.js";
-import { sym, vari, node, fact } from "./types.js";
+import { isTemporallyBefore, fringe, unionFringe, intersectionFringe, collectPositiveNodes } from "./tree.js";
+import { sym, node, fact, assert_, match } from "./types.js";
 import { createHashcons } from "./hashcons.js";
+import type { Tree } from "./types.js";
 
 const hc = createHashcons();
-
-//   root (id "r")
-//     a  (id "a")
-//       p (id "p")
-//       q (id "q")
-//     b  (id "b")
-const tree = node(sym("r"), [sym("root")], [
-  node(sym("a"), [sym("a")], [
-    node(sym("p"), [sym("p")]),
-    node(sym("q"), [sym("q")]),
-  ]),
-  node(sym("b"), [sym("b")]),
-]);
-
-// --- findPath ---
-
-assert.deepEqual(findPath(sym("r"), tree, hc), []);
-assert.deepEqual(findPath(sym("a"), tree, hc), [0]);
-assert.deepEqual(findPath(sym("b"), tree, hc), [1]);
-assert.deepEqual(findPath(sym("p"), tree, hc), [0, 0]);
-assert.deepEqual(findPath(sym("q"), tree, hc), [0, 1]);
-assert.equal(findPath(sym("missing"), tree, hc), null);
-console.log("PASS: findPath");
-
-// variable id
-const vTree = node(vari("X"), [sym("x")]);
-assert.deepEqual(findPath(vari("X"), vTree, hc), []);
-assert.equal(findPath(sym("X"), vTree, hc), null);
-console.log("PASS: findPath variable id");
-
-// --- nodeAt ---
-
-assert.equal(nodeAt(tree, [])?.id, tree.id);
-assert.deepEqual(nodeAt(tree, [0])?.id, sym("a"));
-assert.deepEqual(nodeAt(tree, [1])?.id, sym("b"));
-assert.deepEqual(nodeAt(tree, [0, 0])?.id, sym("p"));
-assert.deepEqual(nodeAt(tree, [0, 1])?.id, sym("q"));
-assert.equal(nodeAt(tree, [2]), null);
-assert.equal(nodeAt(tree, [0, 5]), null);
-console.log("PASS: nodeAt");
-
-// --- insertAt ---
-
-const fresh = node(sym("r"), [sym("root")], [
-  node(sym("a"), [sym("a")]),
-]);
-
-const newChild = node(sym("c"), [sym("c")]);
-insertAt(fresh, [0], newChild);
-assert.equal(fresh.children[0]!.children.length, 1);
-assert.deepEqual(fresh.children[0]!.children[0]!.id, sym("c"));
-console.log("PASS: insertAt child");
-
-insertAt(fresh, [], node(sym("b"), [sym("b")]));
-assert.equal(fresh.children.length, 2);
-assert.deepEqual(fresh.children[1]!.id, sym("b"));
-console.log("PASS: insertAt root level");
-
-assert.throws(() => insertAt(fresh, [99], node(sym("x"), [])), /no node at path/);
-console.log("PASS: insertAt bad path throws");
-
-// --- nodesBefore ---
-// Matches the example in overview.md:
-//   root
-//     a
-//       b
-//     c
-//     d
-//       e
-{
-  const nb = node(sym("b"), [sym("b")]);
-  const na = node(sym("a"), [sym("a")], [nb]);
-  const nc = node(sym("c"), [sym("c")]);
-  const ne = node(sym("e"), [sym("e")]);
-  const nd = node(sym("d"), [sym("d")], [ne]);
-  const nroot = node(sym("root"), [sym("root")], [na, nc, nd]);
-
-  assert.deepEqual(nodesBefore(nroot, na).map((n) => n.id), []);
-  assert.deepEqual(nodesBefore(nroot, nb).map((n) => n.id), []);
-  assert.deepEqual(nodesBefore(nroot, nc).map((n) => n.id), [sym("a"), sym("b")]);
-  assert.deepEqual(nodesBefore(nroot, nd).map((n) => n.id), [sym("a"), sym("b"), sym("c")]);
-  assert.deepEqual(nodesBefore(nroot, ne).map((n) => n.id), [sym("a"), sym("b"), sym("c")]);
-  console.log("PASS: nodesBefore");
-}
 
 // --- isTemporallyBefore ---
 // Matches overview tree:  root / a{b} / c / d{e}
@@ -115,6 +32,26 @@ console.log("PASS: insertAt bad path throws");
   assert.equal(isTemporallyBefore(a, []), false);
   assert.equal(isTemporallyBefore([], a), false);
   console.log("PASS: isTemporallyBefore");
+}
+
+// --- collectPositiveNodes ---
+// Pattern: - root / + a / - b / + c
+// positives: a and c, parents are root and b respectively, paths [0] and [1, 0].
+{
+  const patC: Tree = { id: sym("c"), literal: { literalType: assert_(), atom: { terms: [sym("c")] } }, children: [] };
+  const patB: Tree = { id: sym("b"), literal: { literalType: match(), atom: { terms: [sym("b")] } }, children: [patC] };
+  const patA: Tree = { id: sym("a"), literal: { literalType: assert_(), atom: { terms: [sym("a")] } }, children: [] };
+  const patRoot: Tree = { id: sym("r"), literal: { literalType: match(), atom: { terms: [] } }, children: [patA, patB] };
+
+  const positives = collectPositiveNodes(patRoot);
+  assert.equal(positives.length, 2);
+  assert.equal(positives[0]!.node, patA);
+  assert.equal(positives[0]!.parent, patRoot);
+  assert.deepEqual(positives[0]!.path, [0]);
+  assert.equal(positives[1]!.node, patC);
+  assert.equal(positives[1]!.parent, patB);
+  assert.deepEqual(positives[1]!.path, [1, 0]);
+  console.log("PASS: collectPositiveNodes");
 }
 
 // --- fringe tests ---

@@ -1,7 +1,11 @@
-import type { Atom, Literal, MatchConstraint, Term, Trail, Tree } from "./types.js";
+import type { Atom, MatchConstraint, Term, Trail, Tree } from "./types.js";
 import { newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
-import { findPath, isTemporallyBefore, nodeAt } from "./tree.js";
+import { isTemporallyBefore } from "./tree.js";
 import { hashconsTerm, createHashcons, type HashconsState } from "./hashcons.js";
+import type { Candidate, NodeRow, RefStore, SymbolIndex } from "./refstore.js";
+import { allCandidates, buildRefStore, getNode, getRoot } from "./refstore.js";
+
+export type { Candidate, SymbolIndex } from "./refstore.js";
 
 export const unifyStats = {
   c: 0,
@@ -121,7 +125,7 @@ function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolea
 
 // --- Node unification (id + literal) ---
 
-function unifyNode(pat: Tree, ref: Tree, trail: Trail, hc: HashconsState): boolean {
+function unifyNode(pat: Tree, ref: NodeRow, trail: Trail, hc: HashconsState): boolean {
   const patTag = pat.literal.literalType.tag;
   const refTag = ref.literal.literalType.tag;
   if (patTag !== "Match" && patTag !== "Before") return false;
@@ -130,75 +134,20 @@ function unifyNode(pat: Tree, ref: Tree, trail: Trail, hc: HashconsState): boole
   return unifyAtoms(pat.literal.atom, ref.literal.atom, trail, hc);
 }
 
-// --- Reference tree enumeration ---
-
-export interface Candidate {
-  path: number[];
-  node: Tree;
-}
-
-export type SymbolIndex = Map<string, Candidate[]>;
-
-// A reference tree carrying its own symbol index. The index is maintained
-// incrementally by `indexedInsertAt` as new nodes are added during a step,
-// so unifyTree never has to rebuild it.
-export interface IndexedTree {
-  root: Tree;
-  index: SymbolIndex;
-}
-
-// Single walk: only Symbol-headed atoms go into the index; other nodes are
-// reachable through walkAllCandidates() (a generator), which is used lazily
-// when a pattern's first term isn't a Symbol.
-export function buildIndexedTree(root: Tree): IndexedTree {
-  const index: SymbolIndex = new Map();
-  function walk(node: Tree, path: number[]): void {
-    const firstTerm = node.literal.atom.terms[0];
-    if (firstTerm?.tag === "Symbol") {
-      let bucket = index.get(firstTerm.name);
-      if (bucket === undefined) { bucket = []; index.set(firstTerm.name, bucket); }
-      bucket.push({ path, node });
-    }
-    for (let i = 0; i < node.children.length; i++) {
-      walk(node.children[i]!, [...path, i]);
-    }
-  }
-  walk(root, []);
-  return { root, index };
-}
-
-// Append `child` to the node at `parentPath` and extend the symbol index.
-// `child` must carry `gen === currentIteration` so passesConstraint hides it
-// from the still-active matching pass (see matchSubtree / walkAllCandidates).
-export function indexedInsertAt(itree: IndexedTree, parentPath: number[], child: Tree): void {
-  const parent = nodeAt(itree.root, parentPath);
-  if (parent === null) throw new Error(`no node at path [${parentPath}]`);
-  const childPath = [...parentPath, parent.children.length];
-  parent.children.push(child);
-  const firstTerm = child.literal.atom.terms[0];
-  if (firstTerm?.tag === "Symbol") {
-    let bucket = itree.index.get(firstTerm.name);
-    if (bucket === undefined) { bucket = []; itree.index.set(firstTerm.name, bucket); }
-    bucket.push({ path: childPath, node: child });
-  }
-}
-
-// Walks every node in the tree. Used only when a pattern's first term is not
-// a Symbol (i.e. Variable/Wildcard), so the symbol index can't narrow it.
+// --- Reference enumeration ---
 //
-// MUTATION NOTE: consumers may call indexedInsertAt *during* iteration (a
-// visit() callback deriving new facts). `tree.children.length` is re-read on
-// every iteration, so pushes into a child array that this loop is currently
-// scanning will produce extra yields. Safety relies on passesConstraint
-// rejecting the newly-inserted nodes (gen === iteration falls outside every
-// constraint: any/delta/old). If the constraint model ever grows a case that
-// *should* see same-iteration nodes, this invariant has to be revisited.
-function* walkAllCandidates(tree: Tree, path: number[]): Generator<Candidate> {
-  yield { path, node: tree };
-  for (let i = 0; i < tree.children.length; i++) {
-    yield* walkAllCandidates(tree.children[i]!, [...path, i]);
-  }
-}
+// The reference tree is reified as a flat RefStore (see refstore.ts and
+// plans/relational-storage.md). Candidate enumeration is either:
+//   - a SymbolIndex bucket lookup when the pattern's first term is a Symbol, or
+//   - `allCandidates(store)` — a scan of every row — otherwise.
+//
+// MUTATION NOTE: consumers may insert rows into `store` *during* iteration
+// (a visit() callback deriving new facts). JS Map/Array iteration visits
+// entries appended during iteration, so pushes into a live scan may produce
+// extra yields. Safety relies on passesConstraint rejecting those newly
+// inserted rows (gen === iteration falls outside every constraint:
+// any/delta/old). If the constraint model ever grows a case that *should*
+// see same-iteration nodes, this invariant has to be revisited.
 
 function isStrictDescendant(ancestor: number[], path: number[]): boolean {
   if (path.length <= ancestor.length) return false;
@@ -207,8 +156,8 @@ function isStrictDescendant(ancestor: number[], path: number[]): boolean {
 
 // --- Constraint checking ---
 
-function passesConstraint(node: Tree, constraint: MatchConstraint, iteration: number): boolean {
-  const gen = node.gen ?? 0;
+function passesConstraint(row: { gen: number }, constraint: MatchConstraint, iteration: number): boolean {
+  const gen = row.gen;
   if (constraint === "any") return gen < iteration;
   if (constraint === "delta") return gen === iteration - 1;
   if (constraint === "old") return gen < iteration - 1;
@@ -228,8 +177,7 @@ function passesConstraint(node: Tree, constraint: MatchConstraint, iteration: nu
 interface SearchState {
   deepest: number[];
   trail: Trail;
-  root: Tree;
-  index: SymbolIndex;
+  store: RefStore;
   iteration: number;
   hc: HashconsState;
 }
@@ -295,8 +243,8 @@ function computeAnchor(
     const lt = sib.literal.literalType.tag;
     if (lt === "Match" || lt === "Before") {
       const boundId = substTerm(sib.id, state.trail);
-      const path = findPath(boundId, state.root, state.hc);
-      if (path !== null) return path;
+      const row = getNode(state.store, boundId, state.hc);
+      if (row) return row.path;
     }
   }
   return state.deepest;
@@ -314,8 +262,8 @@ function matchSubtree(
 
   const firstTerm = pat.literal.atom.terms[0];
   const candidates: Iterable<Candidate> = (firstTerm?.tag === "Symbol")
-    ? (state.index.get(firstTerm.name) ?? [])
-    : walkAllCandidates(state.root, []);
+    ? (state.store.index.get(firstTerm.name) ?? [])
+    : allCandidates(state.store);
 
   const prevDeepest = state.deepest;
   for (const { path, node } of candidates) {
@@ -351,7 +299,7 @@ function matchSubtree(
  */
 export function unifyTree(
   pattern: Tree,
-  reference: IndexedTree,
+  reference: RefStore,
   trail: Trail,
   iteration: number,
   hc: HashconsState,
@@ -359,18 +307,18 @@ export function unifyTree(
 ): void {
   const lt = pattern.literal.literalType;
   if (lt.tag !== "Match" || pattern.literal.atom.terms.length !== 0) return;
-  if (!passesConstraint(reference.root, lt.constraint, iteration)) return;
+  const root = getRoot(reference, hc);
+  if (!passesConstraint(root, lt.constraint, iteration)) return;
 
   const mark = trailLength(trail);
-  if (!unifyTerms(pattern.id, reference.root.id, trail, hc)) {
+  if (!unifyTerms(pattern.id, root.id, trail, hc)) {
     trailUnwind(trail, mark);
     return;
   }
   const state: SearchState = {
     deepest: [],
     trail,
-    root: reference.root,
-    index: reference.index,
+    store: reference,
     iteration,
     hc,
   };
@@ -388,8 +336,8 @@ export function collectMatches(
   const out: Array<Map<string, Term>> = [];
   const trail = newTrail();
   const hc = createHashcons();
-  const itree = buildIndexedTree(reference);
-  unifyTree(pattern, itree, trail, iteration, hc, (t) => {
+  const store = buildRefStore(reference, hc);
+  unifyTree(pattern, store, trail, iteration, hc, (t) => {
     const row = new Map<string, Term>();
     // Tail-first so shadowing picks the most recent binding.
     for (let i = t.names.length - 1; i >= 0; i--) {

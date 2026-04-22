@@ -2,7 +2,7 @@ import { step } from "./step.js";
 import { expandAll, generateDeltaVariants } from "./expand.js";
 import { closeAggregates } from "./aggregate-fold.js";
 import { createHashcons, type HashconsState } from "./hashcons.js";
-import { buildIndexedTree, type IndexedTree } from "./unify.js";
+import { buildRefStore, refStoreToTree, type RefStore } from "./refstore.js";
 import type { Tree } from "./types.js";
 import { match } from "./types.js";
 
@@ -13,7 +13,7 @@ function setGenRecursive(tree: Tree, gen: number): void {
   }
 }
 
-function innerFixpoint(patterns: Tree[], ref: IndexedTree, gas: number, hc: HashconsState, startIteration: number = 1): { steps: number; iteration: number } {
+function innerFixpoint(patterns: Tree[], ref: RefStore, gas: number, hc: HashconsState, startIteration: number = 1): { steps: number; iteration: number } {
   let changed: boolean;
   let steps = 0;
   let iteration = startIteration;
@@ -38,7 +38,7 @@ export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result
   const patterns = expanded.flatMap(generateDeltaVariants);
   const hc = createHashcons();
   setGenRecursive(initial, 0);
-  const ref = buildIndexedTree(initial);
+  const ref = buildRefStore(initial, hc);
   let totalSteps = 0;
   let iteration = 1;
   let outerChanged: boolean;
@@ -59,7 +59,7 @@ export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result
     }
   } while (outerChanged);
 
-  return { result: ref.root, steps: totalSteps, hc, expandedPatterns: expanded };
+  return { result: refStoreToTree(ref, hc), steps: totalSteps, hc, expandedPatterns: expanded };
 }
 
 export function nilTree(): Tree {

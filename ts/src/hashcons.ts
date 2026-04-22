@@ -1,10 +1,8 @@
-import type { Atom, Term } from "./types.js";
-
-type Token = number;
+import type { Atom, NodeId, Term } from "./types.js";
 
 interface TrieNode {
   id?: number;
-  children?: Map<Token, TrieNode>;
+  children?: Map<NodeId, TrieNode>;
 }
 
 export interface HashconsState {
@@ -36,7 +34,15 @@ export function createHashcons(): HashconsState {
 //   Wildcard  →  0
 //   Symbol    → -1, -3, -5, …   (odd negatives)
 //   Variable  → -2, -4, -6, …   (even negatives)
-function tokenOf(term: Term, s: HashconsState): Token {
+//
+// Exported as `tokenOfId` for RefStore keying. The precondition (nested Atoms
+// are already hashconsed to Refs) holds for any term used as a node id, since
+// atom ids are hashconsed before reaching the store.
+export function tokenOfId(term: Term, s: HashconsState): NodeId {
+  return tokenOf(term, s);
+}
+
+function tokenOf(term: Term, s: HashconsState): NodeId {
   switch (term.tag) {
     case "Ref":      return term.id;
     case "Wildcard": return 0;
