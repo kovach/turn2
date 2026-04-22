@@ -1,10 +1,28 @@
-# choice constraints
+# relational storage
+plan: plans/relational-storage.md
+
+- currently we use a tree alongside a set of indexes to handle queries and hold state over time
+- the structure of the tree is used for pattern matching:
+  - the hierarchy is used to resolve `-a\n  -b` (b must match a descendent of a)
+  - and `-a\n<b` (b must match a predecessor of a)
+- idea: store reference tree relationally. each node is a tuple stored in a flat set.
+  each parent relationship is an explicit fact `(parent:child A B)`
+  each sibling relationship is also explicit `(before:after A B)`
+- most of unify becomes database queries
 
 # string interning
 done
 
+since each node has a unique parent, this is well-defined
+`... root -> a ...  -->  ... root -> b -> a ...`
+
 # semi-naive evaluation
 plan: plans/seminaive.md
+
+# further perf
+plan: TODO
+
+- pre-filter by children of node in case of `-a\n  -b` query (currently we only filter by `b` tuples)
 
 # unification perf - index
 plan: plans/unify-index.md
@@ -22,11 +40,10 @@ plan: plans/unify-index.md
 plan: plans/display-ttt.md
 
 - a program might have program-specific display functions written in ts
-- parse this from a triple-dash-comment block at the file top:
+- parse this from a comment block at the file top:
+
 ```
----
---- display: ttt.ts
----
+/ display: ttt.ts
 ```
 
 ## notes on ttt demo

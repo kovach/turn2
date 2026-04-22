@@ -21,7 +21,7 @@ function _parseNodes(input: string): Tree[] | ParseError {
   for (const [idx, raw] of input.split("\n").entries()) {
     const lineno = idx + 1;
     const indent = raw.length - raw.trimStart().length;
-    const afterIndent = raw.slice(indent).replace(/--.*$/, "");
+    const afterIndent = raw.slice(indent).replace(/\/.*$/, "");
 
     if (afterIndent === "" || afterIndent.trim() === "") continue;
     if (afterIndent[0] === "\t") {
@@ -201,14 +201,15 @@ export interface Frontmatter {
 }
 
 export function parseFrontmatter(source: string): { frontmatter: Frontmatter; body: string } {
-  // Frontmatter is slide comments: --- delimiters with --- key: value lines.
-  // The entire source remains as body (frontmatter lines are valid `--` comments),
-  // so line numbers and rule indices are preserved.
+  // Frontmatter is the first contiguous block of `/` comment lines at the
+  // start of the source. Each line is a normal comment in the body; scanning
+  // for `key: value` pairs here is purely additive. Line numbers and rule
+  // indices are preserved since the body parser skips the same lines.
   const frontmatter: Frontmatter = {};
-  const match = source.match(/^---\n([\s\S]*?)\n---\n?/);
+  const match = source.match(/^(?:\/.*\n)+/);
   if (match) {
-    for (const line of match[1]!.split("\n")) {
-      const kvMatch = line.match(/^---\s+(\w+):\s*(.*)$/);
+    for (const line of match[0].split("\n")) {
+      const kvMatch = line.match(/^\/\s+(\w+):\s*(.*)$/);
       if (kvMatch) {
         const key = kvMatch[1]!;
         const value = kvMatch[2]!;

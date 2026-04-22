@@ -1,13 +1,10 @@
----
---- display: ttt.js
----
+/ display: ttt.js
 
--- basically tic-tac-toe
-
--- players, grid
+/ basically tic-tac-toe
+/ players, grid
 + game
   + setup
-  + turn
+  + turn 
     + actor x
 
 - setup
@@ -27,23 +24,31 @@
 - [A] ask
   + value (cell R C)
 
- -- actor P fills a square with their mark
+/ actor P fills a square with their mark
 - turn
   - actor P
   ? ask
     - value C
     + fill C P
 
+- target-power
+  - power P
+  - power:range P R
+  ? target T
+  ? source S
+  ! land S
+  ! land T
+  ! range S T R 
+
 - game
   - fill C P
   + not-empty C
-
 
 - turn
   - fill _ _
   + complete
 
--- after player fills a square, other player turns
+/ after player fills a square, other player turns
 - game
   - other P Op
   - turn
@@ -52,12 +57,7 @@
   + turn
     + actor Op
 
-- game
-  - fill (cell R z) M
-  - fill (cell R (s z)) M
-  - fill (cell R (s (s z))) M
-  + won M (row R)
-
+/ `<` demo
 -[T] turn
   - actor X
   - complete
@@ -71,105 +71,26 @@
 - cell R C
   + filled
 
+- game
+  - fill (cell R z) M
+  - fill (cell R (s z)) M
+  - fill (cell R (s (s z))) M
+  + won M (row R)
 
-= V1 (id r1 id2)
-= V2 (id r4 id3 (id r1 id3) (id r1 id4))
-= V3 (id r2 id6 V1)
-= V4 (id r2 id11 V1 V3 V3)
-+ is V2 V4
+- game
+  - fill (cell z C) M
+  - fill (cell (s z) C) M
+  - fill (cell (s (s z)) C) M
+  + won M (col C)
 
-= V1 (id r1 id1)
-= V2 (id r1 id2)
-= V3 (id r1 id3)
-= V4 (id r1 id4)
-= V5 (id r2 id6 V2)
-= V6 (id r2 id4 V2)
-= V7 (id r2 id7 V2)
-= V8 (id r2 id11 V2 V7 V7)
-= V9 (id r6 id3 V3 (id r4 id5 V3 V4 (id r3 id2 (id r12 id5) (id r2 id11 V2 V5 V5) (id r4 id3 V3 V4))))
-= V10 (id r4 id3 (id r7 id6 V1 V6 V3 V4 V9) (id r7 id7 V1 V6 V3 V4 V9))
-+ is V10 V8
+- game
+  - fill (cell z z) M
+  - fill (cell (s z) (s z)) M
+  - fill (cell (s (s z)) (s (s z))) M
+  + won M diag1
 
-= V1 (id r1 id1)
-= V2 (id r1 id2)
-= V3 (id r1 id3)
-= V4 (id r1 id4)
-= V5 (id r2 id6 V2)
-= V6 (id r2 id4 V2)
-= V7 (id r2 id7 V2)
-= V8 (id r6 id3 V3 (id r4 id5 V3 V4 (id r3 id2 (id r12 id5) (id r2 id11 V2 V5 V5) (id r4 id3 V3 V4))))
-= V9 (id r7 id6 V1 V6 V3 V4 V8)
-= V10 (id r7 id7 V1 V6 V3 V4 V8)
-= V11 (id r2 id5 V2)
-= V12 (id r2 id11 V2 V7 V5)
-= V13 (id r6 id3 V9 (id r4 id5 V9 V10 (id r3 id2 (id r13 id11) (id r2 id11 V2 V7 V7) (id r4 id3 V9 V10))))
-= V14 (id r4 id3 (id r7 id6 V1 V11 V9 V10 V13) (id r7 id7 V1 V11 V9 V10 V13))
-+ is V14 V12
-
-= V1 (id r1 id1)
-= V2 (id r1 id2)
-= V3 (id r1 id3)
-= V4 (id r1 id4)
-= V5 (id r2 id6 V2)
-= V6 (id r2 id4 V2)
-= V7 (id r2 id7 V2)
-= V8 (id r6 id3 V3 (id r4 id5 V3 V4 (id r3 id2 (id r12 id5) (id r2 id11 V2 V5 V5) (id r4 id3 V3 V4))))
-= V9 (id r7 id6 V1 V6 V3 V4 V8)
-= V10 (id r7 id7 V1 V6 V3 V4 V8)
-= V11 (id r2 id5 V2)
-= V12 (id r6 id3 V9 (id r4 id5 V9 V10 (id r3 id2 (id r13 id11) (id r2 id11 V2 V7 V7) (id r4 id3 V9 V10))))
-= V13 (id r7 id6 V1 V11 V9 V10 V12)
-= V14 (id r7 id7 V1 V11 V9 V10 V12)
-= V15 (id r2 id11 V2 (id r2 id8 V2) V5)
-= V16 (id r6 id3 V13 (id r4 id5 V13 V14 (id r3 id2 (id r14 id15) (id r2 id11 V2 V7 V5) (id r4 id3 V13 V14))))
-= V17 (id r4 id3 (id r7 id6 V1 V6 V13 V14 V16) (id r7 id7 V1 V6 V13 V14 V16))
-+ is V17 V15
-
-= V1 (id r1 id1)
-= V2 (id r1 id2)
-= V3 (id r1 id3)
-= V4 (id r1 id4)
-= V5 (id r2 id6 V2)
-= V6 (id r2 id4 V2)
-= V7 (id r2 id7 V2)
-= V8 (id r6 id3 V3 (id r4 id5 V3 V4 (id r3 id2 (id r12 id5) (id r2 id11 V2 V5 V5) (id r4 id3 V3 V4))))
-= V9 (id r7 id6 V1 V6 V3 V4 V8)
-= V10 (id r7 id7 V1 V6 V3 V4 V8)
-= V11 (id r2 id5 V2)
-= V12 (id r6 id3 V9 (id r4 id5 V9 V10 (id r3 id2 (id r13 id11) (id r2 id11 V2 V7 V7) (id r4 id3 V9 V10))))
-= V13 (id r7 id6 V1 V11 V9 V10 V12)
-= V14 (id r7 id7 V1 V11 V9 V10 V12)
-= V15 (id r2 id8 V2)
-= V16 (id r6 id3 V13 (id r4 id5 V13 V14 (id r3 id2 (id r14 id15) (id r2 id11 V2 V7 V5) (id r4 id3 V13 V14))))
-= V17 (id r7 id6 V1 V6 V13 V14 V16)
-= V18 (id r7 id7 V1 V6 V13 V14 V16)
-= V19 (id r2 id11 V2 V15 V7)
-= V20 (id r6 id3 V17 (id r4 id5 V17 V18 (id r3 id2 (id r15 id18) (id r2 id11 V2 V15 V5) (id r4 id3 V17 V18))))
-= V21 (id r4 id3 (id r7 id6 V1 V11 V17 V18 V20) (id r7 id7 V1 V11 V17 V18 V20))
-+ is V21 V19
-
-= V1 (id r1 id1)
-= V2 (id r1 id2)
-= V3 (id r1 id3)
-= V4 (id r1 id4)
-= V5 (id r2 id6 V2)
-= V6 (id r2 id4 V2)
-= V7 (id r2 id7 V2)
-= V8 (id r6 id3 V3 (id r4 id5 V3 V4 (id r3 id2 (id r12 id5) (id r2 id11 V2 V5 V5) (id r4 id3 V3 V4))))
-= V9 (id r7 id6 V1 V6 V3 V4 V8)
-= V10 (id r7 id7 V1 V6 V3 V4 V8)
-= V11 (id r2 id5 V2)
-= V12 (id r6 id3 V9 (id r4 id5 V9 V10 (id r3 id2 (id r13 id11) (id r2 id11 V2 V7 V7) (id r4 id3 V9 V10))))
-= V13 (id r7 id6 V1 V11 V9 V10 V12)
-= V14 (id r7 id7 V1 V11 V9 V10 V12)
-= V15 (id r2 id8 V2)
-= V16 (id r6 id3 V13 (id r4 id5 V13 V14 (id r3 id2 (id r14 id15) (id r2 id11 V2 V7 V5) (id r4 id3 V13 V14))))
-= V17 (id r7 id6 V1 V6 V13 V14 V16)
-= V18 (id r7 id7 V1 V6 V13 V14 V16)
-= V19 (id r6 id3 V17 (id r4 id5 V17 V18 (id r3 id2 (id r15 id18) (id r2 id11 V2 V15 V5) (id r4 id3 V17 V18))))
-= V20 (id r7 id6 V1 V11 V17 V18 V19)
-= V21 (id r7 id7 V1 V11 V17 V18 V19)
-= V22 (id r2 id11 V2 V5 V7)
-= V23 (id r6 id3 V20 (id r4 id5 V20 V21 (id r3 id2 (id r16 id22) (id r2 id11 V2 V15 V7) (id r4 id3 V20 V21))))
-= V24 (id r4 id3 (id r7 id6 V1 V6 V20 V21 V23) (id r7 id7 V1 V6 V20 V21 V23))
-+ is V24 V22
+- game
+  - fill (cell (s (s z)) z) M
+  - fill (cell (s z) (s z)) M
+  - fill (cell z (s (s z))) M
+  + won M diag2

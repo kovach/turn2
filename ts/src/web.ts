@@ -669,12 +669,13 @@ resultEl.addEventListener("mouseout", (e) => {
 initServer().then(() => {
   if (mode === "detached") run();
   patternsEl.focus();
+  patternsEl.setSelectionRange(0, 0);
 });
 
-const MARKERS = new Set(["-", "<", "+", "?", "!", "#", "="]);
+const MARKERS = new Set(["-", "<", "+", "?", "!", "#", "=", "/"]);
 
 function isWeak(line: string): boolean {
-  return /^\s*[-<+?!#=]?\s*$/.test(line);
+  return /^\s*[-<+?!#=/]?\s*$/.test(line);
 }
 
 // Use execCommand so edits land on the browser's native undo stack.
@@ -712,7 +713,7 @@ function onKey(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     handleReturn();
-  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#" || e.key === "=") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  } else if ((e.key === "+" || e.key === "-" || e.key === "<" || e.key === "!" || e.key === "?" || e.key === "#" || e.key === "=" || e.key === "/") && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (handleMarkerKey(e.key)) e.preventDefault();
   } else if (e.key === "s" && e.ctrlKey) {
     e.preventDefault();
@@ -804,7 +805,7 @@ function handleMarkerKey(char: string): boolean {
   const lineEnd = value.indexOf("\n", s);
   const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
   if (!isWeak(line)) return false;
-  const markerMatch = line.match(/^(\s*)([-<+?!#=])/);
+  const markerMatch = line.match(/^(\s*)([-<+?!#=/])/);
   if (markerMatch) {
     const markerPos = lineStart + markerMatch[1]!.length;
     if (s >= markerPos) {
@@ -820,7 +821,7 @@ function handleTab() {
   const el = patternsEl;
   const { selectionStart: s, selectionEnd: e, value } = el;
 
-  // Case 3: text is highlighted → indent all highlighted lines
+  // Selection: indent every line in the region.
   if (s !== e) {
     const firstLineStart = value.lastIndexOf("\n", s - 1) + 1;
     const region = value.slice(firstLineStart, e);
@@ -831,25 +832,10 @@ function handleTab() {
     return;
   }
 
+  // No selection: indent the current line regardless of cursor position.
   const lineStart = value.lastIndexOf("\n", s - 1) + 1;
-  const lineEnd = value.indexOf("\n", s);
-  const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd);
-  const beforeCursor = value.slice(lineStart, s);
-
-  // Case 1: everything before cursor is whitespace
-  if (/^\s*$/.test(beforeCursor)) {
-    execReplace(s, e, "  ");
-  } else {
-    // Case 2: line is weak with a type marker
-    const markerMatch = line.match(/^(\s*)([-<+?!#=])/);
-    if (isWeak(line) && markerMatch) {
-      const markerPos = lineStart + markerMatch[1]!.length;
-      execReplace(markerPos, markerPos, "  ");
-      el.setSelectionRange(s + 2, s + 2);
-    } else {
-      execReplace(s, e, "  ");
-    }
-  }
+  execReplace(lineStart, lineStart, "  ");
+  el.setSelectionRange(s + 2, s + 2);
 }
 
 function dedent() {
