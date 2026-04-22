@@ -1,4 +1,5 @@
 import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Span, Term, Tree } from "./types.js";
+import { match, before, assert_, ask, constrain, aggregate, equal } from "./types.js";
 import { idExpand } from "./expand.js";
 import { expandMacros } from "./macros.js";
 
@@ -10,7 +11,7 @@ export interface ParseError {
 export function parse(input: string): Tree | ParseError {
   const nodes = _parseNodes(input);
   if ("message" in nodes) return nodes;
-  return { id: { tag: "Variable", name: "0" }, literal: { literalType: "Match", atom: { terms: [] } }, children: nodes };
+  return { id: { tag: "Variable", name: "0" }, literal: { literalType: match(), atom: { terms: [] } }, children: nodes };
 }
 
 function _parseNodes(input: string): Tree[] | ParseError {
@@ -28,8 +29,8 @@ function _parseNodes(input: string): Tree[] | ParseError {
     }
 
     const prefix = afterIndent[0];
-    const literalType = prefixToLiteralType(prefix);
-    if (literalType === null) {
+    const literalTag = prefixToTag(prefix);
+    if (literalTag === null) {
       return { line: lineno, message: `invalid literal-type prefix '${prefix}'` };
     }
 
@@ -62,7 +63,7 @@ function _parseNodes(input: string): Tree[] | ParseError {
       const name = tokens[0]!;
       const args = tokens.length > 1 ? parseTerms(tokens.slice(1)) : [];
       macroInvocation = { name, args };
-    } else if (literalType === "Aggregate") {
+    } else if (literalTag === "Aggregate") {
       const parsed = parseAggregateLine(rest, lineno);
       if ("message" in parsed) return parsed;
       aggregateInfo = parsed;
@@ -70,13 +71,13 @@ function _parseNodes(input: string): Tree[] | ParseError {
       terms = rest === "" ? [] : parseTerms(tokenize(rest));
     }
 
+    const literalType = tagToLiteralType(literalTag, aggregateInfo);
     const literal: Literal = { literalType, atom: { terms } };
     const node: Tree = {
       id: explicitId ?? { tag: "Variable", name: String(lineno) },
       literal,
       children: [],
       span: { line: lineno },
-      ...(aggregateInfo && { aggregateInfo }),
       ...(macroInvocation && { macroInvocation }),
     };
 
@@ -103,7 +104,9 @@ function _parseNodes(input: string): Tree[] | ParseError {
   return roots;
 }
 
-function prefixToLiteralType(ch: string | undefined): LiteralType | null {
+type LiteralTag = "Match" | "Before" | "Assert" | "Ask" | "Constrain" | "Aggregate" | "Equal";
+
+function prefixToTag(ch: string | undefined): LiteralTag | null {
   switch (ch) {
     case "-": return "Match";
     case "<": return "Before";
@@ -113,6 +116,18 @@ function prefixToLiteralType(ch: string | undefined): LiteralType | null {
     case "#": return "Aggregate";
     case "=": return "Equal";
     default: return null;
+  }
+}
+
+function tagToLiteralType(tag: LiteralTag, aggInfo?: AggregateInfo): LiteralType {
+  switch (tag) {
+    case "Match": return match();
+    case "Before": return before();
+    case "Assert": return assert_();
+    case "Ask": return ask();
+    case "Constrain": return constrain();
+    case "Aggregate": return aggregate(aggInfo!);
+    case "Equal": return equal();
   }
 }
 
@@ -181,6 +196,38 @@ function adjustSpans(tree: Tree, offset: number): Tree {
   };
 }
 
+export interface Frontmatter {
+  display?: string;
+}
+
+export function parseFrontmatter(source: string): { frontmatter: Frontmatter; body: string } {
+  // Frontmatter is slide comments: --- delimiters with --- key: value lines.
+  // The entire source remains as body (frontmatter lines are valid `--` comments),
+  // so line numbers and rule indices are preserved.
+  const frontmatter: Frontmatter = {};
+  const match = source.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (match) {
+    for (const line of match[1]!.split("\n")) {
+      const kvMatch = line.match(/^---\s+(\w+):\s*(.*)$/);
+      if (kvMatch) {
+        const key = kvMatch[1]!;
+        const value = kvMatch[2]!;
+        if (key === "display") frontmatter.display = value;
+      }
+    }
+  }
+  return { frontmatter, body: source };
+}
+
+export function parseSource(
+  source: string,
+): { frontmatter: Frontmatter; body: string; patterns: Tree[] } | ParseError {
+  const { frontmatter, body } = parseFrontmatter(source);
+  const patterns = parsePatterns(body);
+  if ("message" in patterns) return patterns;
+  return { frontmatter, body, patterns };
+}
+
 export function parsePatterns(input: string): Tree[] | ParseError {
   const lines = input.split("\n");
   const chunks: Array<{ startLine: number; text: string }> = [];
@@ -202,6 +249,8 @@ export function parsePatterns(input: string): Tree[] | ParseError {
     // Adjust spans to be absolute line numbers
     const adjusted = adjustSpans(result, startLine - 1);
     const expanded = expandMacros(adjusted);
+    // Skip chunks that contain only comments — they produce no rule nodes.
+    if (expanded.children.length === 0) continue;
     trees.push(idExpand(expanded, `r${ruleIndex++}`));
   }
   return trees;
@@ -211,8 +260,8 @@ export function parsePatterns(input: string): Tree[] | ParseError {
 
 export function formatTree(tree: Tree, indent = 0): string {
   let line: string;
-  if (tree.aggregateInfo) {
-    const { funcName, args, out } = tree.aggregateInfo;
+  if (tree.literal.literalType.tag === "Aggregate") {
+    const { funcName, args, out } = tree.literal.literalType.info;
     const argsStr = args.length > 0 ? " " + args.map(formatTerm).join(" ") : "";
     line = `# ${funcName}${argsStr} -> ${formatTerm(out)}`;
   } else {
@@ -243,7 +292,7 @@ export function formatTerm(term: Term): string {
 }
 
 function literalTypeToPrefix(t: LiteralType): string {
-  switch (t) {
+  switch (t.tag) {
     case "Match": return "-";
     case "Before": return "<";
     case "Assert": return "+";

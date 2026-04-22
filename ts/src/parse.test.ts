@@ -17,7 +17,7 @@ function ok(input: string): Tree {
 {
   const tree = ok("- foo");
   assert.equal(tree.children.length, 1);
-  assert.equal(tree.children[0]!.literal.literalType, "Match");
+  assert.equal(tree.children[0]!.literal.literalType.tag, "Match");
   assert.deepEqual(tree.children[0]!.literal.atom.terms, [{ tag: "Symbol", name: "foo" }]);
   assert.equal(tree.children[0]!.children.length, 0);
   console.log("PASS: single leaf");
@@ -28,11 +28,11 @@ function ok(input: string): Tree {
   const tree = ok("- foo\n  ! bar X");
   assert.equal(tree.children.length, 1);
   const rootNode = tree.children[0]!;
-  assert.equal(rootNode.literal.literalType, "Match");
+  assert.equal(rootNode.literal.literalType.tag, "Match");
   assert.deepEqual(rootNode.literal.atom.terms, [{ tag: "Symbol", name: "foo" }]);
   assert.equal(rootNode.children.length, 1);
   const child = rootNode.children[0]!;
-  assert.equal(child.literal.literalType, "Constrain");
+  assert.equal(child.literal.literalType.tag, "Constrain");
   assert.deepEqual(child.literal.atom.terms, [
     { tag: "Symbol", name: "bar" },
     { tag: "Variable", name: "X" },
@@ -44,12 +44,12 @@ function ok(input: string): Tree {
 {
   const tree = ok("- a\n+ b\n? c\n! d\n< e\n= f g");
   assert.equal(tree.children.length, 6);
-  assert.equal(tree.children[0]!.literal.literalType, "Match");
-  assert.equal(tree.children[1]!.literal.literalType, "Assert");
-  assert.equal(tree.children[2]!.literal.literalType, "Ask");
-  assert.equal(tree.children[3]!.literal.literalType, "Constrain");
-  assert.equal(tree.children[4]!.literal.literalType, "Before");
-  assert.equal(tree.children[5]!.literal.literalType, "Equal");
+  assert.equal(tree.children[0]!.literal.literalType.tag, "Match");
+  assert.equal(tree.children[1]!.literal.literalType.tag, "Assert");
+  assert.equal(tree.children[2]!.literal.literalType.tag, "Ask");
+  assert.equal(tree.children[3]!.literal.literalType.tag, "Constrain");
+  assert.equal(tree.children[4]!.literal.literalType.tag, "Before");
+  assert.equal(tree.children[5]!.literal.literalType.tag, "Equal");
   console.log("PASS: all prefixes");
 }
 
@@ -110,14 +110,14 @@ function ok(input: string): Tree {
   const tree = ok(input);
   assert(tree.children.length > 0);
   const first = tree.children[0]!;
-  assert.equal(first.literal.literalType, "Match");
+  assert.equal(first.literal.literalType.tag, "Match");
   assert.deepEqual(first.literal.atom.terms, [{ tag: "Symbol", name: "turn" }]);
   assert.equal(first.children.length, 3);
   const activate = first.children[0]!;
   assert.deepEqual(activate.literal.atom.terms, [{ tag: "Symbol", name: "activate" }]);
   assert.equal(activate.children.length, 3);
-  assert.equal(first.children[1]!.literal.literalType, "Assert");
-  assert.equal(first.children[2]!.literal.literalType, "Assert");
+  assert.equal(first.children[1]!.literal.literalType.tag, "Assert");
+  assert.equal(first.children[2]!.literal.literalType.tag, "Assert");
   console.log("PASS: parses example.sl");
 }
 
@@ -223,15 +223,21 @@ function ok(input: string): Tree {
   console.log("PASS: unclosed bracket is error");
 }
 
+function getAggInfo(node: Tree) {
+  const lt = node.literal.literalType;
+  return lt.tag === "Aggregate" ? lt.info : undefined;
+}
+
 // aggregate syntax: # sum X -> Total
 {
   const tree = ok("# sum X -> Total");
   const node = tree.children[0]!;
-  assert.equal(node.literal.literalType, "Aggregate");
-  assert(node.aggregateInfo);
-  assert.equal(node.aggregateInfo.funcName, "sum");
-  assert.deepEqual(node.aggregateInfo.args, [{ tag: "Variable", name: "X" }]);
-  assert.deepEqual(node.aggregateInfo.out, { tag: "Variable", name: "Total" });
+  assert.equal(node.literal.literalType.tag, "Aggregate");
+  const info = getAggInfo(node);
+  assert(info);
+  assert.equal(info.funcName, "sum");
+  assert.deepEqual(info.args, [{ tag: "Variable", name: "X" }]);
+  assert.deepEqual(info.out, { tag: "Variable", name: "Total" });
   console.log("PASS: aggregate syntax # sum X -> Total");
 }
 
@@ -239,9 +245,10 @@ function ok(input: string): Tree {
 {
   const tree = ok("# count -> N");
   const node = tree.children[0]!;
-  assert.equal(node.aggregateInfo?.funcName, "count");
-  assert.deepEqual(node.aggregateInfo?.args, []);
-  assert.deepEqual(node.aggregateInfo?.out, { tag: "Variable", name: "N" });
+  const info = getAggInfo(node);
+  assert.equal(info?.funcName, "count");
+  assert.deepEqual(info?.args, []);
+  assert.deepEqual(info?.out, { tag: "Variable", name: "N" });
   console.log("PASS: aggregate with no args");
 }
 
@@ -249,8 +256,9 @@ function ok(input: string): Tree {
 {
   const tree = ok("# foo A B -> C");
   const node = tree.children[0]!;
-  assert.equal(node.aggregateInfo?.funcName, "foo");
-  assert.equal(node.aggregateInfo?.args.length, 2);
+  const info = getAggInfo(node);
+  assert.equal(info?.funcName, "foo");
+  assert.equal(info?.args.length, 2);
   console.log("PASS: aggregate with multiple args");
 }
 
@@ -258,7 +266,7 @@ function ok(input: string): Tree {
 {
   const tree = ok("# sum X -> Total\n  - t X");
   const node = tree.children[0]!;
-  assert.equal(node.literal.literalType, "Aggregate");
+  assert.equal(node.literal.literalType.tag, "Aggregate");
   assert.equal(node.children.length, 1);
   assert.deepEqual(node.children[0]!.literal.atom.terms, [
     { tag: "Symbol", name: "t" },
@@ -272,7 +280,7 @@ function ok(input: string): Tree {
   const tree1 = ok("# sum X -> Total\n  - t X");
   const formatted = formatTree(tree1.children[0]!);
   const tree2 = ok(formatted);
-  assert.equal(tree2.children[0]!.aggregateInfo?.funcName, "sum");
+  assert.equal(getAggInfo(tree2.children[0]!)?.funcName, "sum");
   assert.equal(tree2.children[0]!.children.length, 1);
   console.log("PASS: aggregate roundtrip");
 }

@@ -16,7 +16,7 @@ function parseRules(input: string): Tree[] {
 }
 
 function collect(tree: Tree, type: string): Tree[] {
-  const self = tree.literal.literalType === type ? [tree] : [];
+  const self = tree.literal.literalType.tag === type ? [tree] : [];
   return self.concat(tree.children.flatMap((c) => collect(c, type)));
 }
 
@@ -99,7 +99,7 @@ const rules = parseRules(`- foo
   const { result } = fixpoint0(patterns);
   assert.equal(result.children.length, 1);
   const node = result.children[0]!;
-  assert.equal(node.literal.literalType, "Assert");
+  assert.equal(node.literal.literalType.tag, "Assert");
   assert.deepEqual(node.literal.atom.terms[0], { tag: "Symbol", name: "card" });
   assert.deepEqual(node.literal.atom.terms[1], node.id);
   console.log("PASS: self-referential id: +[I] card I resolves to + card <id>");

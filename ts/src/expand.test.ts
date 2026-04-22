@@ -17,7 +17,7 @@ function parseRules(input: string): Tree[] {
 }
 
 function literalTypes(tree: Tree): string[] {
-  const prefix = tree.literal.literalType[0]!.toLowerCase();
+  const prefix = tree.literal.literalType.tag[0]!.toLowerCase();
   return [prefix, ...tree.children.flatMap(literalTypes)];
 }
 
@@ -98,8 +98,8 @@ function literalTypes(tree: Tree): string[] {
   assert.equal(r1.children.length, 1); // f
   const f1 = r1.children[0]!;
   assert.equal(f1.children.length, 2); // x, g
-  assert.equal(f1.children[0]!.literal.literalType, "Match");   // x stays match
-  assert.equal(f1.children[1]!.literal.literalType, "Assert");  // g is the tip
+  assert.equal(f1.children[0]!.literal.literalType.tag, "Match");   // x stays match
+  assert.equal(f1.children[1]!.literal.literalType.tag, "Assert");  // g is the tip
   assert.equal(f1.children[1]!.children.length, 0);             // g has no children
   console.log("PASS: expand rule 1 ends at +g with no children");
 
@@ -108,10 +108,10 @@ function literalTypes(tree: Tree): string[] {
   const r2 = rules[1]!;
   const f2 = r2.children[0]!;
   assert.equal(f2.children.length, 2); // x, g
-  assert.equal(f2.children[1]!.literal.literalType, "Match");   // g converted to match
+  assert.equal(f2.children[1]!.literal.literalType.tag, "Match");   // g converted to match
   const h2 = f2.children[1]!.children[0]!;
-  assert.equal(h2.literal.literalType, "Match");
-  assert.equal(h2.children[0]!.literal.literalType, "Assert");  // i is the tip
+  assert.equal(h2.literal.literalType.tag, "Match");
+  assert.equal(h2.children[0]!.literal.literalType.tag, "Assert");  // i is the tip
   console.log("PASS: expand rule 2 ends at +i, earlier +g converted to match");
 }
 
@@ -142,7 +142,7 @@ function literalTypes(tree: Tree): string[] {
   const { result } = fixpoint(rules, ref);
 
   function collect(tree: Tree, type: string): Tree[] {
-    const self = tree.literal.literalType === type ? [tree] : [];
+    const self = tree.literal.literalType.tag === type ? [tree] : [];
     return self.concat(tree.children.flatMap((c) => collect(c, type)));
   }
 
@@ -164,7 +164,7 @@ function literalTypes(tree: Tree): string[] {
   // Rule 1: +[Id] agg-instance lexId
   const r1 = rules[0]!;
   const agg1 = r1.children[0]!.children[0]!;
-  assert.equal(agg1.literal.literalType, "Assert");
+  assert.equal(agg1.literal.literalType.tag, "Assert");
   assert.equal(agg1.literal.atom.terms[0]?.tag, "Symbol");
   if (agg1.literal.atom.terms[0]?.tag === "Symbol") {
     assert.equal(agg1.literal.atom.terms[0].name, "agg-instance");
@@ -175,7 +175,7 @@ function literalTypes(tree: Tree): string[] {
   const r2 = rules[1]!;
   const foo2 = r2.children[0]!;
   const agg2 = foo2.children[0]!;
-  assert.equal(agg2.literal.literalType, "Match");
+  assert.equal(agg2.literal.literalType.tag, "Match");
   assert.equal(agg2.literal.atom.terms[0]?.tag, "Symbol");
   if (agg2.literal.atom.terms[0]?.tag === "Symbol") {
     assert.equal(agg2.literal.atom.terms[0].name, "agg-instance");
@@ -184,12 +184,12 @@ function literalTypes(tree: Tree): string[] {
   // Local-pattern (- t X) is a child of agg-instance
   const tNode = agg2.children[0];
   assert.ok(tNode, "expected local-pattern as child of agg-instance");
-  assert.equal(tNode.literal.literalType, "Match");
+  assert.equal(tNode.literal.literalType.tag, "Match");
 
   // agg-binding is also a child of agg-instance
   const binding = agg2.children[1];
   assert.ok(binding, "expected agg-binding as child");
-  assert.equal(binding.literal.literalType, "Assert");
+  assert.equal(binding.literal.literalType.tag, "Assert");
   if (binding.literal.atom.terms[0]?.tag === "Symbol") {
     assert.equal(binding.literal.atom.terms[0].name, "agg-binding");
   }
@@ -207,13 +207,13 @@ function literalTypes(tree: Tree): string[] {
   const foo3 = r3.children[0]!;
   // First child should be - agg-result (converted from aggregate)
   const aggResult = foo3.children[0]!;
-  assert.equal(aggResult.literal.literalType, "Match");
+  assert.equal(aggResult.literal.literalType.tag, "Match");
   if (aggResult.literal.atom.terms[0]?.tag === "Symbol") {
     assert.equal(aggResult.literal.atom.terms[0].name, "agg-result");
   }
   // Second child should be + note Total
   const note = foo3.children[1]!;
-  assert.equal(note.literal.literalType, "Assert");
+  assert.equal(note.literal.literalType.tag, "Assert");
   console.log("PASS: suffix rule has - agg-result");
 }
 

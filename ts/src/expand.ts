@@ -1,5 +1,5 @@
-import type { AggregateInfo, Term, Tree } from "./types.js";
-import { sym, vari, isPositive } from "./types.js";
+import type { AggregateInfo, LiteralType, MatchConstraint, Term, Tree } from "./types.js";
+import { sym, vari, isPositive, match, assert_, newTrail, trailPush } from "./types.js";
 import { substAtom } from "./unify.js";
 
 export function idExpand(tree: Tree, name: string): Tree {
@@ -7,18 +7,30 @@ export function idExpand(tree: Tree, name: string): Tree {
   let counter = 1;
 
   function walk(node: Tree): Tree {
-    const positive = isPositive(node.literal.literalType);
+    const lt = node.literal.literalType;
+    const positive = isPositive(lt);
+    // Only Match/Before actually bind their node id against the reference tree
+    // at match time. Equal (and any other non-positive non-Match non-Before
+    // literal) has no id binding, so its auto-X would stay free and leak into
+    // downstream positives' ids. Exclude it from previousVars.
+    const bindsId = lt.tag === "Match" || lt.tag === "Before";
     let newId: Term;
     if (positive) {
       newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
     } else {
       const isAutoId = node.id.tag === "Variable" && /^\d+$/.test(node.id.name);
       newId = isAutoId ? vari("X" + counter++) : node.id;
-      previousVars.push(newId);
+      if (bindsId) previousVars.push(newId);
     }
-    const atom = node.id.tag === "Variable"
-      ? substAtom(node.literal.atom, new Map([[node.id.name, newId]]))
-      : node.literal.atom;
+    let atom = node.literal.atom;
+    if (node.id.tag === "Variable") {
+      const t = newTrail();
+      // Exempt from the unify.ts trail-hashcons invariant: this trail lives
+      // for a single substAtom call at parse time, never participates in
+      // fixpoint matching, and no HashconsState is available here.
+      trailPush(t, node.id.name, newId);
+      atom = substAtom(atom, t);
+    }
     const children = node.children.map(walk);
     return { ...node, id: newId, literal: { ...node.literal, atom }, children };
   }
@@ -43,12 +55,13 @@ function pruneAndConvert(
   if (state.found) return null;
 
   const aggMeta = aggMap.get(node);
-  const isAgg = node.literal.literalType === "Aggregate";
+  const lt = node.literal.literalType;
+  const isAgg = lt.tag === "Aggregate";
 
   if (node === targetNode) {
     state.found = true;
     if (isAgg && aggMeta) {
-      return { ...node, literal: { ...node.literal, literalType: "Assert" }, children: [] };
+      return { ...node, literal: { ...node.literal, literalType: assert_() }, children: [] };
     }
     return { ...node, children: [] };
   }
@@ -62,7 +75,7 @@ function pruneAndConvert(
     return {
       id: resultId,
       literal: {
-        literalType: "Match",
+        literalType: match(),
         atom: { terms: [sym("agg-result"), aggMeta.lexId, aggMeta.nodeId, aggMeta.info.out] },
       },
       children: [],
@@ -70,8 +83,8 @@ function pruneAndConvert(
   }
 
   let newNode: Tree;
-  if (isPositive(node.literal.literalType)) {
-    newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+  if (isPositive(lt)) {
+    newNode = { ...node, literal: { ...node.literal, literalType: match() } };
   } else {
     newNode = node;
   }
@@ -92,13 +105,14 @@ export function expand(pattern: Tree): Tree[] {
   const aggMap = new Map<Tree, AggMeta>();
 
   function findPositivesAndAggs(node: Tree): void {
-    if (isPositive(node.literal.literalType)) {
+    const lt = node.literal.literalType;
+    if (isPositive(lt)) {
       positiveNodes.push(node);
-      if (node.literal.literalType === "Aggregate" && node.aggregateInfo) {
+      if (lt.tag === "Aggregate") {
         aggMap.set(node, {
-          lexId: sym(`agg_${node.aggregateInfo.funcName}_${expandCounter++}`),
+          lexId: sym(`agg_${lt.info.funcName}_${expandCounter++}`),
           nodeId: node.id,
-          info: node.aggregateInfo,
+          info: lt.info,
           localPattern: node.children,
         });
       }
@@ -141,7 +155,8 @@ function buildAggRule1(
   function prune(node: Tree): Tree | null {
     if (state.found) return null;
 
-    const isAgg = node.literal.literalType === "Aggregate";
+    const lt = node.literal.literalType;
+    const isAgg = lt.tag === "Aggregate";
     const priorAgg = aggMap.get(node);
 
     if (node === targetNode) {
@@ -149,7 +164,7 @@ function buildAggRule1(
       return {
         id: aggMeta.nodeId,
         literal: {
-          literalType: "Assert",
+          literalType: assert_(),
           atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
         },
         children: [],
@@ -161,13 +176,13 @@ function buildAggRule1(
       newNode = {
         id: priorAgg.nodeId,
         literal: {
-          literalType: "Match",
+          literalType: match(),
           atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
         },
         children: [],
       };
-    } else if (isPositive(node.literal.literalType)) {
-      newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+    } else if (isPositive(lt)) {
+      newNode = { ...node, literal: { ...node.literal, literalType: match() } };
     } else {
       newNode = node;
     }
@@ -210,7 +225,7 @@ function buildAggRule2(
   const aggBinding: Tree = {
     id: bindingId,
     literal: {
-      literalType: "Assert",
+      literalType: assert_(),
       atom: { terms: [sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...aggMeta.info.args] },
     },
     children: [],
@@ -219,7 +234,8 @@ function buildAggRule2(
   function prune(node: Tree): Tree | null {
     if (state.found) return null;
 
-    const isAgg = node.literal.literalType === "Aggregate";
+    const lt = node.literal.literalType;
+    const isAgg = lt.tag === "Aggregate";
     const priorAgg = aggMap.get(node);
 
     if (node === targetNode) {
@@ -227,7 +243,7 @@ function buildAggRule2(
       return {
         id: aggMeta.nodeId,
         literal: {
-          literalType: "Match",
+          literalType: match(),
           atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
         },
         children: [...aggMeta.localPattern, aggBinding],
@@ -239,13 +255,13 @@ function buildAggRule2(
       newNode = {
         id: priorAgg.nodeId,
         literal: {
-          literalType: "Match",
+          literalType: match(),
           atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
         },
         children: [],
       };
-    } else if (isPositive(node.literal.literalType)) {
-      newNode = { ...node, literal: { ...node.literal, literalType: "Match" } };
+    } else if (isPositive(lt)) {
+      newNode = { ...node, literal: { ...node.literal, literalType: match() } };
     } else {
       newNode = node;
     }
@@ -272,4 +288,54 @@ function buildAggRule2(
 export function expandAll(patterns: Tree[]): Tree[] {
   expandCounter = 0;
   return patterns.flatMap(expand);
+}
+
+function countMatchNodes(tree: Tree): number {
+  const lt = tree.literal.literalType;
+  const self = (lt.tag === "Match" || lt.tag === "Before") ? 1 : 0;
+  return self + tree.children.reduce((acc, c) => acc + countMatchNodes(c), 0);
+}
+
+function cloneWithConstraints(tree: Tree, constraints: MatchConstraint[], pos: { i: number }): Tree {
+  const lt = tree.literal.literalType;
+  let newLiteralType: LiteralType;
+
+  if (lt.tag === "Match") {
+    newLiteralType = { tag: "Match", constraint: constraints[pos.i++]! };
+  } else if (lt.tag === "Before") {
+    newLiteralType = { tag: "Before", constraint: constraints[pos.i++]! };
+  } else {
+    newLiteralType = lt;
+  }
+
+  return {
+    ...tree,
+    literal: { ...tree.literal, literalType: newLiteralType },
+    children: tree.children.map(c => cloneWithConstraints(c, constraints, pos)),
+  };
+}
+
+export function generateDeltaVariants(pattern: Tree): Tree[] {
+  const matchCount = countMatchNodes(pattern);
+  if (matchCount === 0) {
+    return [pattern];
+  }
+
+  const variants: Tree[] = [];
+  for (let j = 0; j < matchCount; j++) {
+    const constraints: MatchConstraint[] = [];
+    for (let pos = 0; pos < matchCount; pos++) {
+      if (pos < j) constraints.push("old");
+      else if (pos === j) constraints.push("delta");
+      else constraints.push("any");
+    }
+    variants.push(cloneWithConstraints(pattern, constraints, { i: 0 }));
+  }
+  return variants;
+}
+
+export function expandAllWithDeltaVariants(patterns: Tree[]): Tree[] {
+  expandCounter = 0;
+  const expanded = patterns.flatMap(expand);
+  return expanded.flatMap(generateDeltaVariants);
 }

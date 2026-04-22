@@ -54,10 +54,6 @@ export function nodeAt(tree: Tree, path: number[]): Tree | null {
   return node;
 }
 
-export function cloneTree(tree: Tree): Tree {
-  return { ...tree, children: tree.children.map(cloneTree) };
-}
-
 export function collectPositiveNodes(tree: Tree): Tree[] {
   const self = isPositive(tree.literal.literalType) ? [tree] : [];
   return self.concat(tree.children.flatMap(collectPositiveNodes));

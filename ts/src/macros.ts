@@ -1,5 +1,5 @@
 import type { Term, Tree } from "./types.js";
-import { sym, vari } from "./types.js";
+import { sym, vari, aggregate, before } from "./types.js";
 
 export interface MacroDef {
   expand: (args: Term[], children: Tree[], fresh: () => string) => Tree;
@@ -17,11 +17,10 @@ const macros = new Map<string, MacroDef>([
       const l = vari(fresh());
       return {
         id: vari(fresh()),
-        literal: { literalType: "Aggregate", atom: { terms: [] } },
-        aggregateInfo: { funcName: "last", args: [l], out: y! },
+        literal: { literalType: aggregate({ funcName: "last", args: [l], out: y! }), atom: { terms: [] } },
         children: [{
           id: vari(fresh()),
-          literal: { literalType: "Before", atom: { terms: [sym("move"), x!, l] } },
+          literal: { literalType: before(), atom: { terms: [sym("move"), x!, l] } },
           children: [],
         }],
       };

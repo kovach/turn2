@@ -1,8 +1,9 @@
 import type { Term, Tree } from "./types.js";
-import { sym } from "./types.js";
+import { sym, assert_ } from "./types.js";
 import { findPath, isTemporallyBefore, termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
+import { indexedInsertAt, type IndexedTree } from "./unify.js";
 
 function isSymbol(t: Term, name: string): boolean {
   return t.tag === "Symbol" && t.name === name;
@@ -121,8 +122,8 @@ function selectEarliestTier(paused: AggInstance[]): AggInstance[] {
   return earliest;
 }
 
-export function closeAggregates(ref: Tree, hc: HashconsState): boolean {
-  const { instances, bindings, results } = collectAggNodes(ref);
+export function closeAggregates(ref: IndexedTree, hc: HashconsState, iteration: number = 1): boolean {
+  const { instances, bindings, results } = collectAggNodes(ref.root);
 
   const paused = instances.filter((i) => !hasResult(i, results));
   const earliest = selectEarliestTier(paused);
@@ -131,15 +132,15 @@ export function closeAggregates(ref: Tree, hc: HashconsState): boolean {
 
   for (const instance of earliest) {
     const matchingBindings = getBindingsForInstance(instance, bindings);
-    const sorted = sortBindings(matchingBindings, ref);
+    const sorted = sortBindings(matchingBindings, ref.root);
 
     // Look up aggregator by examining the atom
     // The aggregator name needs to come from somewhere... but we only have lexId
     // For now, we need to track the funcName somehow.
     // Let's encode it in the lexId: agg_funcName_N
     const lexIdStr = instance.lexId.tag === "Symbol" ? instance.lexId.name : "";
-    const match = lexIdStr.match(/^agg_([^_]+)_/);
-    const funcName = match ? match[1]! : "count";
+    const m = lexIdStr.match(/^agg_([^_]+)_/);
+    const funcName = m ? m[1]! : "count";
 
     const agg = getAggregator(funcName);
     let acc = agg.zero;
@@ -158,13 +159,14 @@ export function closeAggregates(ref: Tree, hc: HashconsState): boolean {
     const resultNode: Tree = {
       id: resultId,
       literal: {
-        literalType: "Assert",
+        literalType: assert_(),
         atom: resultAtom,
       },
       children: [],
+      gen: iteration,
     };
 
-    instance.parent.children.push(resultNode);
+    indexedInsertAt(ref, instance.parentPath, resultNode);
     changed = true;
   }
 

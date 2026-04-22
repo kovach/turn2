@@ -9,15 +9,24 @@ const CSS = `
 `;
 
 export function create(api) {
-  const { expandTerm, addStyles } = api;
+  const { peek, addStyles } = api;
   addStyles(CSS);
 
+  // One-level peek: returns the stored terms array for a Ref or Atom term,
+  // or null. Never materializes a full subtree — each step costs O(1).
+  function atomTerms(term, hc) {
+    if (term.tag === "Ref") {
+      const stored = peek(term, hc);
+      return stored ? stored.terms : null;
+    }
+    if (term.tag === "Atom") return term.atom.terms;
+    return null;
+  }
+
   function peanoToInt(term, hc) {
-    let t = term.tag === "Ref" ? expandTerm(term, hc) : term;
-    if (t.tag === "Symbol" && t.name === "z") return 0;
-    if (t.tag !== "Atom") return null;
-    const terms = t.atom.terms;
-    if (terms.length !== 2) return null;
+    if (term.tag === "Symbol" && term.name === "z") return 0;
+    const terms = atomTerms(term, hc);
+    if (!terms || terms.length !== 2) return null;
     if (terms[0]?.tag !== "Symbol" || terms[0].name !== "s") return null;
     const inner = peanoToInt(terms[1], hc);
     return inner === null ? null : inner + 1;
@@ -28,18 +37,17 @@ export function create(api) {
     let askId = null;
 
     function walk(node) {
-      if (node.literal.literalType === "Ask") {
+      if (node.literal.literalType.tag === "Ask") {
         askId = node.id;
       }
 
-      if (node.literal.literalType === "Assert") {
+      if (node.literal.literalType.tag === "Assert") {
         const terms = node.literal.atom.terms;
-        const expanded = terms.map(t => t.tag === "Ref" ? expandTerm(t, hc) : t);
 
         // Match: cell R C
-        if (expanded[0]?.tag === "Symbol" && expanded[0].name === "cell" && expanded.length === 3) {
-          const r = peanoToInt(expanded[1], hc);
-          const c = peanoToInt(expanded[2], hc);
+        if (terms[0]?.tag === "Symbol" && terms[0].name === "cell" && terms.length === 3) {
+          const r = peanoToInt(terms[1], hc);
+          const c = peanoToInt(terms[2], hc);
           if (r !== null && c !== null) {
             const key = `${r},${c}`;
             if (!cells.has(key)) {
@@ -49,14 +57,13 @@ export function create(api) {
         }
 
         // Match: fill (cell R C) M
-        if (expanded[0]?.tag === "Symbol" && expanded[0].name === "fill" && expanded.length === 3) {
-          const cellArg = expanded[1];
-          const markArg = expanded[2];
-          if (cellArg?.tag === "Atom" && markArg?.tag === "Symbol") {
-            const cellTerms = cellArg.atom.terms;
-            if (cellTerms[0]?.tag === "Symbol" && cellTerms[0].name === "cell") {
-              const r = peanoToInt(cellTerms[1], hc);
-              const c = peanoToInt(cellTerms[2], hc);
+        if (terms[0]?.tag === "Symbol" && terms[0].name === "fill" && terms.length === 3) {
+          const cellInner = atomTerms(terms[1], hc);
+          const markArg = terms[2];
+          if (cellInner && markArg?.tag === "Symbol") {
+            if (cellInner[0]?.tag === "Symbol" && cellInner[0].name === "cell") {
+              const r = peanoToInt(cellInner[1], hc);
+              const c = peanoToInt(cellInner[2], hc);
               if (r !== null && c !== null) {
                 const key = `${r},${c}`;
                 const cell = cells.get(key);

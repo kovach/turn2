@@ -1,3 +1,21 @@
+# choice constraints
+
+# string interning
+done
+
+# semi-naive evaluation
+plan: plans/seminaive.md
+
+# unification perf - index
+plan: plans/unify-index.md
+
+- most tree node atoms start with a sym
+- while adding nodes, maintain an index on the side mapping a sym to all the tree nodes whose atoms start with that
+  - e.g. if we `+[Id] foo bar`, we insert `(foo, ObjId)` where ObjId is the node
+- We check `pat` inside `matchSubtree`, before line 207.
+  If its first term is a sym, we use the index. otherwise we do a full scan as now.
+- this is purely a performance optimization
+
 # nice display for natural numbers
 
 # display as ttt board

@@ -33,12 +33,15 @@ function parseRules(input: string): Tree[] {
   const expanded = expandMacros(tree);
 
   const aggNode = expanded.children[0]!;
-  assert.equal(aggNode.literal.literalType, "Aggregate");
-  assert.ok(aggNode.aggregateInfo, "should have aggregateInfo");
-  assert.equal(aggNode.aggregateInfo!.funcName, "last");
+  const aggLt = aggNode.literal.literalType;
+  assert.equal(aggLt.tag, "Aggregate");
+  assert.ok(aggLt.tag === "Aggregate" && aggLt.info, "should have aggregateInfo");
+  if (aggLt.tag === "Aggregate") {
+    assert.equal(aggLt.info.funcName, "last");
+  }
 
   const beforeNode = aggNode.children[0]!;
-  assert.equal(beforeNode.literal.literalType, "Before");
+  assert.equal(beforeNode.literal.literalType.tag, "Before");
   assert.equal(beforeNode.literal.atom.terms[0]?.tag, "Symbol");
   if (beforeNode.literal.atom.terms[0]?.tag === "Symbol") {
     assert.equal(beforeNode.literal.atom.terms[0].name, "move");

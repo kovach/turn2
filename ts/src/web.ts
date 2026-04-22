@@ -1,7 +1,17 @@
-import { parsePatterns, formatTerm, buildSpanIndex } from "./parse.js";
+import { parseSource, formatTerm, buildSpanIndex } from "./parse.js";
 import { fixpoint0 } from "./fixpoint.js";
 import { expandTerm, type HashconsState } from "./hashcons.js";
-import type { Tree, Literal, Term } from "./types.js";
+import type { Tree, Literal, Term, Atom } from "./types.js";
+
+// expandTerm may only be used on Refs whose stored atom is NOT id-headed.
+// `(id …)` terms carry the previousVars chain and can be exponentially shared;
+// expanding one fully materializes that DAG as a tree. User terms (e.g.
+// `(s (s z))`, `(cell R C)`) are tree-shaped in practice and safe to expand.
+// See plans/web-no-expand-term.md.
+function isIdHeaded(atom: Atom): boolean {
+  const h = atom.terms[0];
+  return h?.tag === "Symbol" && h.name === "id";
+}
 
 const patternsEl = document.getElementById("patterns") as HTMLTextAreaElement;
 const resultEl = document.getElementById("result") as HTMLDivElement;
@@ -31,37 +41,6 @@ let currentLine: number | null = null;
 
 const GAS = 100;
 
-// --- Frontmatter parsing ---
-
-interface Frontmatter {
-  display?: string;
-}
-
-function parseFrontmatter(source: string): { frontmatter: Frontmatter; body: string } {
-  // Frontmatter is slide comments: --- delimiters with --- key: value lines
-  // e.g.:
-  //   ---
-  //   --- display: ttt.js
-  //   ---
-  // The entire source remains as body (frontmatter lines are valid comments)
-  const frontmatter: Frontmatter = {};
-  const match = source.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (match) {
-    for (const line of match[1]!.split("\n")) {
-      // Parse lines like "--- key: value"
-      const kvMatch = line.match(/^---\s+(\w+):\s*(.*)$/);
-      if (kvMatch) {
-        const key = kvMatch[1]!;
-        const value = kvMatch[2]!;
-        if (key === "display") {
-          frontmatter.display = value;
-        }
-      }
-    }
-  }
-  return { frontmatter, body: source };
-}
-
 // --- Display Module System ---
 
 interface DisplayModule {
@@ -72,9 +51,16 @@ interface DisplayModule {
 }
 
 interface DisplayAPI {
-  expandTerm: typeof expandTerm;
+  // One-level unwrap of a Ref; null for non-Ref or missing. External display
+  // modules use this instead of expandTerm — see plans/web-no-expand-term.md.
+  peek: (ref: Term, hc: HashconsState) => Atom | null;
   formatTerm: typeof formatTerm;
   addStyles: (css: string) => void;
+}
+
+function peek(term: Term, hc: HashconsState): Atom | null {
+  if (term.tag !== "Ref") return null;
+  return hc.refToAtom.get(term.id) ?? null;
 }
 
 let currentDisplayModule: DisplayModule | null = null;
@@ -102,7 +88,7 @@ async function loadDisplay(name: string | undefined): Promise<DisplayModule | nu
 
   try {
     const module = await import(`/data/${name}`);
-    const api: DisplayAPI = { expandTerm, formatTerm, addStyles };
+    const api: DisplayAPI = { peek, formatTerm, addStyles };
     currentDisplayModule = module.create(api);
     currentDisplayName = name;
     return currentDisplayModule;
@@ -115,10 +101,8 @@ async function loadDisplay(name: string | undefined): Promise<DisplayModule | nu
 }
 
 function handleDisplayClick(askId: Term, targetId: Term) {
-  const expandedAsk = lastHc ? expandTerm(askId, lastHc) : askId;
-  const expandedTarget = lastHc ? expandTerm(targetId, lastHc) : targetId;
-
-  const { bindings, results } = compressTerms([expandedAsk, expandedTarget]);
+  if (!lastHc) return;
+  const { bindings, results } = compressRefs([askId, targetId], lastHc);
   const lines = [...bindings, `+ is ${results[0]} ${results[1]}`];
   const text = "\n\n" + lines.join("\n");
 
@@ -130,13 +114,21 @@ function handleDisplayClick(askId: Term, targetId: Term) {
 // --- Source-output linking helpers ---
 
 function getSourceInfo(id: Term): { rule: string; lineId: string } | null {
-  // Expand refs to get the actual atom
-  let term = id;
-  if (term.tag === "Ref" && lastHc) {
-    term = expandTerm(term, lastHc);
+  // Only the first three terms (the "id <rule> <lineId>" prefix) matter, and
+  // in a hashconsed atom those are already non-Atom (Symbol/Ref). Read the
+  // stored atom directly — no recursive expandTerm, which for a deeply shared
+  // Ref would materialize the full subtree just to look at the head.
+  let terms: Term[];
+  if (id.tag === "Ref") {
+    if (!lastHc) return null;
+    const stored = lastHc.refToAtom.get(id.id);
+    if (!stored) return null;
+    terms = stored.terms;
+  } else if (id.tag === "Atom") {
+    terms = id.atom.terms;
+  } else {
+    return null;
   }
-  if (term.tag !== "Atom") return null;
-  const terms = term.atom.terms;
   if (terms.length < 3) return null;
   if (terms[0]?.tag !== "Symbol" || terms[0].name !== "id") return null;
   if (terms[1]?.tag !== "Symbol") return null;
@@ -174,12 +166,10 @@ function highlightResultNodes() {
   if (currentLine === null) return;
 
   const patternNodes = patternSpanIndex.get(currentLine) ?? [];
-  const hasPositive = patternNodes.some(n =>
-    n.literal.literalType === "Assert" ||
-    n.literal.literalType === "Ask" ||
-    n.literal.literalType === "Constrain" ||
-    n.literal.literalType === "Aggregate"
-  );
+  const hasPositive = patternNodes.some(n => {
+    const tag = n.literal.literalType.tag;
+    return tag === "Assert" || tag === "Ask" || tag === "Constrain" || tag === "Aggregate";
+  });
 
   if (!hasPositive) return;
 
@@ -397,75 +387,76 @@ function clearSelection() {
   resultEl.querySelectorAll(".node-selected").forEach((el) => el.classList.remove("node-selected"));
 }
 
-function compressTerms(terms: Term[]): { bindings: string[]; results: string[] } {
-  const counts = new Map<string, number>();
-  const termByKey = new Map<string, Term>();
+// Share-aware compression. Walks the hashcons DAG via refToAtom, visiting
+// each Ref at most once. Every Ref's stored body is emitted in exactly one
+// output location — as a `= V… …` binding when shared (refCount ≥ 2 or root),
+// or inlined at its sole reference site otherwise. Linear in distinct Refs,
+// regardless of how deeply the DAG unfolds as a tree. No call to expandTerm.
+function compressRefs(roots: Term[], hc: HashconsState): { bindings: string[]; results: string[] } {
+  const refCount = new Map<number, number>();
+  const visited = new Set<number>();
 
-  function collectSubterms(t: Term): void {
-    if (t.tag !== "Atom") return;
-    const key = formatTerm(t);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-    termByKey.set(key, t);
-    for (const sub of t.atom.terms) {
-      collectSubterms(sub);
+  function countRefs(t: Term): void {
+    if (t.tag === "Ref") {
+      refCount.set(t.id, (refCount.get(t.id) ?? 0) + 1);
+      if (visited.has(t.id)) return;
+      visited.add(t.id);
+      const stored = hc.refToAtom.get(t.id);
+      if (stored) for (const sub of stored.terms) countRefs(sub);
+      return;
     }
+    if (t.tag === "Atom") for (const sub of t.atom.terms) countRefs(sub);
+  }
+  for (const root of roots) countRefs(root);
+
+  // Shared: refCount ≥ 2, plus any root that is itself a Ref.
+  const shared = new Set<number>();
+  for (const [id, count] of refCount) {
+    if (count >= 2) shared.add(id);
+  }
+  for (const root of roots) {
+    if (root.tag === "Ref") shared.add(root.id);
   }
 
-  for (const term of terms) {
-    collectSubterms(term);
-  }
+  // hashcons ids are allocated bottom-up (hashconsTerm recurses before
+  // emitting its own id), so ascending id order is a valid topological
+  // order for the sharing DAG.
+  const sharedList = [...shared].sort((a, b) => a - b);
+  const varMap = new Map<number, string>();
+  sharedList.forEach((id, i) => varMap.set(id, `V${i + 1}`));
 
-  // Shared = appears more than once, or is a top-level Atom
-  const shared = new Set<string>();
-  for (const [key, count] of counts) {
-    if (count > 1) shared.add(key);
-  }
-  for (const term of terms) {
-    if (term.tag === "Atom") shared.add(formatTerm(term));
-  }
-
-  if (shared.size === 0) {
-    return { bindings: [], results: terms.map(formatTerm) };
-  }
-
-  // Sort by length (shorter = inner = processed first)
-  const sharedList = [...shared].sort((a, b) => a.length - b.length);
-  const varMap = new Map<string, string>();
-  let varCounter = 1;
-  for (const key of sharedList) {
-    varMap.set(key, `V${varCounter++}`);
-  }
-
-  function rewrite(t: Term): Term {
-    if (t.tag !== "Atom") return t;
-    const key = formatTerm(t);
-    if (varMap.has(key)) {
-      return { tag: "Variable", name: varMap.get(key)! };
+  function renderInner(t: Term): string {
+    if (t.tag === "Ref") {
+      const v = varMap.get(t.id);
+      if (v !== undefined) return v;
+      // refCount === 1 and not a root → inline its body exactly once.
+      const stored = hc.refToAtom.get(t.id);
+      if (!stored) return `*${t.id}`;
+      return `(${stored.terms.map(renderInner).join(" ")})`;
     }
-    return { tag: "Atom", atom: { terms: t.atom.terms.map(rewrite) } };
+    if (t.tag === "Atom") {
+      return `(${t.atom.terms.map(renderInner).join(" ")})`;
+    }
+    return formatTerm(t);
   }
 
   const bindings: string[] = [];
-  for (const key of sharedList) {
-    const varName = varMap.get(key)!;
-    const original = termByKey.get(key)!;
-    if (original.tag !== "Atom") continue;
-    const rewrittenInner = original.atom.terms.map(rewrite);
-    const rewrittenTerm: Term = { tag: "Atom", atom: { terms: rewrittenInner } };
-    bindings.push(`= ${varName} ${formatTerm(rewrittenTerm)}`);
+  for (const id of sharedList) {
+    const stored = hc.refToAtom.get(id);
+    if (!stored) continue;
+    bindings.push(`= ${varMap.get(id)} (${stored.terms.map(renderInner).join(" ")})`);
   }
 
-  const results = terms.map(t => formatTerm(rewrite(t)));
-
+  const results = roots.map(renderInner);
   return { bindings, results };
 }
 
 function assertClick(askKey: number, assertKey: number) {
-  const askTerm = clickableTerms.get(askKey);
-  const assertTerm = clickableTerms.get(assertKey);
-  if (!askTerm || !assertTerm) return;
+  const askId = clickableTerms.get(askKey);
+  const assertId = clickableTerms.get(assertKey);
+  if (!askId || !assertId || !lastHc) return;
 
-  const { bindings, results } = compressTerms([askTerm, assertTerm]);
+  const { bindings, results } = compressRefs([askId, assertId], lastHc);
   const lines = [...bindings, `+ is ${results[0]} ${results[1]}`];
   const text = "\n\n" + lines.join("\n");
 
@@ -487,11 +478,10 @@ function clearError() {
 }
 
 async function run() {
-  const { frontmatter, body } = parseFrontmatter(patternsEl.value);
-  const parsedPatterns = parsePatterns(body);
-  if ("message" in parsedPatterns) {
+  const sourceResult = parseSource(patternsEl.value);
+  if ("message" in sourceResult) {
     lastValid = false;
-    showError(`Patterns — line ${parsedPatterns.line}: ${parsedPatterns.message}`);
+    showError(`Patterns — line ${sourceResult.line}: ${sourceResult.message}`);
     resultEl.innerHTML = "";
     displayEl.innerHTML = "";
     displayPaneEl.style.display = "none";
@@ -504,6 +494,7 @@ async function run() {
 
   clearError();
 
+  const { frontmatter, patterns: parsedPatterns } = sourceResult;
   patternSpanIndex = buildSpanIndex(parsedPatterns);
 
   const { result, steps, hc, expandedPatterns } = fixpoint0(parsedPatterns, GAS);
@@ -560,6 +551,7 @@ function renderTree(tree: Tree, depth: number): string {
 
 function renderNode(tree: Tree): string {
   const lt = tree.literal.literalType;
+  const tag = lt.tag;
   const [prefix, cls] = literalStyle(lt);
   const terms = tree.literal.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
   const body = terms === "" ? prefix : `${prefix} ${terms}`;
@@ -569,30 +561,31 @@ function renderNode(tree: Tree): string {
   const sourceLine = sourceInfo ? idToLineMap.get(`${sourceInfo.rule}:${sourceInfo.lineId}`) : null;
   const sourceAttr = sourceLine ? ` data-source-line="${sourceLine}"` : "";
 
-  const clickable = lt === "Ask" || lt === "Assert";
+  const clickable = tag === "Ask" || tag === "Assert";
   if (clickable) {
-    const expandedId = lastHc ? expandTerm(tree.id, lastHc) : tree.id;
     const termKey = nextClickableKey++;
-    clickableTerms.set(termKey, expandedId);
-    return `<span class="${cls} node-clickable" data-term-key="${termKey}" data-literal-type="${lt}"${sourceAttr}>${body}</span>`;
+    clickableTerms.set(termKey, tree.id);
+    return `<span class="${cls} node-clickable" data-term-key="${termKey}" data-literal-type="${tag}"${sourceAttr}>${body}</span>`;
   }
   return `<span class="${cls}"${sourceAttr}>${body}</span>`;
 }
 
 function renderTerm(term: Term, isPredicate = false): string {
-  // Expand refs to show full atom structure
-  if (term.tag === "Ref" && lastHc) {
-    const expanded = expandTerm(term, lastHc);
-    if (expanded.tag === "Atom") {
-      return `(${expanded.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
+  if (term.tag === "Ref") {
+    if (lastHc) {
+      const stored = lastHc.refToAtom.get(term.id);
+      if (stored && !isIdHeaded(stored)) {
+        const expanded = expandTerm(term, lastHc);
+        return renderTerm(expanded, isPredicate);
+      }
     }
+    return `<span class="lit-ref">*${term.id}</span>`;
   }
   switch (term.tag) {
     case "Symbol":   return `<span class="${isPredicate ? "lit-predicate" : "lit-symbol"}">${esc(term.name)}</span>`;
     case "Variable": return `<span class="lit-variable">${esc(term.name)}</span>`;
     case "Atom":     return `(${term.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
     case "Wildcard": return `<span class="lit-wildcard">_</span>`;
-    case "Ref":      return `<span class="lit-ref">*${term.id}</span>`;
   }
 }
 
@@ -601,7 +594,7 @@ function esc(s: string): string {
 }
 
 function literalStyle(t: Literal["literalType"]): [string, string] {
-  switch (t) {
+  switch (t.tag) {
     case "Match":     return ["-", "lit-match"];
     case "Before":    return ["<", "lit-before"];
     case "Assert":    return ["+", "lit-assert"];
@@ -614,18 +607,32 @@ function literalStyle(t: Literal["literalType"]): [string, string] {
 
 // --- Input and key handling ---
 
+// Coalesce bursts of input events (e.g. execCommand("insertText") firing one
+// event per character) into a single run() per animation frame.
+let pendingRun: Promise<void> | null = null;
+function scheduleRun(): Promise<void> {
+  if (pendingRun) return pendingRun;
+  pendingRun = new Promise<void>((resolve) => {
+    requestAnimationFrame(async () => {
+      try { await run(); } finally { pendingRun = null; resolve(); }
+    });
+  });
+  return pendingRun;
+}
+
 patternsEl.addEventListener("input", () => {
-  run();
-  if (mode === "attached") {
-    pendingSync = true;
-    if (lastValid) {
-      schedulePut();
-    } else if (debounceTimer !== null) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
+  if (mode === "attached") pendingSync = true;
+  scheduleRun().then(() => {
+    if (mode === "attached") {
+      if (lastValid) {
+        schedulePut();
+      } else if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
     }
-  }
-  updateSyncStatus();
+    updateSyncStatus();
+  });
 });
 
 patternsEl.addEventListener("keydown", onKey);
