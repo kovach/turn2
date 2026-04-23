@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { idExpand, expand, expandAll } from "./expand.js";
+import { idExpand, expand, expandAll, rewriteUnboundAssertVars } from "./expand.js";
 import { parse, parsePatterns } from "./parse.js";
 import { fixpoint } from "./fixpoint.js";
-import type { Tree } from "./types.js";
+import type { Term, Tree } from "./types.js";
 
 function parseOne(input: string): Tree {
   const result = parse(input);
@@ -215,6 +215,119 @@ function literalTypes(tree: Tree): string[] {
   const note = foo3.children[1]!;
   assert.equal(note.literal.literalType.tag, "Assert");
   console.log("PASS: suffix rule has - agg-result");
+}
+
+// --- rewriteUnboundAssertVars ---
+
+function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]): boolean {
+  if (t.tag !== "Atom") return false;
+  const terms = t.atom.terms;
+  if (terms.length !== 3 + expectedPreviousVars.length) return false;
+  if (terms[0]?.tag !== "Symbol" || terms[0].name !== "id") return false;
+  if (terms[1]?.tag !== "Symbol" || terms[1].name !== ruleName) return false;
+  if (terms[2]?.tag !== "Symbol" || !/^id\d+$/.test(terms[2].name)) return false;
+  for (let i = 0; i < expectedPreviousVars.length; i++) {
+    const got = terms[3 + i];
+    const want = expectedPreviousVars[i]!;
+    if (got?.tag !== "Variable" || got.name !== want) return false;
+  }
+  return true;
+}
+
+// Baseline rewrite: + b Y where Y has no prior binder → Y becomes (id r1 idN X1)
+{
+  const rules = expandAll([idExpand(parseOne("- a X\n  + b Y"), "r1")]);
+  assert.equal(rules.length, 1);
+  const assertNode = rules[0]!.children[0]!.children[0]!;
+  assert.equal(assertNode.literal.literalType.tag, "Assert");
+  const rewritten = assertNode.literal.atom.terms[1]!;
+  assert.ok(isIdAtomFor(rewritten, "r1", ["X1"]),
+    `expected fresh id atom with tail [X1], got ${JSON.stringify(rewritten)}`);
+  console.log("PASS: rewriteUnboundAssertVars baseline (+ b Y)");
+}
+
+// Multiple unbound vars get distinct fresh lineSyms
+{
+  const rules = expandAll([idExpand(parseOne("- a X\n  + b V W"), "r1")]);
+  const assertNode = rules[0]!.children[0]!.children[0]!;
+  const vSub = assertNode.literal.atom.terms[1]!;
+  const wSub = assertNode.literal.atom.terms[2]!;
+  assert.ok(vSub.tag === "Atom" && wSub.tag === "Atom");
+  if (vSub.tag === "Atom" && wSub.tag === "Atom") {
+    const vLine = vSub.atom.terms[2]!;
+    const wLine = wSub.atom.terms[2]!;
+    assert.ok(vLine.tag === "Symbol" && wLine.tag === "Symbol");
+    if (vLine.tag === "Symbol" && wLine.tag === "Symbol") {
+      assert.notEqual(vLine.name, wLine.name, "expected distinct lineSyms");
+    }
+  }
+  console.log("PASS: rewriteUnboundAssertVars distinct vars → distinct lineSyms");
+}
+
+// Repeated occurrence of the same var → same id atom
+{
+  const rules = expandAll([idExpand(parseOne("- a X\n  + b V V"), "r1")]);
+  const assertNode = rules[0]!.children[0]!.children[0]!;
+  assert.deepEqual(assertNode.literal.atom.terms[1], assertNode.literal.atom.terms[2]);
+  console.log("PASS: rewriteUnboundAssertVars repeated occurrence → same atom");
+}
+
+// Already bound: + b X where X is bound by preceding Match's atom (unified
+// against the reference at match time) should be untouched.
+{
+  const rules = expandAll([idExpand(parseOne("- a X\n  + b X"), "r1")]);
+  const assertNode = rules[0]!.children[0]!.children[0]!;
+  assert.deepEqual(assertNode.literal.atom.terms[1], { tag: "Variable", name: "X" });
+  console.log("PASS: rewriteUnboundAssertVars leaves already-bound vars alone");
+}
+
+// Aggregate arg: aggBinding references variable from preceding localPattern Match
+// → already in `seen` → no rewrite.
+{
+  const rules = expandAll([idExpand(parseOne("- foo\n  # sum X -> Total\n    - t X\n  + note Total"), "r1")]);
+  // Rule 2 is the buildAggRule2-style binding rule; its aggBinding child under
+  // the agg-instance Match references X which is bound by the - t X sibling.
+  const r2 = rules[1]!;
+  const foo2 = r2.children[0]!;
+  const aggInstance = foo2.children[0]!;
+  const aggBinding = aggInstance.children[1]!;
+  assert.equal(aggBinding.literal.literalType.tag, "Assert");
+  // agg-binding atom: [sym("agg-binding"), lexId, nodeId, X]. X must remain
+  // a Variable (bound by the - t X sibling at match time) — not rewritten.
+  const xTerm = aggBinding.literal.atom.terms[3]!;
+  assert.deepEqual(xTerm, { tag: "Variable", name: "X" },
+    `expected X to remain unsubstituted, got ${JSON.stringify(xTerm)}`);
+  console.log("PASS: rewriteUnboundAssertVars leaves aggBinding args alone");
+}
+
+// Ask node: same treatment as Assert
+{
+  const rules = expandAll([idExpand(parseOne("- a X\n  ? b Y"), "r1")]);
+  const askNode = rules[0]!.children[0]!.children[0]!;
+  assert.equal(askNode.literal.literalType.tag, "Ask");
+  const rewritten = askNode.literal.atom.terms[1]!;
+  assert.ok(isIdAtomFor(rewritten, "r1", ["X1"]),
+    `expected fresh id atom, got ${JSON.stringify(rewritten)}`);
+  console.log("PASS: rewriteUnboundAssertVars covers Ask");
+}
+
+// End-to-end: no Variable terms survive into the reference tree
+{
+  const rules = parseRules("- a X\n  + b Y");
+  const initial = parseOne("-\n  + a foo");
+  const { result } = fixpoint(rules, initial);
+  function hasVariable(node: Tree): boolean {
+    function termHas(t: Term): boolean {
+      if (t.tag === "Variable") return true;
+      if (t.tag === "Atom") return t.atom.terms.some(termHas);
+      return false;
+    }
+    if (node.literal.atom.terms.some(termHas)) return true;
+    return node.children.some(hasVariable);
+  }
+  assert.ok(!hasVariable(result),
+    "expected no Variable terms in reference tree after fixpoint");
+  console.log("PASS: rewriteUnboundAssertVars end-to-end (no Variables in output)");
 }
 
 console.log("All expand tests passed.");

@@ -1,3 +1,6 @@
+# eliminate Variables in output
+plan: plans/eliminate-variables-output.md
+
 # fix agg-instance nesting
 plan: TODO
 
@@ -9,10 +12,9 @@ plan: TODO
   and nothing links `bnd_a → bnd_b → bnd_c` to each other.
   Transitive-closing `before` does not fix it — the graph is divergent
   (`t_a → {bnd_a, t_b}`), not a linear chain through the bindings.
-- the agg-instance layout needs to change so the per-match bindings
-  inherit the ordering of the matched anchors (e.g. restructure so each
-  match lands in its own instance, or emit an explicit sibling-chain
-  edge among bindings, or fold by the anchor id rather than the binding id).
+- fixing this requires redoing how `agg-binding` rules are constructed.
+  we need the `agg-binding` to be localized at the result of the query,
+  but we don't have pattern definitions that let us express this yet.
 
 # new temporal relationships/removing totally ordered child requirement
 plan: plans/temporal-relationships.md

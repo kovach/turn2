@@ -1,6 +1,6 @@
 import type { AggregateInfo, LiteralType, MatchConstraint, Term, Tree } from "./types.js";
 import { sym, vari, isPositive, match, assert_, newTrail, trailPush } from "./types.js";
-import { substAtom } from "./unify.js";
+import { substAtom, substTerm } from "./unify.js";
 
 export function idExpand(tree: Tree, name: string): Tree {
   const previousVars: Term[] = [];
@@ -287,7 +287,118 @@ function buildAggRule2(
 
 export function expandAll(patterns: Tree[]): Tree[] {
   expandCounter = 0;
-  return patterns.flatMap(expand);
+  rewriteCounter = 0;
+  return patterns.flatMap(expand).map(rewriteUnboundAssertVars);
+}
+
+// --- Eliminate Variable terms in asserted output ---
+//
+// A variable whose first pre-order mention is inside an Assert (`+`) or Ask
+// (`?`) node would survive into the reference store as a literal Variable
+// term. Rewrite each such occurrence to a fresh id atom whose tail matches
+// what `idExpand` would have emitted for a positive at that position —
+// `previousVars` is recomputed by the same rule idExpand uses (push the
+// node id of each Match/Before/Overlap, skip positives). See
+// plans/eliminate-variables-output.md.
+
+let rewriteCounter = 0;
+
+// An expanded rule no longer carries the original positive tag on former
+// positives (pruneAndConvert rewrote them to Match), but their id is still
+// the id atom idExpand emitted. Detect that shape so we don't treat them
+// as pushers during previousVars recomputation.
+function isPositiveIdAtom(t: Term): boolean {
+  if (t.tag !== "Atom") return false;
+  const terms = t.atom.terms;
+  if (terms.length < 3) return false;
+  const [head, nm, ln] = terms;
+  return head !== undefined && head.tag === "Symbol" && head.name === "id"
+    && nm !== undefined && nm.tag === "Symbol"
+    && ln !== undefined && ln.tag === "Symbol";
+}
+
+function findRuleName(rule: Tree): string | null {
+  let found: string | null = null;
+  function scan(node: Tree): boolean {
+    if (isPositiveIdAtom(node.id) && node.id.tag === "Atom") {
+      const nm = node.id.atom.terms[1]!;
+      if (nm.tag === "Symbol") { found = nm.name; return true; }
+    }
+    for (const c of node.children) if (scan(c)) return true;
+    return false;
+  }
+  scan(rule);
+  return found;
+}
+
+function collectVarNames(t: Term, out: string[]): void {
+  switch (t.tag) {
+    case "Variable": out.push(t.name); return;
+    case "Atom": for (const s of t.atom.terms) collectVarNames(s, out); return;
+    default: return;
+  }
+}
+
+export function rewriteUnboundAssertVars(rule: Tree): Tree {
+  const maybeName = findRuleName(rule);
+  if (maybeName === null) return rule;  // no positives → nothing to rewrite
+  const name: string = maybeName;
+
+  const seen = new Set<string>();
+  const previousVars: Term[] = [];
+  const subst = newTrail();
+
+  function walk(node: Tree): Tree {
+    const lt = node.literal.literalType;
+
+    // Determine which terms to scan for variable mentions.
+    // Match/Before/Overlap also contribute their `.id` — `-[Id] foo` binds
+    // Id at match time, so Id is already bound for later nodes.
+    const scanned: Term[] = lt.tag === "Aggregate"
+      ? [lt.info.out]
+      : (lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap")
+      ? [node.id, ...node.literal.atom.terms]
+      : node.literal.atom.terms;
+    const substScanned = scanned.map(t => substTerm(t, subst));
+    const mentions: string[] = [];
+    for (const t of substScanned) collectVarNames(t, mentions);
+
+    // For Assert/Ask: any variable first seen here gets a fresh id atom.
+    if (lt.tag === "Assert" || lt.tag === "Ask") {
+      for (const v of mentions) {
+        if (seen.has(v)) continue;
+        const idAtom: Term = {
+          tag: "Atom",
+          atom: { terms: [sym("id"), sym(name), sym("id" + ++rewriteCounter), ...previousVars] },
+        };
+        trailPush(subst, v, idAtom);
+      }
+    }
+
+    // Apply running substitution to the node's atom (picks up both
+    // previously rewritten vars and any new bindings from this node).
+    const atom = substAtom(node.literal.atom, subst);
+
+    for (const v of mentions) seen.add(v);
+
+    // previousVars: push ids of original Match/Before/Overlap nodes (which
+    // have non-Atom ids). Former positives converted to Match by
+    // pruneAndConvert have positive-id Atom ids and must not push — idExpand
+    // didn't push them in the pre-expand pass.
+    const bindsId = lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap";
+    if (bindsId && !isPositiveIdAtom(node.id)) {
+      previousVars.push(node.id);
+    }
+
+    // Aggregate children are scoped to the fold — don't descend.
+    const children = lt.tag === "Aggregate"
+      ? node.children
+      : node.children.map(walk);
+
+    return { ...node, literal: { ...node.literal, atom }, children };
+  }
+
+  return { ...rule, children: rule.children.map(walk) };
 }
 
 function countMatchNodes(tree: Tree): number {
@@ -338,6 +449,7 @@ export function generateDeltaVariants(pattern: Tree): Tree[] {
 
 export function expandAllWithDeltaVariants(patterns: Tree[]): Tree[] {
   expandCounter = 0;
-  const expanded = patterns.flatMap(expand);
+  rewriteCounter = 0;
+  const expanded = patterns.flatMap(expand).map(rewriteUnboundAssertVars);
   return expanded.flatMap(generateDeltaVariants);
 }
