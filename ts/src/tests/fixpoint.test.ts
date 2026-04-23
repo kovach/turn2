@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { fixpoint, fixpoint0 } from "./fixpoint.js";
-import { parse, parsePatterns } from "./parse.js";
-import type { Tree } from "./types.js";
+import { fixpoint, fixpoint0 } from "../fixpoint.js";
+import { parse, parsePatterns } from "../parse.js";
+import type { Tree } from "../types.js";
 
 function parseOne(input: string): Tree {
   const result = parse(input);

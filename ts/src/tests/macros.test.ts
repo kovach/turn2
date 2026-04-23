@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { parse, parsePatterns, formatTree } from "./parse.js";
-import { expandMacros, resetMacroCounter } from "./macros.js";
-import { fixpoint } from "./fixpoint.js";
-import type { Tree } from "./types.js";
+import { parse, parsePatterns, formatTree } from "../parse.js";
+import { expandMacros, resetMacroCounter } from "../macros.js";
+import { fixpoint } from "../fixpoint.js";
+import type { Tree } from "../types.js";
 
 function parseOne(input: string): Tree {
   const result = parse(input);

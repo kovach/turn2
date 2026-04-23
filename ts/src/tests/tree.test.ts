@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { isTemporallyBefore, fringe, unionFringe, intersectionFringe, collectPositiveNodes } from "./tree.js";
-import { sym, node, fact, assert_, match } from "./types.js";
-import { createHashcons } from "./hashcons.js";
-import type { Tree } from "./types.js";
+import { isTemporallyBefore, fringe, unionFringe, intersectionFringe, collectPositiveNodes } from "../tree.js";
+import { sym, node, fact, assert_, match } from "../types.js";
+import { createHashcons } from "../hashcons.js";
+import type { Tree } from "../types.js";
 
 const hc = createHashcons();
 

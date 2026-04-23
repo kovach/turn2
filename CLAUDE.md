@@ -1,0 +1,3 @@
+- overview.md has an overview of the project and links to several plans that were used to create it
+- when told to read a section of overview that contains a line like `plan: TODO`, by default unless told otherwise, write an implementation plan at a new file under `plans/` and replace TODO with its filename
+- after writing or updating an implementation plan, comment on any ambiguities in the plan

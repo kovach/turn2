@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { collectMatches as unifyTree, unifyTerms, substTerm } from "./unify.js";
-import { sym, vari, node, fact, root, before, equal, newTrail } from "./types.js";
-import { createHashcons, expandTerm } from "./hashcons.js";
-import type { Term, Atom } from "./types.js";
+import { collectMatches as unifyTree, unifyTerms, substTerm } from "../unify.js";
+import { sym, vari, node, fact, root, before, equal, newTrail } from "../types.js";
+import { createHashcons, expandTerm } from "../hashcons.js";
+import type { Term, Atom } from "../types.js";
 
 function substStr(s: Map<string, Term>): Record<string, string> {
   const out: Record<string, string> = {};

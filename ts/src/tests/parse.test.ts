@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { parse, formatTree } from "./parse.js";
-import type { Tree } from "./types.js";
+import { parse, formatTree } from "../parse.js";
+import type { Tree } from "../types.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -106,7 +106,7 @@ function ok(input: string): Tree {
 
 // parses example.sl
 {
-  const input = readFileSync(join(__dir, "../../example.sl"), "utf8");
+  const input = readFileSync(join(__dir, "../../../example.sl"), "utf8");
   const tree = ok(input);
   assert(tree.children.length > 0);
   const first = tree.children[0]!;
@@ -123,7 +123,7 @@ function ok(input: string): Tree {
 
 // roundtrip: format → parse → format is stable
 {
-  const input = readFileSync(join(__dir, "../../example.sl"), "utf8");
+  const input = readFileSync(join(__dir, "../../../example.sl"), "utf8");
   const tree1 = ok(input);
   const formatted = tree1.children.map((t) => formatTree(t)).join("\n");
   const tree2 = ok(formatted);
@@ -313,7 +313,7 @@ function getAggInfo(node: Tree) {
 
 // parsePatterns adjusts spans for multi-pattern files
 {
-  const { parsePatterns } = await import("./parse.js");
+  const { parsePatterns } = await import("../parse.js");
   const input = "+ a\n  + b\n\n- a\n  + c";
   const result = parsePatterns(input);
   assert(!("message" in result));

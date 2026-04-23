@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { idExpand, expand, expandAll, rewriteUnboundAssertVars } from "./expand.js";
-import { parse, parsePatterns } from "./parse.js";
-import { fixpoint } from "./fixpoint.js";
-import type { Term, Tree } from "./types.js";
+import { idExpand, expand, expandAll, rewriteUnboundAssertVars } from "../expand.js";
+import { parse, parsePatterns } from "../parse.js";
+import { fixpoint } from "../fixpoint.js";
+import type { Term, Tree } from "../types.js";
 
 function parseOne(input: string): Tree {
   const result = parse(input);
