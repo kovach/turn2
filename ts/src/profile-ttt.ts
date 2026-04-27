@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "fs";
 import { parseSource, formatTree } from "./parse.js";
-import { fixpoint0 } from "./fixpoint.js";
+import { fixpoint } from "./fixpoint.js";
 import { stepStats, resetStepStats } from "./step.js";
 import { unifyStats, resetUnifyStats } from "./unify.js";
 
@@ -23,7 +23,7 @@ const ITERATIONS = 10;
 
 // Warmup
 for (let i = 0; i < 5; i++) {
-  fixpoint0(parsed, GAS);
+  fixpoint(parsed, GAS);
 }
 
 resetStepStats();
@@ -31,7 +31,7 @@ resetUnifyStats();
 console.time(`fixpoint x${ITERATIONS}`);
 let lastResult;
 for (let i = 0; i < ITERATIONS; i++) {
-  lastResult = fixpoint0(parsed, GAS);
+  lastResult = fixpoint(parsed, GAS);
 }
 console.timeEnd(`fixpoint x${ITERATIONS}`);
 
@@ -40,6 +40,7 @@ console.log("Steps:", steps);
 console.log("Hashcons entries:", hc.entryCount);
 
 function countNodes(tree: typeof result): number {
+  if (tree.tag === "Equal") return 1;
   return 1 + tree.children.reduce((sum, c) => sum + countNodes(c), 0);
 }
 

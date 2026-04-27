@@ -2,16 +2,18 @@ import assert from "node:assert/strict";
 import { parse, parsePatterns, formatTree } from "../parse.js";
 import { expandMacros, resetMacroCounter } from "../macros.js";
 import { fixpoint } from "../fixpoint.js";
-import type { Tree } from "../types.js";
+import type { BodyTree, Tree } from "../types.js";
+import { treeAtomTerms, treeChildren } from "../types.js";
 
-function parseOne(input: string): Tree {
+function parseOne(input: string): BodyTree {
   const result = parse(input);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
+  if (result.tag === "Equal") throw new Error("parseOne: top-level Equal is impossible");
   return result;
 }
 
-function parseRules(input: string): Tree[] {
-  const result = parsePatterns(input);
+function parseRules(input: string, prefix = "r"): Tree[] {
+  const result = parsePatterns(input, prefix);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
   return result;
 }
@@ -20,9 +22,10 @@ function parseRules(input: string): Tree[] {
 {
   resetMacroCounter();
   const tree = parseOne("- @at X Y");
-  assert.ok(tree.children[0]?.macroInvocation, "should have macroInvocation");
-  assert.equal(tree.children[0]!.macroInvocation!.name, "at");
-  assert.equal(tree.children[0]!.macroInvocation!.args.length, 2);
+  const first = tree.children[0]!;
+  assert.ok(first.macroInvocation, "should have macroInvocation");
+  assert.equal(first.macroInvocation!.name, "at");
+  assert.equal(first.macroInvocation!.args.length, 2);
   console.log("PASS: macro invocation parsed");
 }
 
@@ -32,19 +35,18 @@ function parseRules(input: string): Tree[] {
   const tree = parseOne("- @at X Y");
   const expanded = expandMacros(tree);
 
-  const aggNode = expanded.children[0]!;
-  const aggLt = aggNode.literal.literalType;
-  assert.equal(aggLt.tag, "Aggregate");
-  assert.ok(aggLt.tag === "Aggregate" && aggLt.info, "should have aggregateInfo");
-  if (aggLt.tag === "Aggregate") {
-    assert.equal(aggLt.info.funcName, "last");
-  }
+  const aggNode = treeChildren(expanded)[0]!;
+  assert.equal(aggNode.tag, "Aggregate");
+  if (aggNode.tag !== "Aggregate") throw new Error("expected Aggregate");
+  assert.ok(aggNode.info, "should have aggregateInfo");
+  assert.equal(aggNode.info.funcName, "last");
 
   const beforeNode = aggNode.children[0]!;
-  assert.equal(beforeNode.literal.literalType.tag, "Before");
-  assert.equal(beforeNode.literal.atom.terms[0]?.tag, "Symbol");
-  if (beforeNode.literal.atom.terms[0]?.tag === "Symbol") {
-    assert.equal(beforeNode.literal.atom.terms[0].name, "move");
+  assert.equal(beforeNode.tag, "Before");
+  const beforeTerms = treeAtomTerms(beforeNode);
+  assert.equal(beforeTerms[0]?.tag, "Symbol");
+  if (beforeTerms[0]?.tag === "Symbol") {
+    assert.equal(beforeTerms[0].name, "move");
   }
   console.log("PASS: macro expansion produces aggregate with before child");
 }
@@ -56,24 +58,22 @@ function parseRules(input: string): Tree[] {
 if (false)
 {
   resetMacroCounter();
-  const ref = parseOne(`-
-  + move x a
-  + move x b
-  + move x c`);
+  const facts = parseRules(`+ move x a
++ move x b
++ move x c`, "f");
 
   const rules = parseRules("- move X _\n  - @at X Y\n    + result X Y");
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint([...facts, ...rules]);
 
   function findResults(tree: Tree): string[] {
     const results: string[] = [];
-    if (tree.literal.atom.terms[0]?.tag === "Symbol" &&
-        tree.literal.atom.terms[0].name === "result") {
-      const terms = tree.literal.atom.terms.map(t =>
+    const terms = treeAtomTerms(tree);
+    if (terms[0]?.tag === "Symbol" && terms[0].name === "result") {
+      results.push(terms.map(t =>
         t.tag === "Symbol" || t.tag === "Variable" ? t.name : "?"
-      );
-      results.push(terms.join(" "));
+      ).join(" "));
     }
-    for (const child of tree.children) {
+    for (const child of treeChildren(tree)) {
       results.push(...findResults(child));
     }
     return results;

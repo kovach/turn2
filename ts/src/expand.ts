@@ -1,19 +1,19 @@
-import type { AggregateInfo, LiteralType, MatchConstraint, Term, Tree } from "./types.js";
-import { sym, vari, isPositive, match, assert_, newTrail, trailPush } from "./types.js";
+import type { AggregateInfo, BodyTree, MatchConstraint, Term, Tree } from "./types.js";
+import { sym, vari, isPositive, retag, newTrail, trailPush } from "./types.js";
 import { substAtom, substTerm } from "./unify.js";
 
-export function idExpand(tree: Tree, name: string): Tree {
+export function idExpand(tree: BodyTree, name: string): BodyTree {
   const previousVars: Term[] = [];
   let counter = 1;
 
   function walk(node: Tree): Tree {
-    const lt = node.literal.literalType;
-    const positive = isPositive(lt);
+    if (node.tag === "Equal") return node;  // Equal carries no id/atom/children
+    const positive = isPositive(node);
     // Only Match/Before/Overlap actually bind their node id against the reference
-    // tree at match time. Equal (and any other non-positive non-Match non-Before
-    // non-Overlap literal) has no id binding, so its auto-X would stay free and
-    // leak into downstream positives' ids. Exclude it from previousVars.
-    const bindsId = lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap";
+    // tree at match time. Other literals (Equal etc.) have no id binding, so an
+    // auto-X would stay free and leak into downstream positives' ids — excluded
+    // from previousVars by the bindsId guard.
+    const bindsId = node.tag === "Match" || node.tag === "Before" || node.tag === "Overlap";
     let newId: Term;
     if (positive) {
       newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
@@ -22,7 +22,7 @@ export function idExpand(tree: Tree, name: string): Tree {
       newId = isAutoId ? vari("X" + counter++) : node.id;
       if (bindsId) previousVars.push(newId);
     }
-    let atom = node.literal.atom;
+    let atom = node.atom;
     if (node.id.tag === "Variable") {
       const t = newTrail();
       // Exempt from the unify.ts trail-hashcons invariant: this trail lives
@@ -32,7 +32,7 @@ export function idExpand(tree: Tree, name: string): Tree {
       atom = substAtom(atom, t);
     }
     const children = node.children.map(walk);
-    return { ...node, id: newId, literal: { ...node.literal, atom }, children };
+    return { ...node, id: newId, atom, children };
   }
 
   const children = tree.children.map(walk);
@@ -54,37 +54,39 @@ function pruneAndConvert(
 ): Tree | null {
   if (state.found) return null;
 
+  // Equal is a leaf — no children to recurse into, no positives inside.
+  // Pass it through unchanged.
+  if (node.tag === "Equal") return node;
+
   const aggMeta = aggMap.get(node);
-  const lt = node.literal.literalType;
-  const isAgg = lt.tag === "Aggregate";
+  const isAgg = node.tag === "Aggregate";
 
   if (node === targetNode) {
     state.found = true;
     if (isAgg && aggMeta) {
-      return { ...node, literal: { ...node.literal, literalType: assert_() }, children: [] };
+      const asAssert = retag(node, "Assert", {});
+      return { ...asAssert, children: [] };
     }
     return { ...node, children: [] };
   }
 
   // Before target: convert positive to Match, aggregate to agg-result
   if (isAgg && aggMeta) {
-    const resultId: Term = {
-      tag: "Atom",
-      atom: { terms: [sym("id"), sym("agg-result"), aggMeta.lexId, aggMeta.nodeId] },
-    };
     return {
-      id: resultId,
-      literal: {
-        literalType: match(),
-        atom: { terms: [sym("agg-result"), aggMeta.lexId, aggMeta.nodeId, aggMeta.info.out] },
+      tag: "Match",
+      constraint: "any",
+      id: {
+        tag: "Atom",
+        atom: { terms: [sym("id"), sym("agg-result"), aggMeta.lexId, aggMeta.nodeId] },
       },
+      atom: { terms: [sym("agg-result"), aggMeta.lexId, aggMeta.nodeId, aggMeta.info.out] },
       children: [],
     };
   }
 
-  let newNode: Tree;
-  if (isPositive(lt)) {
-    newNode = { ...node, literal: { ...node.literal, literalType: match() } };
+  let newNode: BodyTree;
+  if (isPositive(node)) {
+    newNode = retag(node, "Match", { constraint: "any" }) as BodyTree;
   } else {
     newNode = node;
   }
@@ -100,19 +102,19 @@ function pruneAndConvert(
 
 let expandCounter = 0;
 
-export function expand(pattern: Tree): Tree[] {
+export function expand(pattern: BodyTree): BodyTree[] {
   const positiveNodes: Tree[] = [];
   const aggMap = new Map<Tree, AggMeta>();
 
   function findPositivesAndAggs(node: Tree): void {
-    const lt = node.literal.literalType;
-    if (isPositive(lt)) {
+    if (node.tag === "Equal") return;  // leaf — no positives, no children
+    if (isPositive(node)) {
       positiveNodes.push(node);
-      if (lt.tag === "Aggregate") {
+      if (node.tag === "Aggregate") {
         aggMap.set(node, {
-          lexId: sym(`agg_${lt.info.funcName}_${expandCounter++}`),
+          lexId: sym(`agg_${node.info.funcName}_${expandCounter++}`),
           nodeId: node.id,
-          info: lt.info,
+          info: node.info,
           localPattern: node.children,
         });
       }
@@ -121,7 +123,7 @@ export function expand(pattern: Tree): Tree[] {
   }
   for (const child of pattern.children) findPositivesAndAggs(child);
 
-  const rules: Tree[] = [];
+  const rules: BodyTree[] = [];
 
   for (const targetNode of positiveNodes) {
     const aggMeta = aggMap.get(targetNode);
@@ -145,46 +147,43 @@ export function expand(pattern: Tree): Tree[] {
 }
 
 function buildAggRule1(
-  pattern: Tree,
+  pattern: BodyTree,
   targetNode: Tree,
   aggMeta: AggMeta,
   aggMap: Map<Tree, AggMeta>,
-): Tree {
+): BodyTree {
   const state = { found: false };
 
   function prune(node: Tree): Tree | null {
     if (state.found) return null;
+    if (node.tag === "Equal") return node;  // leaf passthrough
 
-    const lt = node.literal.literalType;
-    const isAgg = lt.tag === "Aggregate";
+    const isAgg = node.tag === "Aggregate";
     const priorAgg = aggMap.get(node);
 
     if (node === targetNode) {
       state.found = true;
       return {
+        tag: "Assert",
         id: aggMeta.nodeId,
-        literal: {
-          literalType: assert_(),
-          atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
-        },
+        atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
         children: [],
       };
     }
 
-    let newNode: Tree;
+    let newNode: BodyTree;
     if (isAgg && priorAgg) {
       newNode = {
+        tag: "Match",
+        constraint: "any",
         id: priorAgg.nodeId,
-        literal: {
-          literalType: match(),
-          atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
-        },
+        atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
         children: [],
       };
-    } else if (isPositive(lt)) {
-      newNode = { ...node, literal: { ...node.literal, literalType: match() } };
+    } else if (isPositive(node)) {
+      newNode = retag(node, "Match", { constraint: "any" }) as BodyTree;
     } else {
-      newNode = node;
+      newNode = node as BodyTree;
     }
 
     const children: Tree[] = [];
@@ -206,15 +205,15 @@ function buildAggRule1(
 }
 
 function buildAggRule2(
-  pattern: Tree,
+  pattern: BodyTree,
   targetNode: Tree,
   aggMeta: AggMeta,
   aggMap: Map<Tree, AggMeta>,
-): Tree {
+): BodyTree {
   const state = { found: false };
 
   function collectIds(nodes: Tree[]): Term[] {
-    return nodes.flatMap((n) => [n.id, ...collectIds(n.children)]);
+    return nodes.flatMap((n) => n.tag === "Equal" ? [] : [n.id, ...collectIds(n.children)]);
   }
   const localPatternIds = collectIds(aggMeta.localPattern);
 
@@ -223,47 +222,43 @@ function buildAggRule2(
     atom: { terms: [sym("id"), sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...localPatternIds] },
   };
   const aggBinding: Tree = {
+    tag: "Assert",
     id: bindingId,
-    literal: {
-      literalType: assert_(),
-      atom: { terms: [sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...aggMeta.info.args] },
-    },
+    atom: { terms: [sym("agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...aggMeta.info.args] },
     children: [],
   };
 
   function prune(node: Tree): Tree | null {
     if (state.found) return null;
+    if (node.tag === "Equal") return node;  // leaf passthrough
 
-    const lt = node.literal.literalType;
-    const isAgg = lt.tag === "Aggregate";
+    const isAgg = node.tag === "Aggregate";
     const priorAgg = aggMap.get(node);
 
     if (node === targetNode) {
       state.found = true;
       return {
+        tag: "Match",
+        constraint: "any",
         id: aggMeta.nodeId,
-        literal: {
-          literalType: match(),
-          atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
-        },
+        atom: { terms: [sym("agg-instance"), aggMeta.lexId] },
         children: [...aggMeta.localPattern, aggBinding],
       };
     }
 
-    let newNode: Tree;
+    let newNode: BodyTree;
     if (isAgg && priorAgg) {
       newNode = {
+        tag: "Match",
+        constraint: "any",
         id: priorAgg.nodeId,
-        literal: {
-          literalType: match(),
-          atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
-        },
+        atom: { terms: [sym("agg-result"), priorAgg.lexId, priorAgg.nodeId, priorAgg.info.out] },
         children: [],
       };
-    } else if (isPositive(lt)) {
-      newNode = { ...node, literal: { ...node.literal, literalType: match() } };
+    } else if (isPositive(node)) {
+      newNode = retag(node, "Match", { constraint: "any" }) as BodyTree;
     } else {
-      newNode = node;
+      newNode = node as BodyTree;
     }
 
     const children: Tree[] = [];
@@ -285,10 +280,11 @@ function buildAggRule2(
   return { ...pattern, children };
 }
 
-export function expandAll(patterns: Tree[]): Tree[] {
+export function expandAll(patterns: Tree[]): BodyTree[] {
   expandCounter = 0;
   rewriteCounter = 0;
-  return patterns.flatMap(expand).map(rewriteUnboundAssertVars);
+  const bodyPatterns = patterns.filter((p): p is BodyTree => p.tag !== "Equal");
+  return bodyPatterns.flatMap(expand).map(rewriteUnboundAssertVars);
 }
 
 // --- Eliminate Variable terms in asserted output ---
@@ -320,6 +316,7 @@ function isPositiveIdAtom(t: Term): boolean {
 function findRuleName(rule: Tree): string | null {
   let found: string | null = null;
   function scan(node: Tree): boolean {
+    if (node.tag === "Equal") return false;
     if (isPositiveIdAtom(node.id) && node.id.tag === "Atom") {
       const nm = node.id.atom.terms[1]!;
       if (nm.tag === "Symbol") { found = nm.name; return true; }
@@ -339,7 +336,7 @@ function collectVarNames(t: Term, out: string[]): void {
   }
 }
 
-export function rewriteUnboundAssertVars(rule: Tree): Tree {
+export function rewriteUnboundAssertVars(rule: BodyTree): BodyTree {
   const maybeName = findRuleName(rule);
   if (maybeName === null) return rule;  // no positives → nothing to rewrite
   const name: string = maybeName;
@@ -349,22 +346,32 @@ export function rewriteUnboundAssertVars(rule: Tree): Tree {
   const subst = newTrail();
 
   function walk(node: Tree): Tree {
-    const lt = node.literal.literalType;
+    // Equal: scan its lhs/rhs for variable mentions but no rewrite (Equal
+    // isn't a positive); Equal can introduce bindings that later siblings
+    // observe at match time, so its mentions feed `seen`.
+    if (node.tag === "Equal") {
+      const mentions: string[] = [];
+      for (const t of [node.lhs, node.rhs].map(t => substTerm(t, subst))) {
+        collectVarNames(t, mentions);
+      }
+      for (const v of mentions) seen.add(v);
+      return node;
+    }
 
     // Determine which terms to scan for variable mentions.
     // Match/Before/Overlap also contribute their `.id` — `-[Id] foo` binds
     // Id at match time, so Id is already bound for later nodes.
-    const scanned: Term[] = lt.tag === "Aggregate"
-      ? [lt.info.out]
-      : (lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap")
-      ? [node.id, ...node.literal.atom.terms]
-      : node.literal.atom.terms;
+    const scanned: Term[] = node.tag === "Aggregate"
+      ? [node.info.out]
+      : (node.tag === "Match" || node.tag === "Before" || node.tag === "Overlap")
+      ? [node.id, ...node.atom.terms]
+      : node.atom.terms;
     const substScanned = scanned.map(t => substTerm(t, subst));
     const mentions: string[] = [];
     for (const t of substScanned) collectVarNames(t, mentions);
 
     // For Assert/Ask: any variable first seen here gets a fresh id atom.
-    if (lt.tag === "Assert" || lt.tag === "Ask") {
+    if (node.tag === "Assert" || node.tag === "Ask") {
       for (const v of mentions) {
         if (seen.has(v)) continue;
         const idAtom: Term = {
@@ -377,7 +384,7 @@ export function rewriteUnboundAssertVars(rule: Tree): Tree {
 
     // Apply running substitution to the node's atom (picks up both
     // previously rewritten vars and any new bindings from this node).
-    const atom = substAtom(node.literal.atom, subst);
+    const atom = substAtom(node.atom, subst);
 
     for (const v of mentions) seen.add(v);
 
@@ -385,47 +392,35 @@ export function rewriteUnboundAssertVars(rule: Tree): Tree {
     // have non-Atom ids). Former positives converted to Match by
     // pruneAndConvert have positive-id Atom ids and must not push — idExpand
     // didn't push them in the pre-expand pass.
-    const bindsId = lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap";
+    const bindsId = node.tag === "Match" || node.tag === "Before" || node.tag === "Overlap";
     if (bindsId && !isPositiveIdAtom(node.id)) {
       previousVars.push(node.id);
     }
 
     // Aggregate children are scoped to the fold — don't descend.
-    const children = lt.tag === "Aggregate"
+    const children = node.tag === "Aggregate"
       ? node.children
       : node.children.map(walk);
 
-    return { ...node, literal: { ...node.literal, atom }, children };
+    return { ...node, atom, children };
   }
 
   return { ...rule, children: rule.children.map(walk) };
 }
 
 function countMatchNodes(tree: Tree): number {
-  const lt = tree.literal.literalType;
-  const self = (lt.tag === "Match" || lt.tag === "Before" || lt.tag === "Overlap") ? 1 : 0;
+  if (tree.tag === "Equal") return 0;
+  const self = (tree.tag === "Match" || tree.tag === "Before" || tree.tag === "Overlap") ? 1 : 0;
   return self + tree.children.reduce((acc, c) => acc + countMatchNodes(c), 0);
 }
 
 function cloneWithConstraints(tree: Tree, constraints: MatchConstraint[], pos: { i: number }): Tree {
-  const lt = tree.literal.literalType;
-  let newLiteralType: LiteralType;
-
-  if (lt.tag === "Match") {
-    newLiteralType = { tag: "Match", constraint: constraints[pos.i++]! };
-  } else if (lt.tag === "Before") {
-    newLiteralType = { tag: "Before", constraint: constraints[pos.i++]! };
-  } else if (lt.tag === "Overlap") {
-    newLiteralType = { tag: "Overlap", constraint: constraints[pos.i++]! };
-  } else {
-    newLiteralType = lt;
+  if (tree.tag === "Equal") return tree;
+  const children = tree.children.map(c => cloneWithConstraints(c, constraints, pos));
+  if (tree.tag === "Match" || tree.tag === "Before" || tree.tag === "Overlap") {
+    return { ...tree, constraint: constraints[pos.i++]!, children };
   }
-
-  return {
-    ...tree,
-    literal: { ...tree.literal, literalType: newLiteralType },
-    children: tree.children.map(c => cloneWithConstraints(c, constraints, pos)),
-  };
+  return { ...tree, children };
 }
 
 export function generateDeltaVariants(pattern: Tree): Tree[] {
@@ -450,6 +445,8 @@ export function generateDeltaVariants(pattern: Tree): Tree[] {
 export function expandAllWithDeltaVariants(patterns: Tree[]): Tree[] {
   expandCounter = 0;
   rewriteCounter = 0;
-  const expanded = patterns.flatMap(expand).map(rewriteUnboundAssertVars);
+  const bodyPatterns = patterns.filter((p): p is BodyTree => p.tag !== "Equal");
+  const expanded = bodyPatterns.flatMap(expand).map(rewriteUnboundAssertVars);
   return expanded.flatMap(generateDeltaVariants);
 }
+

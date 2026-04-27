@@ -1,3 +1,74 @@
+# GUI cleanup
+- result view highlights should go from bottom of line to top; same with the mouse-over hit box
+
+# rule name parsing
+- add a step to the parser that parses an optional rulename prefix for each rule
+  ```
+  rule:
+  - foo
+    + bar
+  ```
+
+  the syntax is `<name> : <rule>`
+  - if missing, do the current auto-gen behavior
+
+- before expansion, check that the initial program has unique name per rule
+
+# implement constraint tuples
+plan: plans/constraint-tuples.md
+
+## step 1: recognizing active choices
+- we are going to stop fixpoints early if there is an *unresolved choice* that is *earlier* than any pending aggregate
+  - an unresolved choice is a term C which was asserted by an `Ask` atom like `?foo C` that
+    does not have a corresponding `is C Value` tuple in the store.
+- recall that, while evaluating aggregates, we only resolve a pending aggregate that has no earlier pending aggregate
+- we are going to consider all unresolved choices and pending aggregates together
+  - if any of the earliest things are aggregates, resolve them
+  - if all of the earliest things are choices, break out from the fixpoint.
+- the fixpoint now returns whether the reason for breaking was one or more pending choices
+  - it should return those pending/"active" choices (e.g., a list containign the actual atom bound to `C`)
+  - otherwise it returns a default case indicating completion
+
+- the `web.ts` interface will change somewhat significantly
+  - instead of the existing code for locating choices and binding them to clicks, we will extract the available choice(s) from the fixpoint output
+  - in the ttt.sl/ttt.js example, clicking will respond to the currently active choice
+
+## step 2: processing Constrain tuples in the output
+- the `Constrain` tuples should behave exactly like assert in all regards (besides being tagged differently in the store) during fixpoint calculation
+- if the fixpoint breaks due to a pending choice, we will analyze the choice term
+  - calculate the fringe (see below) for the choice value
+  - filter to only the `Constrain` tuples in the fringe
+  - for now, in the web view, simply render those as a list inside the `DISPLAY` component
+
+# refactor Tree type pt 4
+split connective/positivity coupling
+
+# refactor Tree type pt 3
+plan: plans/refactor-tree-type-pt3.md
+
+- now remove the id, atom, and children fields from TreeBase; every case still needs them except for Equal
+- check that no behavior depends on Equal having those fields
+
+# refactor Tree type pt 2
+plan: plans/refactor-tree-type-pt2.md
+
+goal: simplify NodeRow
+
+- the nilTree should have an assert tag, not Match
+- check this claim: the only calls to buildRefStore pass in the nil tree
+  - if true: we can get rid of buildRefStore (which takes an arbitrary Tree), and rewrite it to just construct the canonical empty store
+- check this claim: every other insert inserts either an `Assert` or `Ask`
+  - if true: we don't need the wide NodeRow type; we only need a couple of cases for positive tags
+
+# refactor Tree type
+plan: plans/refactor-tree-type.md
+
+propose a refactor to the Tree type (types.ts) that merges together Tree, Literal, and LiteralType.
+- afterwards, there should be one case of Tree per current case of LiteralType
+- initially, the types should be isomorphic and all other code should behave the same
+- note that as the project developed, Tree was used both for patterns and reference trees,
+  but currently the reference is stored using a different type
+
 # eliminate Variables in output
 plan: plans/eliminate-variables-output.md
 

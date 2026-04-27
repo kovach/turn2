@@ -1,30 +1,25 @@
 import assert from "node:assert/strict";
-import { fixpoint, fixpoint0 } from "../fixpoint.js";
-import { parse, parsePatterns } from "../parse.js";
-import type { Tree } from "../types.js";
+import { fixpoint } from "../fixpoint.js";
+import { parsePatterns } from "../parse.js";
+import type { BodyTree, Tree } from "../types.js";
+import { treeAtomTerms, treeChildren } from "../types.js";
 
-function parseOne(input: string): Tree {
-  const result = parse(input);
+function parseRules(input: string, prefix = "r"): Tree[] {
+  const result = parsePatterns(input, prefix);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
   return result;
 }
 
-function parseRules(input: string): Tree[] {
-  const result = parsePatterns(input);
-  if ("message" in result) throw new Error(`parse error: ${result.message}`);
-  return result;
-}
-
-function collect(tree: Tree, type: string): Tree[] {
-  const self = tree.literal.literalType.tag === type ? [tree] : [];
+// `type` is one of the body-bearing tags; collect returns body-bearing
+// matches, recursing through children safely (Equal nodes are leaves).
+function collect(tree: Tree, type: BodyTree["tag"]): BodyTree[] {
+  if (tree.tag === "Equal") return [];
+  const self: BodyTree[] = tree.tag === type ? [tree] : [];
   return self.concat(tree.children.flatMap((c) => collect(c, type)));
 }
 
-// canonical root (empty atom) with a foo fact
-const ref = parseOne(
-`-
-  + foo`
-);
+// canonical reference: a single foo fact
+const facts = parseRules("+ foo", "f");
 
 // match foo, assert bar
 const rules = parseRules(`- foo
@@ -32,44 +27,49 @@ const rules = parseRules(`- foo
 
 // basic: bar is asserted under foo
 {
-  const { result } = fixpoint(rules, ref);
-  const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Ref");
-  assert.equal(inserted.length, 1);
-  assert.deepEqual(inserted[0]!.literal.atom.terms, [{ tag: "Symbol", name: "bar" }]);
+  const { result } = fixpoint([...facts, ...rules]);
+  const bars = collect(result, "Assert").filter((n) => {
+    const t = n.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "bar";
+  });
+  assert.equal(bars.length, 1);
+  assert.deepEqual(bars[0]!.atom.terms, [{ tag: "Symbol", name: "bar" }]);
   console.log("PASS: fixpoint asserts bar under foo");
 }
 
-// idempotent: second run produces no new nodes
+// idempotent: re-running with the same inputs produces the same node count
 {
-  const { result: r1 } = fixpoint(rules, ref);
-  const { result: r2 } = fixpoint(rules, r1);
-  const inserted = collect(r2, "Assert").filter((n) => n.id.tag === "Ref");
-  assert.equal(inserted.length, 1);
+  const { result: r1 } = fixpoint([...facts, ...rules]);
+  const { result: r2 } = fixpoint([...facts, ...rules]);
+  const c1 = collect(r1, "Assert").length;
+  const c2 = collect(r2, "Assert").length;
+  assert.equal(c1, c2);
   console.log("PASS: fixpoint is idempotent");
 }
 
-// gas limit: a gas of 0 returns the initial tree immediately (no iterations)
+// gas limit: a gas of 0 means no patterns are applied — store has only the
+// synthetic root row with no children.
 {
-  const { result, steps } = fixpoint(rules, ref, 0);
-  assert.deepEqual(result, ref);
+  const { result, steps } = fixpoint([...facts, ...rules], 0);
+  assert.equal(treeChildren(result).length, 0);
   assert.equal(steps, 0);
-  console.log("PASS: gas=0 returns initial tree");
+  console.log("PASS: gas=0 yields empty store");
 }
 
-// empty patterns: returns initial tree unchanged
+// empty patterns: same as gas=0, no children.
 {
-  const { result, steps } = fixpoint([], ref);
-  assert.deepEqual(result, ref);
+  const { result, steps } = fixpoint([]);
+  assert.equal(treeChildren(result).length, 0);
   assert.equal(steps, 0);
-  console.log("PASS: empty patterns returns initial tree");
+  console.log("PASS: empty patterns yields empty store");
 }
 
 // flat all-assert: +foo / +bar / +baz should all appear in the output
 {
   const patterns = parseRules("+foo\n+bar\n+baz");
-  const { result } = fixpoint0(patterns);
-  const names = result.children.map((c) =>
-    c.literal.atom.terms.map((t) => ("name" in t ? t.name : "?")).join(" ")
+  const { result } = fixpoint(patterns);
+  const names = treeChildren(result).map((c) =>
+    treeAtomTerms(c).map((t) => ("name" in t ? t.name : "?")).join(" ")
   );
   assert.ok(names.includes("foo"), `expected "foo" in ${JSON.stringify(names)}`);
   assert.ok(names.includes("bar"), `expected "bar" in ${JSON.stringify(names)}`);
@@ -79,29 +79,34 @@ const rules = parseRules(`- foo
 
 // explicit id binding: -[Id] foo / + bar Id — bar's atom contains the id of the matched foo node
 {
-  const ref = parseOne("-\n  + foo");
-  const fooId = ref.children[0]!.children[0]!.id; // the "+ foo" assert node
+  const facts = parseRules("+ foo", "f");
   const rules = parseRules("-[Id] foo\n  + bar Id");
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint([...facts, ...rules]);
+  const fooNode = collect(result, "Assert").find((c) => {
+    const t = c.atom.terms[0];
+    return t?.tag === "Symbol" && t.name === "foo";
+  });
+  assert.ok(fooNode, "foo node not found");
   const bar = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "bar";
   });
   assert.ok(bar, "bar node not found");
   // bar's second term should be bound to foo's id via the Id variable
-  assert.deepEqual(bar!.literal.atom.terms[1], fooId);
+  assert.deepEqual(bar!.atom.terms[1], fooNode!.id);
   console.log("PASS: explicit id binding captures matched node id");
 }
 
 // self-referential id: +[I] card I — the atom should contain the node's own generated id
 {
   const patterns = parseRules("+[I] card I");
-  const { result } = fixpoint0(patterns);
-  assert.equal(result.children.length, 1);
-  const node = result.children[0]!;
-  assert.equal(node.literal.literalType.tag, "Assert");
-  assert.deepEqual(node.literal.atom.terms[0], { tag: "Symbol", name: "card" });
-  assert.deepEqual(node.literal.atom.terms[1], node.id);
+  const { result } = fixpoint(patterns);
+  const kids = treeChildren(result);
+  assert.equal(kids.length, 1);
+  const node = kids[0]!;
+  if (node.tag !== "Assert") throw new Error(`expected Assert, got ${node.tag}`);
+  assert.deepEqual(node.atom.terms[0], { tag: "Symbol", name: "card" });
+  assert.deepEqual(node.atom.terms[1], node.id);
   console.log("PASS: self-referential id: +[I] card I resolves to + card <id>");
 }
 
@@ -111,54 +116,51 @@ const rules = parseRules(`- foo
 //     < move X
 //       + note A X
 // reference:
-//   -
-//     + move a
-//     + move b
-//     + turn t
+//   + move a / + move b / + turn t
 // expected: each `+ move` gets a `+ note t <arg>` child
 {
-  const ref = parseOne(`-
-  + move a
-  + move b
-  + turn t`);
+  const facts = parseRules(`+ move a
++ move b
++ turn t`, "f");
   const rules = parseRules(`- turn A
   < move X
     + note A X`);
-  const { result } = fixpoint(rules, ref);
-  const top = result.children[0]!;
-  const moveA = top.children[0]!;
-  const moveB = top.children[1]!;
-  const turn  = top.children[2]!;
-  assert.deepEqual(moveA.literal.atom.terms, [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "a" }]);
-  assert.deepEqual(moveB.literal.atom.terms, [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "b" }]);
+  const { result } = fixpoint([...facts, ...rules]);
+  const top = treeChildren(result);
+  const moveA = top[0]!;
+  const moveB = top[1]!;
+  const turn  = top[2]!;
+  assert.deepEqual(treeAtomTerms(moveA), [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "a" }]);
+  assert.deepEqual(treeAtomTerms(moveB), [{ tag: "Symbol", name: "move" }, { tag: "Symbol", name: "b" }]);
   // each move has exactly one note child: note t <arg>
-  assert.equal(moveA.children.length, 1);
-  assert.deepEqual(moveA.children[0]!.literal.atom.terms, [
+  const moveAKids = treeChildren(moveA);
+  assert.equal(moveAKids.length, 1);
+  assert.deepEqual(treeAtomTerms(moveAKids[0]!), [
     { tag: "Symbol", name: "note" }, { tag: "Symbol", name: "t" }, { tag: "Symbol", name: "a" },
   ]);
-  assert.equal(moveB.children.length, 1);
-  assert.deepEqual(moveB.children[0]!.literal.atom.terms, [
+  const moveBKids = treeChildren(moveB);
+  assert.equal(moveBKids.length, 1);
+  assert.deepEqual(treeAtomTerms(moveBKids[0]!), [
     { tag: "Symbol", name: "note" }, { tag: "Symbol", name: "t" }, { tag: "Symbol", name: "b" },
   ]);
   // turn has no new children inserted
-  assert.equal(turn.children.length, 0);
+  assert.equal(treeChildren(turn).length, 0);
   console.log("PASS: Before literal — worked example yields note under each prior move");
 }
 
 // Before uses previous sibling as anchor (overview.md example)
 {
-  const ref = parseOne(`-
-  + a
-    + b
-    + c
-    + d`);
+  const facts = parseRules(`+ a
+  + b
+  + c
+  + d`, "f");
   const rules = parseRules(`- a
   - c
   < b
   + ok`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint([...facts, ...rules]);
   const oks = collect(result, "Assert").filter((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "ok";
   });
   assert.equal(oks.length, 1, "expected exactly one ok node");
@@ -173,26 +175,24 @@ const rules = parseRules(`- foo
 // semantics (no auto-emitted before:after on insert), the agg-instance node
 // has no before-predecessors, so `< t _` matches nothing and count = 0 (= `z`).
 {
-  const ref = parseOne(`-
-  + t 1
-  + t 2
-  + t 3`);
+  const facts = parseRules(`+ t 1
++ t 2
++ t 3`, "f");
   const rules = parseRules(`# count -> N
   < t _
 + note N`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint([...facts, ...rules]);
   const note = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
-  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "z" });
+  assert.deepEqual(note!.atom.terms[1], { tag: "Symbol", name: "z" });
   console.log("PASS: top-level count over pre-populated reference yields 0");
 }
 
 // Simple count aggregate: count all `+ t X` nodes
 {
-  const ref = parseOne(`-`);
   const rules = parseRules(`+ root
   + setup
   + count
@@ -206,21 +206,20 @@ const rules = parseRules(`- foo
   # count -> N
     < t _
   + note N`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint(rules);
   const note = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
   // Count of 3 produces (s (s (s z))) which gets hashconsed to a Ref
-  const countTerm = note!.literal.atom.terms[1];
+  const countTerm = note!.atom.terms[1];
   assert.equal(countTerm?.tag, "Ref", "expected count result to be a Ref (hashconsed Peano numeral)");
   console.log("PASS: simple count aggregate");
 }
 
 // Sum aggregate
 {
-  const ref = parseOne(`-`);
   const rules = parseRules(`+ root
   + setup
   + count
@@ -234,13 +233,13 @@ const rules = parseRules(`- foo
   # sum X -> N
     < t X
   + note N`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint(rules);
   const note = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
-  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "6" });
+  assert.deepEqual(note!.atom.terms[1], { tag: "Symbol", name: "6" });
   console.log("PASS: sum aggregate");
 }
 
@@ -252,7 +251,6 @@ const rules = parseRules(`- foo
 // — see notes/overview.md §"fix agg-instance nesting".
 if (false)
 {
-  const ref = parseOne(`-`);
   const rules = parseRules(`+ root
   + setup
   + count
@@ -266,19 +264,18 @@ if (false)
   # last X -> L
     < t X
   + note L`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint(rules);
   const note = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
-  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "c" });
+  assert.deepEqual(note!.atom.terms[1], { tag: "Symbol", name: "c" });
   console.log("PASS: last aggregate");
 }
 
 // Empty aggregate (no bindings) → zero value
 {
-  const ref = parseOne(`-`);
   const rules = parseRules(`+ root
   + setup
   + count
@@ -290,19 +287,19 @@ if (false)
   # count -> N
     < t _
   + note N`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint(rules);
   const note = collect(result, "Assert").find((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.ok(note, "note node not found");
-  assert.deepEqual(note!.literal.atom.terms[1], { tag: "Symbol", name: "z" });
+  assert.deepEqual(note!.atom.terms[1], { tag: "Symbol", name: "z" });
   console.log("PASS: empty aggregate returns zero");
 }
 
 // Multiple sibling aggregates with empty bindings
 {
-  const ref = parseOne(`+ a`);
+  const facts = parseRules(`+ a`, "f");
   const rules = parseRules(`- a
   + b
   + c
@@ -316,18 +313,18 @@ if (false)
   # count -> N
     < act
   + note c N`);
-  const { result } = fixpoint(rules, ref);
+  const { result } = fixpoint([...facts, ...rules]);
   const notes = collect(result, "Assert").filter((c) => {
-    const t = c.literal.atom.terms[0];
+    const t = c.atom.terms[0];
     return t?.tag === "Symbol" && t.name === "note";
   });
   assert.equal(notes.length, 2, "expected two note nodes");
-  const noteB = notes.find((n) => n.literal.atom.terms[1]?.tag === "Symbol" && n.literal.atom.terms[1].name === "b");
-  const noteC = notes.find((n) => n.literal.atom.terms[1]?.tag === "Symbol" && n.literal.atom.terms[1].name === "c");
+  const noteB = notes.find((n) => n.atom.terms[1]?.tag === "Symbol" && n.atom.terms[1].name === "b");
+  const noteC = notes.find((n) => n.atom.terms[1]?.tag === "Symbol" && n.atom.terms[1].name === "c");
   assert.ok(noteB, "note b not found");
   assert.ok(noteC, "note c not found");
-  assert.deepEqual(noteB!.literal.atom.terms[2], { tag: "Symbol", name: "z" });
-  assert.deepEqual(noteC!.literal.atom.terms[2], { tag: "Symbol", name: "z" });
+  assert.deepEqual(noteB!.atom.terms[2], { tag: "Symbol", name: "z" });
+  assert.deepEqual(noteC!.atom.terms[2], { tag: "Symbol", name: "z" });
   console.log("PASS: multiple sibling aggregates with empty bindings");
 }
 

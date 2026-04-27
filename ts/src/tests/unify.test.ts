@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { collectMatches as unifyTree, unifyTerms, substTerm } from "../unify.js";
-import { sym, vari, node, fact, root, before, equal, newTrail } from "../types.js";
+import { sym, vari, node, fact, root, eq, newTrail } from "../types.js";
 import { createHashcons, expandTerm } from "../hashcons.js";
 import type { Term, Atom } from "../types.js";
 
@@ -138,7 +138,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   //     < move X
   const pattern = root([
     node(vari("T"), [sym("turn"), vari("A")], [
-      { id: vari("M"), literal: { literalType: before(), atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("M"), atom: { terms: [sym("move"), vari("X")] }, children: [] },
     ]),
   ]);
   // reference:
@@ -163,7 +163,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   // reference: + turn t  (no preceding siblings)
   const pattern = root([
     node(vari("T"), [sym("turn"), vari("A")], [
-      { id: vari("M"), literal: { literalType: before(), atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("M"), atom: { terms: [sym("move"), vari("X")] }, children: [] },
     ]),
   ]);
   const reference = root([fact(sym("t"), [sym("turn"), sym("t")])]);
@@ -178,7 +178,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   // reference: + turn t / + move a   (move is under turn, not before it)
   const pattern = root([
     node(vari("T"), [sym("turn"), vari("A")], [
-      { id: vari("M"), literal: { literalType: before(), atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("M"), atom: { terms: [sym("move"), vari("X")] }, children: [] },
     ]),
   ]);
   const reference = root([
@@ -192,7 +192,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 // 15. Before at top level of pattern → nothing is before the root, no match
 {
   const pattern = root([
-    { id: vari("M"), literal: { literalType: before(), atom: { terms: [sym("move"), vari("X")] } }, children: [] },
+    { tag: "Before", constraint: "any", id: vari("M"), atom: { terms: [sym("move"), vari("X")] }, children: [] },
   ]);
   const reference = root([fact(sym("ma"), [sym("move"), sym("a")])]);
   const results = unifyTree(pattern, reference);
@@ -208,7 +208,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   const pattern = root([
     node(vari("A"), [sym("a")], [
       node(vari("C"), [sym("c")], []),
-      { id: vari("B"), literal: { literalType: before(), atom: { terms: [sym("b")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("B"), atom: { terms: [sym("b")] }, children: [] },
     ]),
   ]);
   const reference = root([
@@ -231,7 +231,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 {
   const pattern = root([
     node(vari("A"), [sym("a")], [
-      { id: vari("B"), literal: { literalType: before(), atom: { terms: [sym("b")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("B"), atom: { terms: [sym("b")] }, children: [] },
     ]),
   ]);
   const reference = root([
@@ -253,7 +253,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   const pattern = root([
     node(vari("A"), [sym("a")], [
       fact(sym("x"), [sym("x")]),
-      { id: vari("B"), literal: { literalType: before(), atom: { terms: [sym("b")] } }, children: [] },
+      { tag: "Before", constraint: "any", id: vari("B"), atom: { terms: [sym("b")] }, children: [] },
     ]),
   ]);
   const reference = root([
@@ -271,7 +271,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 {
   const pattern = root([
     node(vari("A"), [sym("foo"), vari("X")], [
-      { id: sym("eq"), literal: { literalType: equal(), atom: { terms: [vari("X"), sym("bar")] } }, children: [] },
+      eq(vari("X"), sym("bar")),
     ]),
   ]);
   const reference = root([fact(sym("r1"), [sym("foo"), sym("bar")])]);
@@ -285,7 +285,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 {
   const pattern = root([
     node(vari("A"), [sym("foo"), vari("X")], [
-      { id: sym("eq"), literal: { literalType: equal(), atom: { terms: [vari("X"), sym("bar")] } }, children: [] },
+      eq(vari("X"), sym("bar")),
     ]),
   ]);
   const reference = root([fact(sym("r1"), [sym("foo"), sym("baz")])]);
@@ -298,7 +298,7 @@ function substStr(s: Map<string, Term>): Record<string, string> {
 {
   const pattern = root([
     node(vari("A"), [sym("pair"), vari("X"), vari("Y")], [
-      { id: sym("eq"), literal: { literalType: equal(), atom: { terms: [vari("X"), vari("Y")] } }, children: [] },
+      eq(vari("X"), vari("Y")),
     ]),
   ]);
   const ref1 = root([fact(sym("r1"), [sym("pair"), sym("a"), sym("a")])]);

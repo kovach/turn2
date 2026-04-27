@@ -1,5 +1,4 @@
-import type { AggregateInfo, Atom, Literal, LiteralType, MacroInvocation, Span, Term, Tree } from "./types.js";
-import { match, before, overlap, assert_, ask, constrain, aggregate, equal } from "./types.js";
+import type { AggregateInfo, Atom, BodyTree, MacroInvocation, Term, Tree } from "./types.js";
 import { idExpand } from "./expand.js";
 import { expandMacros } from "./macros.js";
 
@@ -11,7 +10,13 @@ export interface ParseError {
 export function parse(input: string): Tree | ParseError {
   const nodes = _parseNodes(input);
   if ("message" in nodes) return nodes;
-  return { id: { tag: "Variable", name: "0" }, literal: { literalType: match(), atom: { terms: [] } }, children: nodes };
+  return {
+    tag: "Match",
+    constraint: "any",
+    id: { tag: "Variable", name: "0" },
+    atom: { terms: [] },
+    children: nodes,
+  };
 }
 
 function _parseNodes(input: string): Tree[] | ParseError {
@@ -71,20 +76,37 @@ function _parseNodes(input: string): Tree[] | ParseError {
       terms = rest === "" ? [] : parseTerms(tokenize(rest));
     }
 
-    const literalType = tagToLiteralType(literalTag, aggregateInfo);
-    const literal: Literal = { literalType, atom: { terms } };
-    const node: Tree = {
-      id: explicitId ?? { tag: "Variable", name: String(lineno) },
-      literal,
-      children: [],
-      span: { line: lineno },
-      ...(macroInvocation && { macroInvocation }),
-    };
+    let node: Tree;
+    if (literalTag === "Equal") {
+      if (terms.length !== 2) {
+        return { line: lineno, message: `'=' line must have exactly two terms, got ${terms.length}` };
+      }
+      node = {
+        tag: "Equal",
+        lhs: terms[0]!,
+        rhs: terms[1]!,
+        span: { line: lineno },
+        ...(macroInvocation && { macroInvocation }),
+      };
+    } else {
+      node = {
+        ...buildTreePayload(literalTag, aggregateInfo),
+        id: explicitId ?? { tag: "Variable", name: String(lineno) },
+        atom: { terms },
+        children: [],
+        span: { line: lineno },
+        ...(macroInvocation && { macroInvocation }),
+      };
+    }
 
     while (stack.length > 0 && stack[stack.length - 1]!.indent >= indent) {
       const { node: completed } = stack.pop()!;
-      if (stack.length > 0) {
-        stack[stack.length - 1]!.node.children.push(completed);
+      const top = stack[stack.length - 1]?.node;
+      if (top !== undefined) {
+        if (top.tag === "Equal") {
+          return { line: lineno, message: "'=' line cannot have child nodes" };
+        }
+        top.children.push(completed);
       } else {
         roots.push(completed);
       }
@@ -94,8 +116,12 @@ function _parseNodes(input: string): Tree[] | ParseError {
 
   while (stack.length > 0) {
     const { node } = stack.pop()!;
-    if (stack.length > 0) {
-      stack[stack.length - 1]!.node.children.push(node);
+    const top = stack[stack.length - 1]?.node;
+    if (top !== undefined) {
+      if (top.tag === "Equal") {
+        return { line: 0, message: "'=' line cannot have child nodes" };
+      }
+      top.children.push(node);
     } else {
       roots.push(node);
     }
@@ -120,16 +146,24 @@ function prefixToTag(ch: string | undefined): LiteralTag | null {
   }
 }
 
-function tagToLiteralType(tag: LiteralTag, aggInfo?: AggregateInfo): LiteralType {
+type BodyTagPayload =
+  | { tag: "Match"; constraint: "any" }
+  | { tag: "Before"; constraint: "any" }
+  | { tag: "Overlap"; constraint: "any" }
+  | { tag: "Assert" }
+  | { tag: "Ask" }
+  | { tag: "Constrain" }
+  | { tag: "Aggregate"; info: AggregateInfo };
+
+function buildTreePayload(tag: Exclude<LiteralTag, "Equal">, aggInfo?: AggregateInfo): BodyTagPayload {
   switch (tag) {
-    case "Match": return match();
-    case "Before": return before();
-    case "Overlap": return overlap();
-    case "Assert": return assert_();
-    case "Ask": return ask();
-    case "Constrain": return constrain();
-    case "Aggregate": return aggregate(aggInfo!);
-    case "Equal": return equal();
+    case "Match": return { tag: "Match", constraint: "any" };
+    case "Before": return { tag: "Before", constraint: "any" };
+    case "Overlap": return { tag: "Overlap", constraint: "any" };
+    case "Assert": return { tag: "Assert" };
+    case "Ask": return { tag: "Ask" };
+    case "Constrain": return { tag: "Constrain" };
+    case "Aggregate": return { tag: "Aggregate", info: aggInfo! };
   }
 }
 
@@ -191,6 +225,9 @@ function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
 
 function adjustSpans(tree: Tree, offset: number): Tree {
   const newSpan = tree.span ? { ...tree.span, line: tree.span.line + offset } : undefined;
+  if (tree.tag === "Equal") {
+    return { ...tree, ...(newSpan && { span: newSpan }) };
+  }
   return {
     ...tree,
     ...(newSpan && { span: newSpan }),
@@ -231,7 +268,11 @@ export function parseSource(
   return { frontmatter, body, patterns };
 }
 
-export function parsePatterns(input: string): Tree[] | ParseError {
+// `ruleNamePrefix` is the lex-namespace baked into positive id atoms via
+// `idExpand`. Callers that combine multiple `parsePatterns` outputs into one
+// fixpoint must use distinct prefixes, or two positives with matching
+// (prefix, idN) tails will hashcons to the same Ref and silently dedup.
+export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | ParseError {
   const lines = input.split("\n");
   const chunks: Array<{ startLine: number; text: string }> = [];
   let start = 0;
@@ -252,9 +293,12 @@ export function parsePatterns(input: string): Tree[] | ParseError {
     // Adjust spans to be absolute line numbers
     const adjusted = adjustSpans(result, startLine - 1);
     const expanded = expandMacros(adjusted);
+    // The chunk parser always wraps its result in an implicit Match root, so
+    // `expanded` is body-bearing; guard for the type.
+    if (expanded.tag === "Equal") continue;
     // Skip chunks that contain only comments — they produce no rule nodes.
     if (expanded.children.length === 0) continue;
-    trees.push(idExpand(expanded, `r${ruleIndex++}`));
+    trees.push(idExpand(expanded, `${ruleNamePrefix}${ruleIndex++}`));
   }
   return trees;
 }
@@ -262,21 +306,25 @@ export function parsePatterns(input: string): Tree[] | ParseError {
 // --- Formatting ---
 
 export function formatTree(tree: Tree, indent = 0): string {
+  const pad = "  ".repeat(indent);
+  if (tree.tag === "Equal") {
+    return `${pad}= ${formatTerm(tree.lhs)} ${formatTerm(tree.rhs)}\n`;
+  }
   let line: string;
-  if (tree.literal.literalType.tag === "Aggregate") {
-    const { funcName, args, out } = tree.literal.literalType.info;
+  if (tree.tag === "Aggregate") {
+    const { funcName, args, out } = tree.info;
     const argsStr = args.length > 0 ? " " + args.map(formatTerm).join(" ") : "";
     line = `# ${funcName}${argsStr} -> ${formatTerm(out)}`;
   } else {
-    line = formatLiteral(tree.literal);
+    line = formatNode(tree);
   }
-  return "  ".repeat(indent) + line + "\n" +
+  return pad + line + "\n" +
     tree.children.map((c) => formatTree(c, indent + 1)).join("");
 }
 
-export function formatLiteral(literal: Literal): string {
-  const prefix = literalTypeToPrefix(literal.literalType);
-  const terms = literal.atom.terms.map(formatTerm).join(" ");
+export function formatNode(tree: BodyTree): string {
+  const prefix = tagToPrefix(tree.tag);
+  const terms = tree.atom.terms.map(formatTerm).join(" ");
   return terms === "" ? prefix : `${prefix} ${terms}`;
 }
 
@@ -294,8 +342,8 @@ export function formatTerm(term: Term): string {
   }
 }
 
-function literalTypeToPrefix(t: LiteralType): string {
-  switch (t.tag) {
+function tagToPrefix(t: Tree["tag"]): string {
+  switch (t) {
     case "Match": return "-";
     case "Before": return "<";
     case "Overlap": return ",";
@@ -315,7 +363,7 @@ export function buildSpanIndex(trees: Tree[]): Map<number, Tree[]> {
       list.push(t);
       index.set(t.span.line, list);
     }
-    t.children.forEach(walk);
+    if (t.tag !== "Equal") t.children.forEach(walk);
   }
   trees.forEach(walk);
   return index;

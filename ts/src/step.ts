@@ -1,10 +1,9 @@
 import { unifyTree, substAtom, substTerm } from "./unify.js";
 import { collectPositiveNodes } from "./tree.js";
-import { hashconsTerm, hashconsAtom, expandTerm, type HashconsState } from "./hashcons.js";
-import { formatLiteral } from "./parse.js";
-import type { Atom, Trail, Tree } from "./types.js";
+import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
+import type { Trail, Tree } from "./types.js";
 import { newTrail } from "./types.js";
-import { addBeforeAfter, hasNode, insertChild, type RefStore } from "./refstore.js";
+import { addBeforeAfter, hasNode, insertChild, nodeRowFromTree, type RefStore } from "./refstore.js";
 
 export const stepStats = {
   dedupSkipped: 0,
@@ -16,10 +15,6 @@ export function resetStepStats(): void {
   stepStats.dedupSkipped = 0;
   stepStats.inserted = 0;
   stepStats.dupLog = [];
-}
-
-function prettyAtom(atom: Atom, hc: HashconsState): Atom {
-  return { terms: atom.terms.map((t) => expandTerm(t, hc)) };
 }
 
 // Reusing one trail across all step() calls preserves array backing capacity —
@@ -38,7 +33,7 @@ export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iter
       const parentRefId = hashconsTerm(substTerm(posParent.id, trail), hc);
       if (!hasNode(reference, parentRefId, hc)) continue;
 
-      const rawAtom = substAtom(posNode.literal.atom, trail);
+      const rawAtom = substAtom(posNode.atom, trail);
       const rawId = substTerm(posNode.id, trail);
       const newAtom = hashconsAtom(rawAtom, hc);
       const newId = hashconsTerm(rawId, hc);
@@ -50,11 +45,11 @@ export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iter
         continue;
       }
 
-      insertChild(reference, parentRefId, {
+      insertChild(reference, parentRefId, nodeRowFromTree(posNode, {
         id: newId,
-        literal: { literalType: posNode.literal.literalType, atom: newAtom },
+        atom: newAtom,
         gen: iteration,
-      }, hc);
+      }), hc);
 
       // Emit `before:after(prevSibling, new)` iff the positive node's
       // pattern-preceding sibling binds an id — this is the "positive as

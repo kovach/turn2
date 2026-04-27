@@ -2,16 +2,8 @@ import { step } from "./step.js";
 import { expandAll, generateDeltaVariants } from "./expand.js";
 import { closeAggregates } from "./aggregate-fold.js";
 import { createHashcons, type HashconsState } from "./hashcons.js";
-import { buildRefStore, refStoreToTree, type RefStore } from "./refstore.js";
+import { emptyRefStore, refStoreToTree, type RefStore } from "./refstore.js";
 import type { Tree } from "./types.js";
-import { match } from "./types.js";
-
-function setGenRecursive(tree: Tree, gen: number): void {
-  tree.gen = gen;
-  for (const child of tree.children) {
-    setGenRecursive(child, gen);
-  }
-}
 
 function innerFixpoint(patterns: Tree[], ref: RefStore, gas: number, hc: HashconsState, startIteration: number = 1): { steps: number; iteration: number } {
   let changed: boolean;
@@ -33,12 +25,11 @@ function innerFixpoint(patterns: Tree[], ref: RefStore, gas: number, hc: Hashcon
   return { steps, iteration };
 }
 
-export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result: Tree; steps: number; hc: HashconsState; expandedPatterns: Tree[] } {
+export function fixpoint(rawPatterns: Tree[], gas = 20): { result: Tree; steps: number; hc: HashconsState; expandedPatterns: Tree[] } {
   const expanded = expandAll(rawPatterns);
   const patterns = expanded.flatMap(generateDeltaVariants);
   const hc = createHashcons();
-  setGenRecursive(initial, 0);
-  const ref = buildRefStore(initial, hc);
+  const ref = emptyRefStore(hc);
   let totalSteps = 0;
   let iteration = 1;
   let outerChanged: boolean;
@@ -63,9 +54,11 @@ export function fixpoint(rawPatterns: Tree[], initial: Tree, gas = 20): { result
 }
 
 export function nilTree(): Tree {
-  return { id: { tag: "Symbol", name: "root" }, literal: { literalType: match(), atom: { terms: [] } }, children: [], gen: 0 };
-}
-
-export function fixpoint0(patterns: Tree[], gas = 20) {
-  return fixpoint(patterns, nilTree(), gas);
+  return {
+    tag: "Assert",
+    id: { tag: "Symbol", name: "$root" },
+    atom: { terms: [] },
+    children: [],
+    gen: 0,
+  };
 }

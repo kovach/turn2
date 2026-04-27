@@ -37,12 +37,12 @@ export function create(api) {
     let askId = null;
 
     function walk(node) {
-      if (node.literal.literalType.tag === "Ask") {
+      if (node.tag === "Ask") {
         askId = node.id;
       }
 
-      if (node.literal.literalType.tag === "Assert") {
-        const terms = node.literal.atom.terms;
+      if (node.tag === "Assert") {
+        const terms = node.atom.terms;
 
         // Match: cell R C
         if (terms[0]?.tag === "Symbol" && terms[0].name === "cell" && terms.length === 3) {

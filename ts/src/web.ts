@@ -1,13 +1,13 @@
 import { parseSource, formatTerm, buildSpanIndex } from "./parse.js";
-import { fixpoint0 } from "./fixpoint.js";
+import { fixpoint } from "./fixpoint.js";
 import { expandTerm, type HashconsState } from "./hashcons.js";
-import type { Tree, Literal, Term, Atom } from "./types.js";
+import type { Tree, Term, Atom } from "./types.js";
 
 // Single source of truth for line-leading markers. The `Record<LiteralTag, …>`
-// shape makes TS fail this file if a new LiteralType is added without a marker
+// shape makes TS fail this file if a new Tree case is added without a marker
 // entry here; the rest of the keyboard/highlight pipeline is derived from it.
 // The only out-of-file companion is a `.lit-<name>` CSS rule in ts/index.html.
-type LiteralTag = Literal["literalType"]["tag"];
+type LiteralTag = Tree["tag"];
 
 const LITERAL_MARKERS: Record<LiteralTag, { char: string; cssClass: string }> = {
   Match:     { char: "-", cssClass: "lit-match" },
@@ -171,6 +171,7 @@ function getSourceInfo(id: Term): { rule: string; lineId: string } | null {
 function buildIdToLineMap(expandedPatterns: Tree[]): Map<string, number> {
   const map = new Map<string, number>();
   function walk(node: Tree) {
+    if (node.tag === "Equal") return;  // Equal has no id; leaf
     if (node.span && node.id.tag === "Atom") {
       const info = getSourceInfo(node.id);
       if (info) {
@@ -198,10 +199,9 @@ function highlightResultNodes() {
   if (currentLine === null) return;
 
   const patternNodes = patternSpanIndex.get(currentLine) ?? [];
-  const hasPositive = patternNodes.some(n => {
-    const tag = n.literal.literalType.tag;
-    return tag === "Assert" || tag === "Ask" || tag === "Constrain" || tag === "Aggregate";
-  });
+  const hasPositive = patternNodes.some(n =>
+    n.tag === "Assert" || n.tag === "Ask" || n.tag === "Constrain" || n.tag === "Aggregate"
+  );
 
   if (!hasPositive) return;
 
@@ -529,14 +529,14 @@ async function run() {
   const { frontmatter, patterns: parsedPatterns } = sourceResult;
   patternSpanIndex = buildSpanIndex(parsedPatterns);
 
-  const { result, steps, hc, expandedPatterns } = fixpoint0(parsedPatterns, GAS);
+  const { result, steps, hc, expandedPatterns } = fixpoint(parsedPatterns, GAS);
   lastValid = steps < GAS;
   lastHc = hc;
   idToLineMap = buildIdToLineMap(expandedPatterns);
   clickableTerms = new Map();
   nextClickableKey = 0;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
-  resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
+  resultEl.innerHTML = (result.tag === "Equal" ? [] : result.children).map((c: Tree) => renderTree(c, 0)).join("");
 
   // Render custom display if specified
   const display = await loadDisplay(frontmatter.display);
@@ -577,15 +577,20 @@ async function run() {
 
 function renderTree(tree: Tree, depth: number): string {
   const indent = "  ".repeat(depth);
+  if (tree.tag === "Equal") return indent + renderNode(tree) + "\n";
   return indent + renderNode(tree) + "\n" +
     tree.children.map((c) => renderTree(c, depth + 1)).join("");
 }
 
 function renderNode(tree: Tree): string {
-  const lt = tree.literal.literalType;
-  const tag = lt.tag;
-  const [prefix, cls] = literalStyle(lt);
-  const terms = tree.literal.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
+  const tag = tree.tag;
+  const [prefix, cls] = literalStyle(tag);
+  if (tree.tag === "Equal") {
+    const lhs = renderTerm(tree.lhs, false);
+    const rhs = renderTerm(tree.rhs, false);
+    return `<span class="${cls}">${prefix} ${lhs} ${rhs}</span>`;
+  }
+  const terms = tree.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
   const body = terms === "" ? prefix : `${prefix} ${terms}`;
 
   // Add source line attribute for linking
@@ -625,8 +630,8 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function literalStyle(t: Literal["literalType"]): [string, string] {
-  const m = LITERAL_MARKERS[t.tag];
+function literalStyle(tag: LiteralTag): [string, string] {
+  const m = LITERAL_MARKERS[tag];
   return [m.char, m.cssClass];
 }
 

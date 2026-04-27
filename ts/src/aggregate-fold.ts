@@ -1,5 +1,5 @@
 import type { Term } from "./types.js";
-import { sym, assert_ } from "./types.js";
+import { sym } from "./types.js";
 import { termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
@@ -40,7 +40,7 @@ function collectAggNodes(
   const results: AggResult[] = [];
 
   for (const row of ref.index.get("agg-instance") ?? []) {
-    const terms = row.node.literal.atom.terms;
+    const terms = row.node.atom.terms;
     if (terms.length < 2) continue;
     const parent = parentIdOf(ref, row.node.id, hc);
     if (parent === null) continue;
@@ -53,7 +53,7 @@ function collectAggNodes(
   }
 
   for (const row of ref.index.get("agg-binding") ?? []) {
-    const terms = row.node.literal.atom.terms;
+    const terms = row.node.atom.terms;
     if (terms.length < 3) continue;
     bindings.push({
       row: row.node,
@@ -64,7 +64,7 @@ function collectAggNodes(
   }
 
   for (const row of ref.index.get("agg-result") ?? []) {
-    const terms = row.node.literal.atom.terms;
+    const terms = row.node.atom.terms;
     if (terms.length < 3) continue;
     results.push({
       lexId: terms[1]!,
@@ -160,8 +160,9 @@ export function closeAggregates(ref: RefStore, hc: HashconsState, iteration: num
     const resultAtom = hashconsAtom(rawAtom, hc);
 
     insertChild(ref, instance.parentId, {
+      tag: "Assert",
       id: resultId,
-      literal: { literalType: assert_(), atom: resultAtom },
+      atom: resultAtom,
       gen: iteration,
     }, hc);
     changed = true;

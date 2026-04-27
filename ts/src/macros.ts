@@ -1,5 +1,5 @@
 import type { Term, Tree } from "./types.js";
-import { sym, vari, aggregate, before } from "./types.js";
+import { sym, vari } from "./types.js";
 
 export interface MacroDef {
   expand: (args: Term[], children: Tree[], fresh: () => string) => Tree;
@@ -16,11 +16,15 @@ const macros = new Map<string, MacroDef>([
     expand: ([x, y], _children, fresh) => {
       const l = vari(fresh());
       return {
+        tag: "Aggregate",
+        info: { funcName: "last", args: [l], out: y! },
         id: vari(fresh()),
-        literal: { literalType: aggregate({ funcName: "last", args: [l], out: y! }), atom: { terms: [] } },
+        atom: { terms: [] },
         children: [{
+          tag: "Before",
+          constraint: "any",
           id: vari(fresh()),
-          literal: { literalType: before(), atom: { terms: [sym("move"), x!, l] } },
+          atom: { terms: [sym("move"), x!, l] },
           children: [],
         }],
       };
@@ -36,6 +40,7 @@ export function expandMacro(name: string, args: Term[], children: Tree[]): Tree 
 }
 
 export function expandMacros(tree: Tree): Tree {
+  if (tree.tag === "Equal") return tree;
   return { ...tree, children: expandChildren(tree.children) };
 }
 
@@ -50,7 +55,9 @@ function expandChildren(children: Tree[]): Tree[] {
       }
       // Inherit span from macro invocation site
       result.push({ ...expanded, ...(child.span && { span: child.span }) });
-      result.push(...expandChildren(child.children));
+      if (child.tag !== "Equal") result.push(...expandChildren(child.children));
+    } else if (child.tag === "Equal") {
+      result.push(child);
     } else {
       result.push({ ...child, children: expandChildren(child.children) });
     }

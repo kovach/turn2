@@ -1,4 +1,4 @@
-import type { Literal, NodeId, Span, Term, Tree } from "./types.js";
+import type { Atom, NodeId, Span, Term, Tree } from "./types.js";
 import { hashconsAtom, hashconsTerm, tokenOfId, type HashconsState } from "./hashcons.js";
 
 export type { NodeId } from "./types.js";
@@ -14,12 +14,35 @@ export type { NodeId } from "./types.js";
 // meaning from it.
 
 // A node row. Children are NOT carried here; to walk the children of a row,
-// query `store.children.get(tokenOfId(id))`.
-export interface NodeRow {
+// query `store.children.get(tokenOfId(id))`. The store only ever stores rows
+// for the three insert-target tags — Match/Before/Overlap/Equal/Aggregate are
+// pattern-only constructs and never reach a row, so the union is narrowed
+// here. See plans/refactor-tree-type-pt2.md.
+interface NodeRowBase {
   id: Term;
-  literal: Literal;
+  atom: Atom;
   gen: number;
   span?: Span;
+}
+
+export type NodeRow =
+  | (NodeRowBase & { tag: "Assert" })
+  | (NodeRowBase & { tag: "Ask" })
+  | (NodeRowBase & { tag: "Constrain" });
+
+// Build a NodeRow from a Tree node, overriding `id`, `atom`, and `gen`.
+// Throws if `template` carries a tag that the narrowed NodeRow union forbids
+// — a runtime guard so any future regression in `expand` (e.g. an Aggregate
+// slipping past the agg-instance rewrite) fails loudly instead of silently
+// inserting a row the unifier won't see.
+export function nodeRowFromTree(
+  template: Tree,
+  fields: { id: Term; atom: Atom; gen: number; span?: Span },
+): NodeRow {
+  if (template.tag !== "Assert" && template.tag !== "Ask" && template.tag !== "Constrain") {
+    throw new Error(`nodeRowFromTree: cannot project tag ${template.tag} into a NodeRow`);
+  }
+  return { tag: template.tag, ...fields };
 }
 
 // Candidate is just a NodeRow; kept as a named alias so call sites in
@@ -90,10 +113,10 @@ export function parentIdOf(store: RefStore, id: Term, hc: HashconsState): Term |
   return parent ? parent.id : null;
 }
 
-// Build a RefStore from a nested Tree. Atoms are hashconsed on the way in.
-// Ids are preserved (non-Atom ids stay as Symbol/Variable; Atom ids become
-// Refs). The resulting store owns the rows; the input tree can be discarded.
-export function buildRefStore(initial: Tree, hc: HashconsState): RefStore {
+// Build an empty RefStore seeded with a single synthetic Assert-tagged root
+// row. The root's tag is never consulted by any read path; Assert is chosen
+// so the store rows stay within the narrow {Assert, Ask, Constrain} union.
+export function emptyRefStore(hc: HashconsState): RefStore {
   const nodes = new Map<NodeId, NodeRow>();
   const children = new Map<NodeId, NodeRow[]>();
   const parentOf = new Map<NodeId, NodeId>();
@@ -103,49 +126,23 @@ export function buildRefStore(initial: Tree, hc: HashconsState): RefStore {
   const afterBefore = new Map<NodeId, Set<NodeId>>();
   const index: SymbolIndex = new Map();
 
-  function walk(node: Tree, parentKey: NodeId | null): NodeRow {
-    const hashedAtom = hashconsAtom(node.literal.atom, hc);
-    const hashedId = hashconsTerm(node.id, hc);
-    const row: NodeRow = {
-      id: hashedId,
-      literal: { literalType: node.literal.literalType, atom: hashedAtom },
-      gen: node.gen ?? 0,
-      ...(node.span !== undefined ? { span: node.span } : {}),
-    };
-    const key = idKey(hashedId, hc);
-    nodes.set(key, row);
-    if (parentKey !== null) {
-      parentOf.set(key, parentKey);
-      addEdge(parentChild, parentKey, key);
-      addEdge(parentsOf, key, parentKey);
-    }
-    const childRows: NodeRow[] = [];
-    children.set(key, childRows);
+  // Use a sentinel symbol name unlikely to collide with anything a user (or
+  // generated rule) writes: a normal `sym("root")` fact would otherwise hash
+  // to the same id and overwrite the synthetic row.
+  const rootId = hashconsTerm({ tag: "Symbol", name: "$root" }, hc);
+  const rootAtom = hashconsAtom({ terms: [] }, hc);
+  const rootRow: NodeRow = {
+    tag: "Assert",
+    id: rootId,
+    atom: rootAtom,
+    gen: 0,
+  };
+  const key = idKey(rootId, hc);
+  nodes.set(key, rootRow);
+  children.set(key, []);
 
-    const firstTerm = hashedAtom.terms[0];
-    if (firstTerm?.tag === "Symbol") {
-      let bucket = index.get(firstTerm.name);
-      if (bucket === undefined) { bucket = []; index.set(firstTerm.name, bucket); }
-      bucket.push({ node: row });
-    }
-
-    let prevChildKey: NodeId | null = null;
-    for (const child of node.children) {
-      const childRow = walk(child, key);
-      childRows.push(childRow);
-      const childKey = idKey(childRow.id, hc);
-      if (prevChildKey !== null) {
-        addEdge(beforeAfter, prevChildKey, childKey);
-        addEdge(afterBefore, childKey, prevChildKey);
-      }
-      prevChildKey = childKey;
-    }
-    return row;
-  }
-
-  const rootRow = walk(initial, null);
   return {
-    rootId: rootRow.id,
+    rootId,
     nodes,
     children,
     parentOf,
@@ -188,7 +185,7 @@ export function insertChild(
   addEdge(store.parentChild, parentKey, key);
   addEdge(store.parentsOf, key, parentKey);
 
-  const firstTerm = row.literal.atom.terms[0];
+  const firstTerm = row.atom.terms[0];
   if (firstTerm?.tag === "Symbol") {
     let bucket = store.index.get(firstTerm.name);
     if (bucket === undefined) { bucket = []; store.index.set(firstTerm.name, bucket); }
@@ -335,8 +332,9 @@ function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): Tree {
   if (!row) throw new Error(`refStoreToTree: no row for id token ${key}`);
   const kids = store.children.get(key) ?? [];
   return {
+    tag: row.tag,
     id: row.id,
-    literal: row.literal,
+    atom: row.atom,
     children: kids.map((c) => buildTreeFromRow(store, c.id, hc)),
     gen: row.gen,
     ...(row.span !== undefined ? { span: row.span } : {}),
@@ -469,7 +467,7 @@ export function checkIntegrity(store: RefStore, hc: HashconsState): void {
       if (!nodes.has(key)) {
         throw new Error(`integrity: symbol index bucket '${sym}' references dropped row (token ${key})`);
       }
-      const first = cand.node.literal.atom.terms[0];
+      const first = cand.node.atom.terms[0];
       if (first?.tag !== "Symbol" || first.name !== sym) {
         throw new Error(`integrity: row in bucket '${sym}' starts with a different term`);
       }

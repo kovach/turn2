@@ -1,5 +1,5 @@
 import { isPositive } from "./types.js";
-import type { Term, Tree } from "./types.js";
+import type { BodyTree, Term, Tree } from "./types.js";
 import type { HashconsState } from "./hashcons.js";
 
 function atomEq(aTerms: Term[], bTerms: Term[], hc: HashconsState): boolean {
@@ -33,27 +33,29 @@ export function termEq(a: Term, b: Term, hc: HashconsState): boolean {
 // pattern tree if any. The latter is what drives the `before:after` edge
 // emitted at insertion time — see plans/temporal-relationships.md §Step.ts.
 // Pattern roots are Match, so the root itself is never positive; every
-// returned entry has a non-null parent.
+// returned entry has a non-null parent. Equal nodes are leaves and never
+// positive — the positive node is always body-bearing, as is its parent
+// (Equal can't have children).
 export interface PositiveNode {
-  node: Tree;
-  parent: Tree;
+  node: BodyTree;
+  parent: BodyTree;
   path: number[];
-  prevBindableSibling: Tree | null;
+  prevBindableSibling: BodyTree | null;
 }
 
 export function collectPositiveNodes(pattern: Tree): PositiveNode[] {
   const out: PositiveNode[] = [];
-  function walk(node: Tree, parent: Tree | null, path: number[]): void {
-    if (parent !== null && isPositive(node.literal.literalType)) {
+  function walk(node: Tree, parent: BodyTree | null, path: number[]): void {
+    if (parent !== null && isPositive(node) && node.tag !== "Equal") {
       const selfIdx = path[path.length - 1]!;
-      let prev: Tree | null = null;
+      let prev: BodyTree | null = null;
       for (let i = selfIdx - 1; i >= 0; i--) {
         const sib = parent.children[i]!;
-        const t = sib.literal.literalType.tag;
-        if (t === "Match" || t === "Before" || t === "Overlap") { prev = sib; break; }
+        if (sib.tag === "Match" || sib.tag === "Before" || sib.tag === "Overlap") { prev = sib; break; }
       }
       out.push({ node, parent, path, prevBindableSibling: prev });
     }
+    if (node.tag === "Equal") return;
     for (let i = 0; i < node.children.length; i++) {
       walk(node.children[i]!, node, [...path, i]);
     }
@@ -84,30 +86,31 @@ function termContains(term: Term, value: Term, hc: HashconsState): boolean {
   return false;
 }
 
-function atomContainsValue(tree: Tree, value: Term, hc: HashconsState): boolean {
-  return tree.literal.atom.terms.some((t) => termContains(t, value, hc));
+function atomContainsValue(tree: BodyTree, value: Term, hc: HashconsState): boolean {
+  return tree.atom.terms.some((t) => termContains(t, value, hc));
 }
 
-function* walkTree(tree: Tree): Generator<Tree> {
+function* walkTree(tree: Tree): Generator<BodyTree> {
+  if (tree.tag === "Equal") return;
   yield tree;
   for (const child of tree.children) {
     yield* walkTree(child);
   }
 }
 
-export function* fringe(value: Term, tree: Tree, hc: HashconsState): Generator<Tree> {
+export function* fringe(value: Term, tree: Tree, hc: HashconsState): Generator<BodyTree> {
   for (const node of walkTree(tree)) {
     if (atomContainsValue(node, value, hc)) yield node;
   }
 }
 
-export function* unionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<Tree> {
+export function* unionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<BodyTree> {
   for (const node of walkTree(tree)) {
     if (values.some((v) => atomContainsValue(node, v, hc))) yield node;
   }
 }
 
-export function* intersectionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<Tree> {
+export function* intersectionFringe(values: Term[], tree: Tree, hc: HashconsState): Generator<BodyTree> {
   if (values.length === 0) return;
   for (const node of walkTree(tree)) {
     if (values.every((v) => atomContainsValue(node, v, hc))) yield node;

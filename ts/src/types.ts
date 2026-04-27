@@ -13,27 +13,8 @@ export interface AggregateInfo {
   out: Term;
 }
 
-export type LiteralType =
-  | { tag: "Match"; constraint: MatchConstraint }
-  | { tag: "Before"; constraint: MatchConstraint }
-  | { tag: "Overlap"; constraint: MatchConstraint }
-  | { tag: "Assert" }
-  | { tag: "Ask" }
-  | { tag: "Constrain" }
-  | { tag: "Aggregate"; info: AggregateInfo }
-  | { tag: "Equal" };
-
-export const isNegative = (t: LiteralType): boolean =>
-  t.tag === "Match" || t.tag === "Before" || t.tag === "Overlap" || t.tag === "Equal";
-export const isPositive = (t: LiteralType): boolean => !isNegative(t);
-
 export interface Atom {
   terms: Term[];
-}
-
-export interface Literal {
-  literalType: LiteralType;
-  atom: Atom;
 }
 
 export interface MacroInvocation {
@@ -52,13 +33,71 @@ export interface Span {
   endCol?: number;
 }
 
-export interface Tree {
-  id: Term;
-  literal: Literal;
-  children: Tree[];
+export interface TreeBase {
   macroInvocation?: MacroInvocation;
   span?: Span;
   gen?: number;
+}
+
+// Body fields common to every Tree case except Equal — see
+// plans/refactor-tree-type-pt3.md.
+export interface TreeBody {
+  id: Term;
+  atom: Atom;
+  children: Tree[];
+}
+
+export type Tree =
+  | (TreeBase & TreeBody & { tag: "Match"; constraint: MatchConstraint })
+  | (TreeBase & TreeBody & { tag: "Before"; constraint: MatchConstraint })
+  | (TreeBase & TreeBody & { tag: "Overlap"; constraint: MatchConstraint })
+  | (TreeBase & TreeBody & { tag: "Assert" })
+  | (TreeBase & TreeBody & { tag: "Ask" })
+  | (TreeBase & TreeBody & { tag: "Constrain" })
+  | (TreeBase & TreeBody & { tag: "Aggregate"; info: AggregateInfo })
+  | (TreeBase & { tag: "Equal"; lhs: Term; rhs: Term });
+
+// Body-bearing cases — every Tree case except Equal. Walkers that recurse on
+// `tree.children` should narrow to this with `tree.tag !== "Equal"` first.
+export type BodyTree = Extract<Tree, TreeBody>;
+
+// Safe accessors for the body fields. Equal carries none of these — the
+// accessors return empty/undefined for Equal so callers (mostly tests and
+// generic walkers) don't have to repeat the tag guard inline.
+export const treeChildren = (t: Tree): readonly Tree[] =>
+  t.tag === "Equal" ? [] : t.children;
+export const treeAtom = (t: Tree): Atom | undefined =>
+  t.tag === "Equal" ? undefined : t.atom;
+export const treeAtomTerms = (t: Tree): readonly Term[] =>
+  t.tag === "Equal" ? [] : t.atom.terms;
+export const treeId = (t: Tree): Term | undefined =>
+  t.tag === "Equal" ? undefined : t.id;
+
+export const isPositiveTag = (tag: Tree["tag"]): boolean =>
+  tag === "Assert" || tag === "Ask" || tag === "Constrain" || tag === "Aggregate";
+export const isNegativeTag = (tag: Tree["tag"]): boolean => !isPositiveTag(tag);
+export const isPositive = (t: Tree): boolean => isPositiveTag(t.tag);
+export const isNegative = (t: Tree): boolean => isNegativeTag(t.tag);
+
+// Cross-tag construction within the body-bearing cases: take the TreeBase
+// + TreeBody fields from `base` and combine them with a fresh `tag` +
+// per-case `payload`. Equal opts out — converting to or from Equal needs a
+// different shape and isn't useful in practice (no caller does it).
+type BodyTag = BodyTree["tag"];
+type Payload<T extends BodyTag> =
+  Omit<Extract<Tree, { tag: T }>, keyof TreeBase | keyof TreeBody | "tag">;
+
+export function retag<T extends BodyTag>(
+  base: BodyTree,
+  tag: T,
+  payload: Payload<T>,
+): Extract<Tree, { tag: T }> {
+  const { id, atom, children, macroInvocation, span, gen } = base;
+  const out: Record<string, unknown> = { tag, id, atom, children, ...payload };
+  if (macroInvocation !== undefined) out.macroInvocation = macroInvocation;
+  if (span !== undefined) out.span = span;
+  if (gen !== undefined) out.gen = gen;
+  return out as unknown as Extract<Tree, { tag: T }>;
 }
 
 // Substitution trail: two parallel mutable arrays. Bind = push; backtrack = `.length = mark`.
@@ -95,33 +134,28 @@ export const sym = (name: string): Term => ({ tag: "Symbol", name });
 export const vari = (name: string): Term => ({ tag: "Variable", name });
 export const ref = (id: number): Term => ({ tag: "Ref", id });
 export const atom = (terms: Term[]): Atom => ({ terms });
-export const literal = (literalType: LiteralType, terms: Term[]): Literal => ({
-  literalType,
-  atom: { terms },
-});
-export const match = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Match", constraint });
-export const before = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Before", constraint });
-export const overlap = (constraint: MatchConstraint = "any"): LiteralType => ({ tag: "Overlap", constraint });
-export const assert_ = (): LiteralType => ({ tag: "Assert" });
-export const ask = (): LiteralType => ({ tag: "Ask" });
-export const constrain = (): LiteralType => ({ tag: "Constrain" });
-export const aggregate = (info: AggregateInfo): LiteralType => ({ tag: "Aggregate", info });
-export const equal = (): LiteralType => ({ tag: "Equal" });
 
 export const root = (children: Tree[]): Tree => ({
-  id: { tag: "Variable", name: "0" },
-  literal: { literalType: match(), atom: { terms: [] } },
+  tag: "Match",
+  constraint: "any",
+  id: { tag: "Wildcard" },
+  atom: { terms: [] },
   children,
 });
 
 export const node = (id: Term, terms: Term[], children: Tree[] = []): Tree => ({
+  tag: "Match",
+  constraint: "any",
   id,
-  literal: { literalType: match(), atom: { terms } },
+  atom: { terms },
   children,
 });
 
 export const fact = (id: Term, terms: Term[], children: Tree[] = []): Tree => ({
+  tag: "Assert",
   id,
-  literal: { literalType: assert_(), atom: { terms } },
+  atom: { terms },
   children,
 });
+
+export const eq = (lhs: Term, rhs: Term): Tree => ({ tag: "Equal", lhs, rhs });

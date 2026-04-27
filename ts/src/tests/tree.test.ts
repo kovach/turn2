@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isTemporallyBefore, fringe, unionFringe, intersectionFringe, collectPositiveNodes } from "../tree.js";
-import { sym, node, fact, assert_, match } from "../types.js";
+import { sym, fact } from "../types.js";
 import { createHashcons } from "../hashcons.js";
 import type { Tree } from "../types.js";
 
@@ -38,10 +38,10 @@ const hc = createHashcons();
 // Pattern: - root / + a / - b / + c
 // positives: a and c, parents are root and b respectively, paths [0] and [1, 0].
 {
-  const patC: Tree = { id: sym("c"), literal: { literalType: assert_(), atom: { terms: [sym("c")] } }, children: [] };
-  const patB: Tree = { id: sym("b"), literal: { literalType: match(), atom: { terms: [sym("b")] } }, children: [patC] };
-  const patA: Tree = { id: sym("a"), literal: { literalType: assert_(), atom: { terms: [sym("a")] } }, children: [] };
-  const patRoot: Tree = { id: sym("r"), literal: { literalType: match(), atom: { terms: [] } }, children: [patA, patB] };
+  const patC: Tree = { tag: "Assert", id: sym("c"), atom: { terms: [sym("c")] }, children: [] };
+  const patB: Tree = { tag: "Match", constraint: "any", id: sym("b"), atom: { terms: [sym("b")] }, children: [patC] };
+  const patA: Tree = { tag: "Assert", id: sym("a"), atom: { terms: [sym("a")] }, children: [] };
+  const patRoot: Tree = { tag: "Match", constraint: "any", id: sym("r"), atom: { terms: [] }, children: [patA, patB] };
 
   const positives = collectPositiveNodes(patRoot);
   assert.equal(positives.length, 2);
@@ -73,14 +73,14 @@ const hc = createHashcons();
   // fringe of c is nodes containing c: (card c) and (card:name c n)
   const fringeC = [...fringe(c, fringeTree, hc)];
   assert.equal(fringeC.length, 2);
-  assert.deepEqual(fringeC[0]!.literal.atom.terms, [sym("card"), c]);
-  assert.deepEqual(fringeC[1]!.literal.atom.terms, [sym("card:name"), c, n]);
+  assert.deepEqual(fringeC[0]!.atom.terms, [sym("card"), c]);
+  assert.deepEqual(fringeC[1]!.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: fringe");
 
   // fringe of n is just (card:name c n)
   const fringeN = [...fringe(n, fringeTree, hc)];
   assert.equal(fringeN.length, 1);
-  assert.deepEqual(fringeN[0]!.literal.atom.terms, [sym("card:name"), c, n]);
+  assert.deepEqual(fringeN[0]!.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: fringe single match");
 
   // union-fringe of {c, n} is the union: both nodes with c plus the one with n
@@ -91,7 +91,7 @@ const hc = createHashcons();
   // intersection-fringe of {c, n} is nodes containing BOTH c and n
   const intersection = [...intersectionFringe([c, n], fringeTree, hc)];
   assert.equal(intersection.length, 1);
-  assert.deepEqual(intersection[0]!.literal.atom.terms, [sym("card:name"), c, n]);
+  assert.deepEqual(intersection[0]!.atom.terms, [sym("card:name"), c, n]);
   console.log("PASS: intersectionFringe");
 
   // intersection-fringe of {c, c2} is empty (no node contains both)
