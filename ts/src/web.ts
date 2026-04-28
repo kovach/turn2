@@ -1,6 +1,8 @@
 import { parseSource, formatTerm, buildSpanIndex } from "./parse.js";
 import { fixpoint } from "./fixpoint.js";
 import { expandTerm, type HashconsState } from "./hashcons.js";
+import type { ComponentOptions } from "./constraint-query.js";
+import type { UnresolvedChoice } from "./scheduler.js";
 import type { Tree, Term, Atom } from "./types.js";
 
 // Single source of truth for line-leading markers. The `Record<LiteralTag, …>`
@@ -75,10 +77,26 @@ const GAS = 100;
 
 // --- Display Module System ---
 
+// A click intent identifies one resolution of a connected component:
+// `activeTerms[i]` is the i-th choice term (a `_choose`-row argument that
+// the engine surfaced as active) and `optionTuple[i]` is the value to bind
+// it to. The click flow appends one `+ is <activeTerms[i]> <optionTuple[i]>`
+// line per active position; one click resolves the whole component
+// atomically. See plans/constraint-tuples.md §3b/3c.
+interface ClickIntent {
+  activeTerms: Term[];
+  optionTuple: Term[];
+}
+
+interface DisplayCallContext {
+  activeChoices: UnresolvedChoice[];
+  components: ComponentOptions[];
+}
+
 interface DisplayModule {
-  render(root: Tree, hc: HashconsState): {
+  render(root: Tree, hc: HashconsState, ctx: DisplayCallContext): {
     element: HTMLElement;
-    clicks: Map<HTMLElement, { askId: Term; targetId: Term }>;
+    clicks: Map<HTMLElement, ClickIntent>;
   } | null;
 }
 
@@ -132,10 +150,23 @@ async function loadDisplay(name: string | undefined): Promise<DisplayModule | nu
   }
 }
 
-function handleDisplayClick(askId: Term, targetId: Term) {
+function handleDisplayClick(intent: ClickIntent) {
   if (!lastHc) return;
-  const { bindings, results } = compressRefs([askId, targetId], lastHc);
-  const lines = [...bindings, `+ is ${results[0]} ${results[1]}`];
+  const N = intent.activeTerms.length;
+  if (N !== intent.optionTuple.length) {
+    console.warn("handleDisplayClick: active/option tuple length mismatch");
+    return;
+  }
+  // Compress all roots together so any subterm shared between an active term
+  // and its bound value (or across active positions) gets a single `= V…`
+  // binding emitted once.
+  const roots = [...intent.activeTerms, ...intent.optionTuple];
+  const { bindings, results } = compressRefs(roots, lastHc);
+  const isLines: string[] = [];
+  for (let i = 0; i < N; i++) {
+    isLines.push(`+ is ${results[i]} ${results[i + N]}`);
+  }
+  const lines = [...bindings, ...isLines];
   const text = "\n\n" + lines.join("\n");
 
   patternsEl.focus();
@@ -529,8 +560,12 @@ async function run() {
   const { frontmatter, patterns: parsedPatterns } = sourceResult;
   patternSpanIndex = buildSpanIndex(parsedPatterns);
 
-  const { result, steps, hc, expandedPatterns } = fixpoint(parsedPatterns, GAS);
-  lastValid = steps < GAS;
+  const { result, steps, hc, expandedPatterns, status } = fixpoint(parsedPatterns, GAS);
+  // `lastValid` controls server sync: don't write a state where the fixpoint
+  // ran out of gas mid-evaluation. Empty-fringe-error is a runtime *program*
+  // error (an unconstrained ask) — the source is well-formed, so still let
+  // it sync; the error bar is the user-facing signal.
+  lastValid = status.kind !== "gas";
   lastHc = hc;
   idToLineMap = buildIdToLineMap(expandedPatterns);
   clickableTerms = new Map();
@@ -538,41 +573,89 @@ async function run() {
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
   resultEl.innerHTML = (result.tag === "Equal" ? [] : result.children).map((c: Tree) => renderTree(c, 0)).join("");
 
-  // Render custom display if specified
+  if (status.kind === "empty-fringe-error") {
+    showError(`empty fringe: choice term has no constraint row`);
+  }
+
+  const ctx: DisplayCallContext = {
+    activeChoices: status.kind === "active-choices" ? status.choices : [],
+    components: status.kind === "active-choices" ? status.components : [],
+  };
+
   const display = await loadDisplay(frontmatter.display);
-  if (display) {
+  let rendered = false;
+  if (display && status.kind !== "empty-fringe-error") {
     try {
-      const renderResult = display.render(result, hc);
+      const renderResult = display.render(result, hc, ctx);
       if (renderResult) {
         displayEl.innerHTML = "";
         displayEl.appendChild(renderResult.element);
-
-        // Wire up click handlers
         for (const [el, intent] of renderResult.clicks) {
-          el.addEventListener("click", () => {
-            handleDisplayClick(intent.askId, intent.targetId);
-          });
+          el.addEventListener("click", () => handleDisplayClick(intent));
         }
-
         displayPaneEl.style.display = "flex";
         rightColumnEl.classList.add("has-display");
-      } else {
-        displayEl.innerHTML = "";
-        displayPaneEl.style.display = "none";
-        rightColumnEl.classList.remove("has-display");
+        rendered = true;
       }
     } catch (e) {
       displayEl.innerHTML = `<div style="color: #f87171; padding: 1em;">Display error: ${e}</div>`;
       displayPaneEl.style.display = "flex";
       rightColumnEl.classList.add("has-display");
+      rendered = true;
     }
-  } else {
+  }
+
+  // Default option-list rendering: surface active components when no display
+  // module took the slot. One <ul> per component; each <li> is one option
+  // tuple. Clicking emits the multi-`is` block via handleDisplayClick.
+  if (!rendered && ctx.components.length > 0) {
+    renderDefaultOptionLists(ctx);
+    displayPaneEl.style.display = "flex";
+    rightColumnEl.classList.add("has-display");
+    rendered = true;
+  }
+
+  if (!rendered) {
     displayEl.innerHTML = "";
     displayPaneEl.style.display = "none";
     rightColumnEl.classList.remove("has-display");
   }
 
   highlightResultNodes();
+}
+
+function renderDefaultOptionLists(ctx: DisplayCallContext): void {
+  if (!lastHc) return;
+  displayEl.innerHTML = "";
+  for (let ci = 0; ci < ctx.components.length; ci++) {
+    const comp = ctx.components[ci]!;
+    const wrap = document.createElement("div");
+    const heading = document.createElement("div");
+    heading.style.fontSize = "0.85em";
+    heading.style.color = "#888";
+    heading.style.marginBottom = "4px";
+    heading.textContent = `component ${ci + 1} (${comp.activeTerms.length} active term${comp.activeTerms.length === 1 ? "" : "s"})`;
+    wrap.appendChild(heading);
+    const ul = document.createElement("ul");
+    ul.style.listStyle = "none";
+    ul.style.padding = "0";
+    ul.style.margin = "0 0 12px 0";
+    for (const tuple of comp.options) {
+      const li = document.createElement("li");
+      li.style.cursor = "pointer";
+      li.style.padding = "2px 6px";
+      li.style.borderRadius = "3px";
+      li.addEventListener("mouseenter", () => { li.style.background = "#2a2a2a"; });
+      li.addEventListener("mouseleave", () => { li.style.background = ""; });
+      const labels = tuple.map((t) => formatTerm(t)).join(", ");
+      li.textContent = tuple.length === 1 ? labels : `(${labels})`;
+      const intent: ClickIntent = { activeTerms: comp.activeTerms, optionTuple: tuple };
+      li.addEventListener("click", () => handleDisplayClick(intent));
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+    displayEl.appendChild(wrap);
+  }
 }
 
 function renderTree(tree: Tree, depth: number): string {

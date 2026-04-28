@@ -33,5 +33,5 @@
   ! land T
 
 - target
-  ? source S
-  ? target T
+  ? S
+  ? T

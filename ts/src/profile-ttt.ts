@@ -40,8 +40,10 @@ console.log("Steps:", steps);
 console.log("Hashcons entries:", hc.entryCount);
 
 function countNodes(tree: typeof result): number {
-  if (tree.tag === "Equal") return 1;
-  return 1 + tree.children.reduce((sum, c) => sum + countNodes(c), 0);
+  if (tree.tag === "Equal" || tree.tag === "Ask") return 1;
+  let n = 1;
+  for (const c of tree.children) n += countNodes(c);
+  return n;
 }
 
 console.log("Result nodes:", countNodes(result));

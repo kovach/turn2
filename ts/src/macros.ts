@@ -40,7 +40,7 @@ export function expandMacro(name: string, args: Term[], children: Tree[]): Tree 
 }
 
 export function expandMacros(tree: Tree): Tree {
-  if (tree.tag === "Equal") return tree;
+  if (tree.tag === "Equal" || tree.tag === "Ask") return tree;
   return { ...tree, children: expandChildren(tree.children) };
 }
 
@@ -55,8 +55,8 @@ function expandChildren(children: Tree[]): Tree[] {
       }
       // Inherit span from macro invocation site
       result.push({ ...expanded, ...(child.span && { span: child.span }) });
-      if (child.tag !== "Equal") result.push(...expandChildren(child.children));
-    } else if (child.tag === "Equal") {
+      if (child.tag !== "Equal" && child.tag !== "Ask") result.push(...expandChildren(child.children));
+    } else if (child.tag === "Equal" || child.tag === "Ask") {
       result.push(child);
     } else {
       result.push({ ...child, children: expandChildren(child.children) });

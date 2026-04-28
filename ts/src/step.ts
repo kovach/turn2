@@ -25,6 +25,11 @@ const sharedTrail: Trail = newTrail();
 // so they are invisible to passesConstraint during this same pass (see
 // unify.ts notes on the mutation-during-iteration invariant).
 export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iteration: number = 1): boolean {
+  // Defensive: rewriteAskToChoose runs inside `expand`, so by the time a
+  // pattern reaches `step` no Ask should remain. Catch any leak.
+  if (pattern.tag === "Ask") {
+    throw new Error("step: pattern is an Ask — should have been rewritten to Assert(`_choose`) by expand");
+  }
   const positives = collectPositiveNodes(pattern);
   let anyInserted = false;
 

@@ -32,15 +32,22 @@ export function create(api) {
     return inner === null ? null : inner + 1;
   }
 
+  // Token equality on hashconsed Refs and Symbols. Sufficient for matching
+  // a cell's id against a component's option entry — both go through
+  // hashcons on their way to the store.
+  function termEq(a, b) {
+    if (a.tag !== b.tag) return false;
+    if (a.tag === "Ref") return a.id === b.id;
+    if (a.tag === "Symbol") return a.name === b.name;
+    if (a.tag === "Variable") return a.name === b.name;
+    if (a.tag === "Wildcard") return true;
+    return false;
+  }
+
   function extractBoard(root, hc) {
     const cells = new Map();
-    let askId = null;
 
     function walk(node) {
-      if (node.tag === "Ask") {
-        askId = node.id;
-      }
-
       if (node.tag === "Assert") {
         const terms = node.atom.terms;
 
@@ -74,18 +81,34 @@ export function create(api) {
         }
       }
 
-      node.children.forEach(walk);
+      if (node.children) node.children.forEach(walk);
     }
 
     walk(root);
-    return { cells: [...cells.values()], askId };
+    return [...cells.values()];
+  }
+
+  // Pick the single-active-term component (if any) from the engine's pause
+  // status. ttt has exactly one ask per turn, so we expect at most one
+  // component with `activeTerms.length === 1`. Returns the active term and
+  // the set of cell-id Refs that are valid options.
+  function pickCellComponent(ctx) {
+    for (const comp of ctx.components) {
+      if (comp.activeTerms.length !== 1) continue;
+      return {
+        activeTerm: comp.activeTerms[0],
+        optionByKey: comp.options.map((tup) => tup[0]),
+      };
+    }
+    return null;
   }
 
   return {
-    render(root, hc) {
-      const { cells, askId } = extractBoard(root, hc);
+    render(root, hc, ctx) {
+      const cells = extractBoard(root, hc);
       if (cells.length === 0) return null;
 
+      const cellComp = pickCellComponent(ctx);
       const clicks = new Map();
 
       const container = document.createElement("div");
@@ -104,9 +127,22 @@ export function create(api) {
             if (cell.mark) {
               cellEl.textContent = cell.mark;
               cellEl.classList.add(`ttt-mark-${cell.mark}`);
-            } else if (askId) {
-              cellEl.classList.add("ttt-empty");
-              clicks.set(cellEl, { askId, targetId: cell.cellId });
+            } else if (cellComp) {
+              // Only register a click when the cell's id is one of the
+              // engine-enumerated options. Filters out cells the engine
+              // already excluded (e.g. via a not-empty constraint), as well
+              // as keeping clicks inert when the engine isn't paused on a
+              // choice that involves this component.
+              const isOption = cellComp.optionByKey.some(
+                (opt) => termEq(opt, cell.cellId),
+              );
+              if (isOption) {
+                cellEl.classList.add("ttt-empty");
+                clicks.set(cellEl, {
+                  activeTerms: [cellComp.activeTerm],
+                  optionTuple: [cell.cellId],
+                });
+              }
             }
           }
           grid.appendChild(cellEl);

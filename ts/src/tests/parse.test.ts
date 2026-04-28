@@ -11,23 +11,23 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 function ok(input: string): BodyTree {
   const result = parse(input);
   assert(!("message" in result), `unexpected error: ${JSON.stringify(result)}`);
-  if (result.tag === "Equal") throw new Error("ok: top-level Equal is impossible");
+  if (result.tag === "Equal" || result.tag === "Ask") throw new Error("ok: top-level Equal/Ask is impossible");
   return result;
 }
 
 // Walk into known body-bearing children. Tests construct Tree literals from
-// `parse()` whose top-level wrapper is always Match-tagged. Equal nodes can
-// appear as leaves, so descending past one is a test bug — this helper makes
-// that explicit.
+// `parse()` whose top-level wrapper is always Match-tagged. Equal/Ask nodes
+// can appear as leaves, so descending past one is a test bug — this helper
+// makes that explicit.
 function kid(t: BodyTree, ...path: number[]): BodyTree {
   let cur: Tree = t;
   for (const i of path) {
-    if (cur.tag === "Equal") throw new Error("Equal has no children");
+    if (cur.tag === "Equal" || cur.tag === "Ask") throw new Error(`${cur.tag} has no children`);
     const next: Tree | undefined = cur.children[i];
     if (next === undefined) throw new Error(`no child at ${i}`);
     cur = next;
   }
-  if (cur.tag === "Equal") throw new Error("expected body-bearing node");
+  if (cur.tag === "Equal" || cur.tag === "Ask") throw new Error("expected body-bearing node");
   return cur;
 }
 
@@ -61,7 +61,7 @@ function kid(t: BodyTree, ...path: number[]): BodyTree {
 
 // all prefixes
 {
-  const tree = ok("- a\n+ b\n? c\n! d\n< e\n= f g");
+  const tree = ok("- a\n+ b\n? C\n! d\n< e\n= f g");
   const kids = treeChildren(tree);
   assert.equal(kids.length, 6);
   assert.deepEqual(kids.map(k => k.tag), [
@@ -111,6 +111,54 @@ function kid(t: BodyTree, ...path: number[]): BodyTree {
   assert("message" in result);
   assert.equal((result as { line: number }).line, 1);
   console.log("PASS: invalid prefix error");
+}
+
+// `?` line with a non-Variable term (head symbol) is rejected
+{
+  const result = parse("? foo X");
+  assert("message" in result);
+  const msg = (result as { message: string }).message;
+  assert.ok(msg.includes("variable"), `expected variable-only error, got: ${msg}`);
+  console.log("PASS: `? <symbol>` rejected");
+}
+
+// `?` line with no variables (just symbols) is also rejected
+{
+  const result = parse("? ask");
+  assert("message" in result);
+  console.log("PASS: `? ask` (single symbol) rejected");
+}
+
+// `?` line cannot have indented children
+{
+  const result = parse("? A\n  + bar");
+  assert("message" in result);
+  const msg = (result as { message: string }).message;
+  assert.ok(msg.includes("?"), `expected '?' error, got: ${msg}`);
+  console.log("PASS: `?` line cannot have child nodes");
+}
+
+// `?` line with only variables is fine
+{
+  const tree = ok("? A B");
+  const ask = tree.children[0]!;
+  assert.equal(ask.tag, "Ask");
+  console.log("PASS: `? A B` parses");
+}
+
+// Tokens starting with `_` are reserved (rejected at parse time)
+{
+  const result = parse("+ _foo");
+  assert("message" in result);
+  const msg = (result as { message: string }).message;
+  assert.ok(msg.includes("reserved"), `expected reserved-token error, got: ${msg}`);
+  console.log("PASS: `_`-prefixed token rejected in atom");
+}
+
+// Bare wildcard `_` still works
+{
+  const tree = ok("- foo _");
+  console.log("PASS: bare `_` wildcard still parses");
 }
 
 // ids are assigned from line numbers
@@ -337,7 +385,7 @@ function getAggInfo(node: Tree) {
   assert.equal(patterns.length, 2);
   const p0 = patterns[0]!;
   const p1 = patterns[1]!;
-  if (p0.tag === "Equal" || p1.tag === "Equal") throw new Error("expected body-bearing patterns");
+  if (p0.tag === "Equal" || p0.tag === "Ask" || p1.tag === "Equal" || p1.tag === "Ask") throw new Error("expected body-bearing patterns");
   // First pattern: lines 1-2
   assert.deepEqual(kid(p0, 0).span, { line: 1 });
   assert.deepEqual(kid(p0, 0, 0).span, { line: 2 });

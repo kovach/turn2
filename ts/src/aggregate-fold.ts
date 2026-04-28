@@ -3,13 +3,9 @@ import { sym } from "./types.js";
 import { termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
-import { before, idKey, insertChild, parentIdOf, prior, type NodeRow, type RefStore } from "./refstore.js";
+import { before, idKey, insertChild, parentIdOf, type NodeRow, type RefStore } from "./refstore.js";
 
-function isSymbol(t: Term, name: string): boolean {
-  return t.tag === "Symbol" && t.name === name;
-}
-
-interface AggInstance {
+export interface AggInstance {
   row: NodeRow;
   lexId: Term;
   instanceId: Term;
@@ -31,7 +27,7 @@ interface AggResult {
 // Collect agg-instance / agg-binding / agg-result rows from the store. The
 // symbol index buckets rows by first-atom symbol, so we only touch the three
 // relevant buckets — no full scan of the reference.
-function collectAggNodes(
+export function collectAggNodes(
   ref: RefStore,
   hc: HashconsState,
 ): { instances: AggInstance[]; bindings: AggBinding[]; results: AggResult[] } {
@@ -39,7 +35,7 @@ function collectAggNodes(
   const bindings: AggBinding[] = [];
   const results: AggResult[] = [];
 
-  for (const row of ref.index.get("agg-instance") ?? []) {
+  for (const row of ref.index.get("_agg-instance") ?? []) {
     const terms = row.node.atom.terms;
     if (terms.length < 2) continue;
     const parent = parentIdOf(ref, row.node.id, hc);
@@ -52,7 +48,7 @@ function collectAggNodes(
     });
   }
 
-  for (const row of ref.index.get("agg-binding") ?? []) {
+  for (const row of ref.index.get("_agg-binding") ?? []) {
     const terms = row.node.atom.terms;
     if (terms.length < 3) continue;
     bindings.push({
@@ -63,7 +59,7 @@ function collectAggNodes(
     });
   }
 
-  for (const row of ref.index.get("agg-result") ?? []) {
+  for (const row of ref.index.get("_agg-result") ?? []) {
     const terms = row.node.atom.terms;
     if (terms.length < 3) continue;
     results.push({
@@ -75,10 +71,17 @@ function collectAggNodes(
   return { instances, bindings, results };
 }
 
-function hasResult(instance: AggInstance, results: AggResult[], hc: HashconsState): boolean {
+export function hasResult(instance: AggInstance, results: AggResult[], hc: HashconsState): boolean {
   return results.some(
     (r) => termEq(r.lexId, instance.lexId, hc) && termEq(r.instanceId, instance.instanceId, hc),
   );
+}
+
+// Paused agg-instances: every instance with no matching agg-result row.
+// Tier selection happens in the scheduler — this is just the filter.
+export function collectPausedAggregates(ref: RefStore, hc: HashconsState): AggInstance[] {
+  const { instances, results } = collectAggNodes(ref, hc);
+  return instances.filter((i) => !hasResult(i, results, hc));
 }
 
 function getBindingsForInstance(instance: AggInstance, bindings: AggBinding[], hc: HashconsState): AggBinding[] {
@@ -100,42 +103,23 @@ function sortBindings(ref: RefStore, hc: HashconsState, bindings: AggBinding[], 
   });
 }
 
-// Scheduling uses `prior` (= before ∪ contains⁻¹) rather than `before`: a
-// nested `agg-instance` must close first so the outer fold observes its
-// `agg-result`. The `contains⁻¹` component is what captures that.
-function selectEarliestTier(ref: RefStore, hc: HashconsState, paused: AggInstance[]): AggInstance[] {
-  if (paused.length === 0) return [];
-  if (paused.length === 1) return paused;
-
-  const sorted = [...paused].sort((a, b) => {
-    const aId = idKey(a.row.id, hc);
-    const bId = idKey(b.row.id, hc);
-    if (prior(ref, aId, bId)) return -1;
-    if (prior(ref, bId, aId)) return 1;
-    return 0; // incomparable — same tier
-  });
-
-  const earliest: AggInstance[] = [sorted[0]!];
-  const firstId = idKey(sorted[0]!.row.id, hc);
-  for (let i = 1; i < sorted.length; i++) {
-    const nextId = idKey(sorted[i]!.row.id, hc);
-    if (prior(ref, firstId, nextId)) {
-      break; // this and all subsequent are after the first
-    }
-    earliest.push(sorted[i]!);
-  }
-  return earliest;
-}
-
-export function closeAggregates(ref: RefStore, hc: HashconsState, iteration: number = 1): boolean {
-  const { instances, bindings, results } = collectAggNodes(ref, hc);
-
-  const paused = instances.filter((i) => !hasResult(i, results, hc));
-  const earliest = selectEarliestTier(ref, hc, paused);
+// Pure folder: close exactly the agg-instances handed in. Caller is
+// responsible for picking which ones (typically the earliest scheduling
+// tier — see scheduler.ts). Bindings are re-collected from the store
+// because the caller usually already discarded them after picking
+// schedulables, and re-walking the symbol index is cheap.
+export function closeAggregates(
+  ref: RefStore,
+  hc: HashconsState,
+  iteration: number,
+  toClose: AggInstance[],
+): boolean {
+  if (toClose.length === 0) return false;
+  const { bindings } = collectAggNodes(ref, hc);
 
   let changed = false;
 
-  for (const instance of earliest) {
+  for (const instance of toClose) {
     const matchingBindings = getBindingsForInstance(instance, bindings, hc);
 
     // Aggregator funcName is encoded in the lexId as agg_funcName_N.
@@ -153,9 +137,9 @@ export function closeAggregates(ref: RefStore, hc: HashconsState, iteration: num
     // Insert `agg-result <lexId> <instanceId> <acc>` as a sibling of agg-instance.
     const rawResultId: Term = {
       tag: "Atom",
-      atom: { terms: [sym("id"), sym("agg-result"), instance.lexId, instance.instanceId] },
+      atom: { terms: [sym("id"), sym("_agg-result"), instance.lexId, instance.instanceId] },
     };
-    const rawAtom = { terms: [sym("agg-result"), instance.lexId, instance.instanceId, acc] };
+    const rawAtom = { terms: [sym("_agg-result"), instance.lexId, instance.instanceId, acc] };
     const resultId = hashconsTerm(rawResultId, hc);
     const resultAtom = hashconsAtom(rawAtom, hc);
 

@@ -52,20 +52,22 @@ export type Tree =
   | (TreeBase & TreeBody & { tag: "Before"; constraint: MatchConstraint })
   | (TreeBase & TreeBody & { tag: "Overlap"; constraint: MatchConstraint })
   | (TreeBase & TreeBody & { tag: "Assert" })
-  | (TreeBase & TreeBody & { tag: "Ask" })
   | (TreeBase & TreeBody & { tag: "Constrain" })
   | (TreeBase & TreeBody & { tag: "Aggregate"; info: AggregateInfo })
+  | (TreeBase & { tag: "Ask"; id: Term; atom: Atom })
   | (TreeBase & { tag: "Equal"; lhs: Term; rhs: Term });
 
-// Body-bearing cases — every Tree case except Equal. Walkers that recurse on
-// `tree.children` should narrow to this with `tree.tag !== "Equal"` first.
+// Body-bearing cases — every Tree case except Equal and Ask. Walkers that
+// recurse on `tree.children` should narrow to this with
+// `tree.tag !== "Equal" && tree.tag !== "Ask"` first.
 export type BodyTree = Extract<Tree, TreeBody>;
 
-// Safe accessors for the body fields. Equal carries none of these — the
-// accessors return empty/undefined for Equal so callers (mostly tests and
-// generic walkers) don't have to repeat the tag guard inline.
+// Safe accessors for the body fields. Equal carries none of these and Ask
+// carries id+atom but no children — the accessors return empty/undefined
+// for the missing positions so callers (mostly tests and generic walkers)
+// don't have to repeat the tag guard inline.
 export const treeChildren = (t: Tree): readonly Tree[] =>
-  t.tag === "Equal" ? [] : t.children;
+  t.tag === "Equal" || t.tag === "Ask" ? [] : t.children;
 export const treeAtom = (t: Tree): Atom | undefined =>
   t.tag === "Equal" ? undefined : t.atom;
 export const treeAtomTerms = (t: Tree): readonly Term[] =>

@@ -8,12 +8,12 @@ import { treeAtomTerms, treeChildren } from "../types.js";
 function parseOne(input: string): BodyTree {
   const result = parse(input);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
-  if (result.tag === "Equal") throw new Error("parseOne: top-level Equal is impossible");
+  if (result.tag === "Equal" || result.tag === "Ask") throw new Error("parseOne: top-level Equal/Ask is impossible");
   return result;
 }
 
 function asBody(t: Tree): BodyTree {
-  if (t.tag === "Equal") throw new Error("expected body-bearing tree, got Equal");
+  if (t.tag === "Equal" || t.tag === "Ask") throw new Error(`expected body-bearing tree, got ${t.tag}`);
   return t;
 }
 
@@ -21,7 +21,7 @@ function asBody(t: Tree): BodyTree {
 function kid(t: BodyTree, ...path: number[]): BodyTree {
   let cur: Tree = t;
   for (const i of path) {
-    if (cur.tag === "Equal") throw new Error("Equal has no children");
+    if (cur.tag === "Equal" || cur.tag === "Ask") throw new Error(`${cur.tag} has no children`);
     const next: Tree | undefined = cur.children[i];
     if (next === undefined) throw new Error(`no child at ${i}`);
     cur = next;
@@ -37,7 +37,7 @@ function parseRules(input: string, prefix = "r"): Tree[] {
 
 function literalTypes(tree: Tree): string[] {
   const prefix = tree.tag[0]!.toLowerCase();
-  if (tree.tag === "Equal") return [prefix];
+  if (tree.tag === "Equal" || tree.tag === "Ask") return [prefix];
   return [prefix, ...tree.children.flatMap(literalTypes)];
 }
 
@@ -162,9 +162,9 @@ function literalTypes(tree: Tree): string[] {
   const { result } = fixpoint([...facts, ...rules]);
 
   function collect(tree: Tree, type: string): BodyTree[] {
-    if (tree.tag === "Equal") return [];
+    if (tree.tag === "Equal" || tree.tag === "Ask") return [];
     const self: BodyTree[] = tree.tag === type ? [tree] : [];
-    return self.concat(tree.children.flatMap((c) => collect(c, type)));
+    return self.concat(tree.children.flatMap((c: Tree) => collect(c, type)));
   }
 
   const inserted = collect(result, "Assert").filter((n) => n.id.tag === "Ref");
@@ -188,7 +188,7 @@ function literalTypes(tree: Tree): string[] {
   assert.equal(agg1.tag, "Assert");
   assert.equal(agg1.atom.terms[0]?.tag, "Symbol");
   if (agg1.atom.terms[0]?.tag === "Symbol") {
-    assert.equal(agg1.atom.terms[0].name, "agg-instance");
+    assert.equal(agg1.atom.terms[0].name, "_agg-instance");
   }
   console.log("PASS: aggregate rule 1 has + agg-instance");
 
@@ -199,7 +199,7 @@ function literalTypes(tree: Tree): string[] {
   assert.equal(agg2.tag, "Match");
   assert.equal(agg2.atom.terms[0]?.tag, "Symbol");
   if (agg2.atom.terms[0]?.tag === "Symbol") {
-    assert.equal(agg2.atom.terms[0].name, "agg-instance");
+    assert.equal(agg2.atom.terms[0].name, "_agg-instance");
   }
 
   // Local-pattern (- t X) is a child of agg-instance
@@ -212,7 +212,7 @@ function literalTypes(tree: Tree): string[] {
   assert.ok(binding, "expected agg-binding as child");
   assert.equal(binding.tag, "Assert");
   if (binding.tag === "Assert" && binding.atom.terms[0]?.tag === "Symbol") {
-    assert.equal(binding.atom.terms[0].name, "agg-binding");
+    assert.equal(binding.atom.terms[0].name, "_agg-binding");
   }
   console.log("PASS: aggregate rule 2 has - agg-instance with local-pattern + agg-binding children");
 }
@@ -230,7 +230,7 @@ function literalTypes(tree: Tree): string[] {
   const aggResult = kid(foo3, 0);
   assert.equal(aggResult.tag, "Match");
   if (aggResult.atom.terms[0]?.tag === "Symbol") {
-    assert.equal(aggResult.atom.terms[0].name, "agg-result");
+    assert.equal(aggResult.atom.terms[0].name, "_agg-result");
   }
   // Second child should be + note Total
   const note = kid(foo3, 1);
@@ -311,7 +311,7 @@ function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]):
   const r2 = rules[1]!;
   const aggBinding = kid(r2, 0, 0, 1);
   assert.equal(aggBinding.tag, "Assert");
-  // agg-binding atom: [sym("agg-binding"), lexId, nodeId, X]. X must remain
+  // agg-binding atom: [sym("_agg-binding"), lexId, nodeId, X]. X must remain
   // a Variable (bound by the - t X sibling at match time) — not rewritten.
   const xTerm = aggBinding.atom.terms[3]!;
   assert.deepEqual(xTerm, { tag: "Variable", name: "X" },
@@ -319,15 +319,20 @@ function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]):
   console.log("PASS: rewriteUnboundAssertVars leaves aggBinding args alone");
 }
 
-// Ask node: same treatment as Assert
+// Ask node: rewritten to Assert(`_choose`) before rewriteUnboundAssertVars
+// runs, so it shows up as Assert with `_choose` head. The Ask's variable
+// receives the same id-atom rewrite an Assert would.
 {
-  const rules = expandAll([idExpand(parseOne("- a X\n  ? b Y"), "r1")]);
-  const askNode = kid(rules[0]!, 0, 0);
-  assert.equal(askNode.tag, "Ask");
-  const rewritten = askNode.atom.terms[1]!;
+  const rules = expandAll([idExpand(parseOne("- a X\n  ? Y"), "r1")]);
+  const chooseNode = kid(rules[0]!, 0, 0);
+  assert.equal(chooseNode.tag, "Assert");
+  const head = chooseNode.atom.terms[0]!;
+  assert.ok(head.tag === "Symbol" && head.name === "_choose",
+    `expected '_choose' head, got ${JSON.stringify(head)}`);
+  const rewritten = chooseNode.atom.terms[1]!;
   assert.ok(isIdAtomFor(rewritten, "r1", ["X1"]),
     `expected fresh id atom, got ${JSON.stringify(rewritten)}`);
-  console.log("PASS: rewriteUnboundAssertVars covers Ask");
+  console.log("PASS: rewriteUnboundAssertVars covers Ask (now Assert(_choose))");
 }
 
 // End-to-end: no Variable terms survive into the reference tree

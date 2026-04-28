@@ -48,6 +48,8 @@ function _parseNodes(input: string): Tree[] | ParseError {
       const close = afterIndent.indexOf("]", bracketStart + 1);
       if (close === -1) return { line: lineno, message: "unclosed '[' in node id" };
       const idTokens = tokenize(afterIndent.slice(bracketStart + 1, close));
+      const idErr = checkReservedTokens(idTokens, lineno);
+      if (idErr) return idErr;
       const idTerms = parseTerms(idTokens);
       if (idTerms.length !== 1) return { line: lineno, message: "node id must be a single term" };
       explicitId = idTerms[0]!;
@@ -65,15 +67,25 @@ function _parseNodes(input: string): Tree[] | ParseError {
       if (tokens.length === 0) {
         return { line: lineno, message: "macro invocation requires a name" };
       }
+      const argTokens = tokens.slice(1);
+      const macroErr = checkReservedTokens(argTokens, lineno);
+      if (macroErr) return macroErr;
       const name = tokens[0]!;
-      const args = tokens.length > 1 ? parseTerms(tokens.slice(1)) : [];
+      // The macro name itself must not start with `_` either.
+      if (name.length > 1 && name[0] === "_") {
+        return { line: lineno, message: `tokens starting with '_' are reserved (got '${name}')` };
+      }
+      const args = argTokens.length > 0 ? parseTerms(argTokens) : [];
       macroInvocation = { name, args };
     } else if (literalTag === "Aggregate") {
       const parsed = parseAggregateLine(rest, lineno);
       if ("message" in parsed) return parsed;
       aggregateInfo = parsed;
     } else {
-      terms = rest === "" ? [] : parseTerms(tokenize(rest));
+      const restTokens = rest === "" ? [] : tokenize(rest);
+      const restErr = checkReservedTokens(restTokens, lineno);
+      if (restErr) return restErr;
+      terms = parseTerms(restTokens);
     }
 
     let node: Tree;
@@ -85,6 +97,21 @@ function _parseNodes(input: string): Tree[] | ParseError {
         tag: "Equal",
         lhs: terms[0]!,
         rhs: terms[1]!,
+        span: { line: lineno },
+        ...(macroInvocation && { macroInvocation }),
+      };
+    } else if (literalTag === "Ask") {
+      // Ask atoms must be a (possibly empty) list of Variables. The `_choose`
+      // expansion in expand.ts treats them like positive id-expansion subjects.
+      for (const t of terms) {
+        if (t.tag !== "Variable") {
+          return { line: lineno, message: "'?' atom may only contain variables" };
+        }
+      }
+      node = {
+        tag: "Ask",
+        id: explicitId ?? { tag: "Variable", name: String(lineno) },
+        atom: { terms },
         span: { line: lineno },
         ...(macroInvocation && { macroInvocation }),
       };
@@ -106,6 +133,9 @@ function _parseNodes(input: string): Tree[] | ParseError {
         if (top.tag === "Equal") {
           return { line: lineno, message: "'=' line cannot have child nodes" };
         }
+        if (top.tag === "Ask") {
+          return { line: lineno, message: "'?' line cannot have child nodes" };
+        }
         top.children.push(completed);
       } else {
         roots.push(completed);
@@ -120,6 +150,9 @@ function _parseNodes(input: string): Tree[] | ParseError {
     if (top !== undefined) {
       if (top.tag === "Equal") {
         return { line: 0, message: "'=' line cannot have child nodes" };
+      }
+      if (top.tag === "Ask") {
+        return { line: 0, message: "'?' line cannot have child nodes" };
       }
       top.children.push(node);
     } else {
@@ -151,17 +184,15 @@ type BodyTagPayload =
   | { tag: "Before"; constraint: "any" }
   | { tag: "Overlap"; constraint: "any" }
   | { tag: "Assert" }
-  | { tag: "Ask" }
   | { tag: "Constrain" }
   | { tag: "Aggregate"; info: AggregateInfo };
 
-function buildTreePayload(tag: Exclude<LiteralTag, "Equal">, aggInfo?: AggregateInfo): BodyTagPayload {
+function buildTreePayload(tag: Exclude<LiteralTag, "Equal" | "Ask">, aggInfo?: AggregateInfo): BodyTagPayload {
   switch (tag) {
     case "Match": return { tag: "Match", constraint: "any" };
     case "Before": return { tag: "Before", constraint: "any" };
     case "Overlap": return { tag: "Overlap", constraint: "any" };
     case "Assert": return { tag: "Assert" };
-    case "Ask": return { tag: "Ask" };
     case "Constrain": return { tag: "Constrain" };
     case "Aggregate": return { tag: "Aggregate", info: aggInfo! };
   }
@@ -169,6 +200,17 @@ function buildTreePayload(tag: Exclude<LiteralTag, "Equal">, aggInfo?: Aggregate
 
 function tokenize(s: string): string[] {
   return s.replace(/\(/g, " ( ").replace(/\)/g, " ) ").trim().split(/\s+/).filter((t) => t.length > 0);
+}
+
+// Tokens beginning with `_` (other than the bare wildcard `_`) are reserved
+// for engine-emitted predicates like `_choose`, `_agg-instance`, etc.
+function checkReservedTokens(tokens: string[], lineno: number): ParseError | null {
+  for (const tok of tokens) {
+    if (tok.length > 1 && tok[0] === "_") {
+      return { line: lineno, message: `tokens starting with '_' are reserved (got '${tok}')` };
+    }
+  }
+  return null;
 }
 
 function parseAggregateLine(rest: string, lineno: number): AggregateInfo | ParseError {
@@ -189,9 +231,17 @@ function parseAggregateLine(rest: string, lineno: number): AggregateInfo | Parse
 
   const tokens = tokenize(beforeArrow);
   const funcName = tokens[0]!;
-  const args = tokens.length > 1 ? parseTerms(tokens.slice(1)) : [];
+  if (funcName.length > 1 && funcName[0] === "_") {
+    return { line: lineno, message: `tokens starting with '_' are reserved (got '${funcName}')` };
+  }
+  const argTokens = tokens.slice(1);
+  const argErr = checkReservedTokens(argTokens, lineno);
+  if (argErr) return argErr;
+  const args = argTokens.length > 0 ? parseTerms(argTokens) : [];
 
   const outTokens = tokenize(afterArrow);
+  const outErr = checkReservedTokens(outTokens, lineno);
+  if (outErr) return outErr;
   const outTerms = parseTerms(outTokens);
   if (outTerms.length !== 1) {
     return { line: lineno, message: "aggregate output must be a single term" };
@@ -225,13 +275,13 @@ function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
 
 function adjustSpans(tree: Tree, offset: number): Tree {
   const newSpan = tree.span ? { ...tree.span, line: tree.span.line + offset } : undefined;
-  if (tree.tag === "Equal") {
+  if (tree.tag === "Equal" || tree.tag === "Ask") {
     return { ...tree, ...(newSpan && { span: newSpan }) };
   }
   return {
     ...tree,
     ...(newSpan && { span: newSpan }),
-    children: tree.children.map(c => adjustSpans(c, offset)),
+    children: tree.children.map((c: Tree) => adjustSpans(c, offset)),
   };
 }
 
@@ -295,7 +345,7 @@ export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | Par
     const expanded = expandMacros(adjusted);
     // The chunk parser always wraps its result in an implicit Match root, so
     // `expanded` is body-bearing; guard for the type.
-    if (expanded.tag === "Equal") continue;
+    if (expanded.tag === "Equal" || expanded.tag === "Ask") continue;
     // Skip chunks that contain only comments — they produce no rule nodes.
     if (expanded.children.length === 0) continue;
     trees.push(idExpand(expanded, `${ruleNamePrefix}${ruleIndex++}`));
@@ -310,6 +360,10 @@ export function formatTree(tree: Tree, indent = 0): string {
   if (tree.tag === "Equal") {
     return `${pad}= ${formatTerm(tree.lhs)} ${formatTerm(tree.rhs)}\n`;
   }
+  if (tree.tag === "Ask") {
+    const terms = tree.atom.terms.map(formatTerm).join(" ");
+    return pad + (terms === "" ? "?" : `? ${terms}`) + "\n";
+  }
   let line: string;
   if (tree.tag === "Aggregate") {
     const { funcName, args, out } = tree.info;
@@ -319,7 +373,7 @@ export function formatTree(tree: Tree, indent = 0): string {
     line = formatNode(tree);
   }
   return pad + line + "\n" +
-    tree.children.map((c) => formatTree(c, indent + 1)).join("");
+    tree.children.map((c: Tree) => formatTree(c, indent + 1)).join("");
 }
 
 export function formatNode(tree: BodyTree): string {
@@ -363,7 +417,7 @@ export function buildSpanIndex(trees: Tree[]): Map<number, Tree[]> {
       list.push(t);
       index.set(t.span.line, list);
     }
-    if (t.tag !== "Equal") t.children.forEach(walk);
+    if (t.tag !== "Equal" && t.tag !== "Ask") t.children.forEach(walk);
   }
   trees.forEach(walk);
   return index;

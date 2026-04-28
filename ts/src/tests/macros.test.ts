@@ -8,7 +8,7 @@ import { treeAtomTerms, treeChildren } from "../types.js";
 function parseOne(input: string): BodyTree {
   const result = parse(input);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
-  if (result.tag === "Equal") throw new Error("parseOne: top-level Equal is impossible");
+  if (result.tag === "Equal" || result.tag === "Ask") throw new Error("parseOne: top-level Equal/Ask is impossible");
   return result;
 }
 

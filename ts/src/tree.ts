@@ -43,9 +43,14 @@ export interface PositiveNode {
   prevBindableSibling: BodyTree | null;
 }
 
+// Called from `step` after the Ask → Assert(`_choose`) post-pass — so
+// Ask never reaches this walk. Throw if it does.
 export function collectPositiveNodes(pattern: Tree): PositiveNode[] {
   const out: PositiveNode[] = [];
   function walk(node: Tree, parent: BodyTree | null, path: number[]): void {
+    if (node.tag === "Ask") {
+      throw new Error("collectPositiveNodes: unexpected Ask — should have been rewritten to Assert(`_choose`) by expand");
+    }
     if (parent !== null && isPositive(node) && node.tag !== "Equal") {
       const selfIdx = path[path.length - 1]!;
       let prev: BodyTree | null = null;
@@ -91,7 +96,7 @@ function atomContainsValue(tree: BodyTree, value: Term, hc: HashconsState): bool
 }
 
 function* walkTree(tree: Tree): Generator<BodyTree> {
-  if (tree.tag === "Equal") return;
+  if (tree.tag === "Equal" || tree.tag === "Ask") return;
   yield tree;
   for (const child of tree.children) {
     yield* walkTree(child);

@@ -15,9 +15,11 @@ export type { NodeId } from "./types.js";
 
 // A node row. Children are NOT carried here; to walk the children of a row,
 // query `store.children.get(tokenOfId(id))`. The store only ever stores rows
-// for the three insert-target tags — Match/Before/Overlap/Equal/Aggregate are
+// for the two insert-target tags — Ask is rewritten to Assert(`_choose`) by
+// `rewriteAskToChoose`, and Match/Before/Overlap/Equal/Aggregate are
 // pattern-only constructs and never reach a row, so the union is narrowed
-// here. See plans/refactor-tree-type-pt2.md.
+// here. See plans/refactor-tree-type-pt2.md and
+// plans/constraint-tuples.md §0d.
 interface NodeRowBase {
   id: Term;
   atom: Atom;
@@ -27,19 +29,19 @@ interface NodeRowBase {
 
 export type NodeRow =
   | (NodeRowBase & { tag: "Assert" })
-  | (NodeRowBase & { tag: "Ask" })
   | (NodeRowBase & { tag: "Constrain" });
 
 // Build a NodeRow from a Tree node, overriding `id`, `atom`, and `gen`.
 // Throws if `template` carries a tag that the narrowed NodeRow union forbids
 // — a runtime guard so any future regression in `expand` (e.g. an Aggregate
-// slipping past the agg-instance rewrite) fails loudly instead of silently
-// inserting a row the unifier won't see.
+// slipping past the agg-instance rewrite, or an Ask that didn't get
+// rewritten to Assert(`_choose`)) fails loudly instead of silently inserting
+// a row the unifier won't see.
 export function nodeRowFromTree(
   template: Tree,
   fields: { id: Term; atom: Atom; gen: number; span?: Span },
 ): NodeRow {
-  if (template.tag !== "Assert" && template.tag !== "Ask" && template.tag !== "Constrain") {
+  if (template.tag !== "Assert" && template.tag !== "Constrain") {
     throw new Error(`nodeRowFromTree: cannot project tag ${template.tag} into a NodeRow`);
   }
   return { tag: template.tag, ...fields };
@@ -115,7 +117,7 @@ export function parentIdOf(store: RefStore, id: Term, hc: HashconsState): Term |
 
 // Build an empty RefStore seeded with a single synthetic Assert-tagged root
 // row. The root's tag is never consulted by any read path; Assert is chosen
-// so the store rows stay within the narrow {Assert, Ask, Constrain} union.
+// so the store rows stay within the narrow {Assert, Constrain} union.
 export function emptyRefStore(hc: HashconsState): RefStore {
   const nodes = new Map<NodeId, NodeRow>();
   const children = new Map<NodeId, NodeRow[]>();

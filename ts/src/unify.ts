@@ -339,8 +339,8 @@ export function collectMatches(
   const store = emptyRefStore(hc);
 
   function insertSubtree(node: Tree, parentId: Term): Term {
-    if (node.tag !== "Assert" && node.tag !== "Ask" && node.tag !== "Constrain") {
-      throw new Error(`collectMatches: reference subtree has tag ${node.tag}; expected Assert/Ask/Constrain`);
+    if (node.tag !== "Assert" && node.tag !== "Constrain") {
+      throw new Error(`collectMatches: reference subtree has tag ${node.tag}; expected Assert/Constrain`);
     }
     const hashedId = hashconsTerm(node.id, hc);
     const hashedAtom = hashconsAtom(node.atom, hc);
@@ -362,8 +362,8 @@ export function collectMatches(
     }
     return hashedId;
   }
-  if (reference.tag === "Equal") {
-    throw new Error("collectMatches: top-level Equal is not a valid reference");
+  if (reference.tag === "Equal" || reference.tag === "Ask") {
+    throw new Error(`collectMatches: top-level ${reference.tag} is not a valid reference`);
   }
   let prev: Term | null = null;
   for (const child of reference.children) {

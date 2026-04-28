@@ -1,5 +1,4 @@
 # GUI cleanup
-- result view highlights should go from bottom of line to top; same with the mouse-over hit box
 
 # rule name parsing
 - add a step to the parser that parses an optional rulename prefix for each rule
@@ -14,31 +13,54 @@
 
 - before expansion, check that the initial program has unique name per rule
 
-# implement constraint tuples
+# implement constraint tuples pt1
 plan: plans/constraint-tuples.md
+
+## step 0: refactor `Ask`
+- ask becomes a node without TreeBody; instead it has two fields: an id and an array of Variable
+  - represent this array as an Atom, but check during parsing that each is a variable
+- it is a positive node type, and subject to the step where `id` and unbound variable terms are expanded into Atom terms, just like `id`
+  - that is, the atom of terms will be expanded into `id` atom terms
+- similar to how aggregate nodes are expanded into Assert of `agg-instance`, expand these nodes into Assert of `choose` with given id and atom of arguments
 
 ## step 1: recognizing active choices
 - we are going to stop fixpoints early if there is an *unresolved choice* that is *earlier* than any pending aggregate
-  - an unresolved choice is a term C which was asserted by an `Ask` atom like `?foo C` that
+  - an unresolved choice is a term C which was asserted by an `Ask` atom like `?choose C` that
     does not have a corresponding `is C Value` tuple in the store.
 - recall that, while evaluating aggregates, we only resolve a pending aggregate that has no earlier pending aggregate
 - we are going to consider all unresolved choices and pending aggregates together
-  - if any of the earliest things are aggregates, resolve them
+  - if any of the earliest things are aggregates, resolve those aggregates
   - if all of the earliest things are choices, break out from the fixpoint.
-- the fixpoint now returns whether the reason for breaking was one or more pending choices
-  - it should return those pending/"active" choices (e.g., a list containign the actual atom bound to `C`)
+- the fixpoint now returns a tagged union indicating the reason for breaking
+  - if pending choices, it should return the set of all pending/"active" choices (e.g., a list containign the actual atom bound to `C`)
+  - if it runs out of gas, returns number of steps run
   - otherwise it returns a default case indicating completion
 
-- the `web.ts` interface will change somewhat significantly
-  - instead of the existing code for locating choices and binding them to clicks, we will extract the available choice(s) from the fixpoint output
-  - in the ttt.sl/ttt.js example, clicking will respond to the currently active choice
-
 ## step 2: processing Constrain tuples in the output
-- the `Constrain` tuples should behave exactly like assert in all regards (besides being tagged differently in the store) during fixpoint calculation
+- the `Constrain` tuples should behave similar to Assert during fixpoint calculation
+  - Constrain nodes are positive
+  - match nodes do not match `Constrain` tuples in ref store
 - if the fixpoint breaks due to a pending choice, we will analyze the choice term
-  - calculate the fringe (see below) for the choice value
+  - calculate the fringe (see below) for the choice term
   - filter to only the `Constrain` tuples in the fringe
-  - for now, in the web view, simply render those as a list inside the `DISPLAY` component
+- interpret the fringe as a query
+  - each tuple is like a `match` atom
+  - each choice term becomes a variable
+  - combine the fringe tuples as siblings within the match root.
+    - so e.g. `card C` and `prop C` becomes the pattern
+      ```
+      - card C
+      - prop C
+      ```
+  - normally this pattern would do nothing (since it contains no positive node).
+    instead, run this as a one-off query wrt the current tuple store
+  - display the options as a list to the user
+
+## step 3: web.ts interface
+- the `web.ts` interface will change somewhat significantly
+- instead of the existing code for locating choices and binding them to clicks, we will extract the available choice(s) from the fixpoint output
+  - e.g. in the ttt.sl/ttt.js example, clicking will respond to the currently active choice
+- the fringe query will be displayed
 
 # refactor Tree type pt 4
 split connective/positivity coupling

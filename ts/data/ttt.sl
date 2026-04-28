@@ -1,12 +1,12 @@
 / display: ttt.js
 
 / basically tic-tac-toe
-/ players, grid
 + game
   + setup
-  + turn 
+  + turn
     + actor x
 
+/ players, grid
 - setup
   + player x
   + player o
@@ -19,26 +19,30 @@
   - n C
   + cell R C
 
+/ surface every cell-row id so the per-turn ask has options to enumerate
+- [X] cell R C
++ is-cell X
+
+/ actor P fills a square with their mark.
+/   ? A             choice term; options come from `! is-cell A`
+/   + asked-cell A T  surfaces the (choice, turn) link at top level so
+/                     the click consumer below can locate the right turn
+-[T] turn
+  - actor P
+  ? A
+  + choice A
+  ! is-cell A
+
+/ Click resolution: once `+ is <A> <cellId>` is appended to source, derive
+/ the fill under the asking turn. Top-level Match siblings let us see the
+/ click-asserted `is` row (also top-level) — a Match nested inside `turn`
+/ would only descend into turn's children and miss the sibling `is`.
 - is A X
 - [X] cell R C
-- [A] ask
-  + value (cell R C)
-
-/ actor P fills a square with their mark
 - turn
   - actor P
-  ? ask
-    - value C
-    + fill C P
-
-- target-power
-  - power P
-  - power:range P R
-  ? target T
-  ? source S
-  ! land S
-  ! land T
-  ! range S T R 
+  - choice A
+  + fill (cell R C) P
 
 - game
   - fill C P
@@ -63,9 +67,6 @@
   - complete
   < player X
     + acted T
-
-- [A] ask
-  + ask-id A
 
 - fill (cell R C) _
 - cell R C
