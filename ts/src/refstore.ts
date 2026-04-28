@@ -321,14 +321,31 @@ export function* allCandidates(store: RefStore): Generator<Candidate> {
   }
 }
 
-// Materialize the store as a nested Tree — used to hand the fixpoint result to
-// existing consumers (tests, web display) that expect Tree.children. The store
-// remains the source of truth during evaluation.
-export function refStoreToTree(store: RefStore, hc: HashconsState): Tree {
+// Result of materializing the store: a tree where every node mirrors a
+// `NodeRow`. Tags are narrowed to `Assert | Constrain` (the only tags rows
+// carry — see `NodeRow` above), `gen` is required (rows always populate it),
+// and `children` recurses into the same narrowed type, so an `Equal`/`Ask`/
+// pattern-only node can never appear anywhere in the result.
+interface ResultTreeBase {
+  id: Term;
+  atom: Atom;
+  gen: number;
+  span?: Span;
+  children: ResultTree[];
+}
+export type ResultTree =
+  | (ResultTreeBase & { tag: "Assert" })
+  | (ResultTreeBase & { tag: "Constrain" });
+
+// Materialize the store as a nested ResultTree — used to hand the fixpoint
+// result to existing consumers (tests, web display) that expect a recursive
+// children-bearing tree. The store remains the source of truth during
+// evaluation.
+export function refStoreToTree(store: RefStore, hc: HashconsState): ResultTree {
   return buildTreeFromRow(store, store.rootId, hc);
 }
 
-function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): Tree {
+function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): ResultTree {
   const key = idKey(id, hc);
   const row = store.nodes.get(key);
   if (!row) throw new Error(`refStoreToTree: no row for id token ${key}`);

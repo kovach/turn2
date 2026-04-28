@@ -4,7 +4,7 @@ import { closeAggregates, type AggInstance } from "./aggregate-fold.js";
 import { collectSchedulables, selectEarliestTier, type UnresolvedChoice } from "./scheduler.js";
 import { computeComponents, type ComponentOptions } from "./constraint-query.js";
 import { createHashcons, type HashconsState } from "./hashcons.js";
-import { emptyRefStore, refStoreToTree, type RefStore } from "./refstore.js";
+import { emptyRefStore, refStoreToTree, type RefStore, type ResultTree } from "./refstore.js";
 import type { Term, Tree } from "./types.js";
 
 // Outcome of a fixpoint run, in the order the outer loop checks them:
@@ -44,7 +44,7 @@ function innerFixpoint(patterns: Tree[], ref: RefStore, gas: number, hc: Hashcon
   return { steps, iteration };
 }
 
-export function fixpoint(rawPatterns: Tree[], gas = 20): { result: Tree; steps: number; hc: HashconsState; expandedPatterns: Tree[]; status: FixpointStatus } {
+export function fixpoint(rawPatterns: Tree[], gas = 20): { result: ResultTree; steps: number; hc: HashconsState; expandedPatterns: Tree[]; status: FixpointStatus } {
   const expanded = expandAll(rawPatterns);
   const patterns = expanded.flatMap(generateDeltaVariants);
   const hc = createHashcons();

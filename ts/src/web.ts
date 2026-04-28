@@ -4,6 +4,7 @@ import { expandTerm, type HashconsState } from "./hashcons.js";
 import type { ComponentOptions } from "./constraint-query.js";
 import type { UnresolvedChoice } from "./scheduler.js";
 import type { Tree, Term, Atom } from "./types.js";
+import type { ResultTree } from "./refstore.js";
 
 // Single source of truth for line-leading markers. The `Record<LiteralTag, …>`
 // shape makes TS fail this file if a new Tree case is added without a marker
@@ -209,6 +210,7 @@ function buildIdToLineMap(expandedPatterns: Tree[]): Map<string, number> {
         map.set(`${info.rule}:${info.lineId}`, node.span.line);
       }
     }
+    if (node.tag === "Ask") return;  // Ask has id/atom but no children
     node.children.forEach(walk);
   }
   expandedPatterns.forEach(walk);
@@ -350,37 +352,53 @@ async function initServer() {
   }
 }
 
-function schedulePut() {
-  if (debounceTimer !== null) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(async () => {
-    debounceTimer = null;
-    if (mode !== "attached" || currentFile === null || !lastValid) return;
-    try {
-      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
-        method: "PUT", body: patternsEl.value,
-      });
-      if (!res.ok) throw new Error();
+// PUT a snapshotted (file, content) pair. The snapshot is fixed at call time:
+// even if the user switches files or edits the textarea before/during the
+// fetch, the body written to `file` is exactly `content`. `pendingSync` is
+// cleared only if the snapshot still matches the current state on completion.
+async function putFile(file: string, content: string, errMsg: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/file/${encodeURIComponent(file)}`, {
+      method: "PUT", body: content,
+    });
+    if (!res.ok) throw new Error();
+    if (mode === "attached" && currentFile === file && patternsEl.value === content) {
       pendingSync = false;
       updateSyncStatus();
-    } catch {
-      showError("Sync failed — could not write to server.");
     }
+    return true;
+  } catch {
+    showError(errMsg);
+    return false;
+  }
+}
+
+function schedulePut() {
+  if (debounceTimer !== null) clearTimeout(debounceTimer);
+  if (mode !== "attached" || currentFile === null) return;
+  const file = currentFile;
+  const content = patternsEl.value;
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    if (!lastValid) return;
+    void putFile(file, content, "Sync failed — could not write to server.");
   }, 300);
+}
+
+// Flush any pending debounced PUT immediately. Returns when the write
+// completes (or resolves immediately if there's nothing pending).
+async function flushPendingPut(): Promise<void> {
+  if (debounceTimer === null) return;
+  clearTimeout(debounceTimer);
+  debounceTimer = null;
+  if (mode !== "attached" || currentFile === null || !lastValid) return;
+  await putFile(currentFile, patternsEl.value, "Sync failed — could not write to server.");
 }
 
 async function handleCtrlS() {
   if (mode === "attached" && currentFile !== null) {
     if (debounceTimer !== null) { clearTimeout(debounceTimer); debounceTimer = null; }
-    try {
-      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
-        method: "PUT", body: patternsEl.value,
-      });
-      if (!res.ok) throw new Error();
-      pendingSync = false;
-      updateSyncStatus();
-    } catch {
-      showError("Save failed.");
-    }
+    await putFile(currentFile, patternsEl.value, "Save failed.");
   } else {
     const param = new URLSearchParams(location.search).get("file");
     const name = (param && param.endsWith(".sl")) ? param : `${Date.now()}.sl`;
@@ -404,10 +422,11 @@ async function handleCtrlS() {
 }
 
 async function cycleFile(dir: 1 | -1) {
-  if (mode !== "attached" || currentFile === null || pendingSync || !lastValid) return;
+  if (mode !== "attached" || currentFile === null || (pendingSync && !lastValid)) return;
   const idx = fileList.indexOf(currentFile);
   if (idx === -1) return;
   const next = fileList[(idx + dir + fileList.length) % fileList.length]!;
+  await flushPendingPut();
   await loadFile(next);
 }
 
@@ -571,7 +590,7 @@ async function run() {
   clickableTerms = new Map();
   nextClickableKey = 0;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
-  resultEl.innerHTML = (result.tag === "Equal" ? [] : result.children).map((c: Tree) => renderTree(c, 0)).join("");
+  resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
 
   if (status.kind === "empty-fringe-error") {
     showError(`empty fringe: choice term has no constraint row`);
@@ -667,21 +686,15 @@ function buildDefaultOptionLists(ctx: DisplayCallContext): HTMLElement {
   return container;
 }
 
-function renderTree(tree: Tree, depth: number): string {
+function renderTree(tree: ResultTree, depth: number): string {
   const indent = "  ".repeat(depth);
-  if (tree.tag === "Equal") return indent + renderNode(tree) + "\n";
   return indent + renderNode(tree) + "\n" +
     tree.children.map((c) => renderTree(c, depth + 1)).join("");
 }
 
-function renderNode(tree: Tree): string {
+function renderNode(tree: ResultTree): string {
   const tag = tree.tag;
   const [prefix, cls] = literalStyle(tag);
-  if (tree.tag === "Equal") {
-    const lhs = renderTerm(tree.lhs, false);
-    const rhs = renderTerm(tree.rhs, false);
-    return `<span class="${cls}">${prefix} ${lhs} ${rhs}</span>`;
-  }
   const terms = tree.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
   const body = terms === "" ? prefix : `${prefix} ${terms}`;
 
@@ -690,8 +703,7 @@ function renderNode(tree: Tree): string {
   const sourceLine = sourceInfo ? idToLineMap.get(`${sourceInfo.rule}:${sourceInfo.lineId}`) : null;
   const sourceAttr = sourceLine ? ` data-source-line="${sourceLine}"` : "";
 
-  const clickable = tag === "Ask" || tag === "Assert";
-  if (clickable) {
+  if (tag === "Assert") {
     const termKey = nextClickableKey++;
     clickableTerms.set(termKey, tree.id);
     return `<span class="${cls} node-clickable" data-term-key="${termKey}" data-literal-type="${tag}"${sourceAttr}>${body}</span>`;
