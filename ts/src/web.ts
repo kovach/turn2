@@ -583,40 +583,49 @@ async function run() {
   };
 
   const display = await loadDisplay(frontmatter.display);
+  displayEl.innerHTML = "";
   let rendered = false;
+
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  row.style.flexDirection = "row";
+  row.style.gap = "16px";
+  row.style.alignItems = "flex-start";
+
   if (display && status.kind !== "empty-fringe-error") {
     try {
       const renderResult = display.render(result, hc, ctx);
       if (renderResult) {
-        displayEl.innerHTML = "";
-        displayEl.appendChild(renderResult.element);
+        row.appendChild(renderResult.element);
         for (const [el, intent] of renderResult.clicks) {
           el.addEventListener("click", () => handleDisplayClick(intent));
         }
-        displayPaneEl.style.display = "flex";
-        rightColumnEl.classList.add("has-display");
         rendered = true;
       }
     } catch (e) {
-      displayEl.innerHTML = `<div style="color: #f87171; padding: 1em;">Display error: ${e}</div>`;
-      displayPaneEl.style.display = "flex";
-      rightColumnEl.classList.add("has-display");
+      const err = document.createElement("div");
+      err.style.color = "#f87171";
+      err.style.padding = "1em";
+      err.textContent = `Display error: ${e}`;
+      row.appendChild(err);
       rendered = true;
     }
   }
 
-  // Default option-list rendering: surface active components when no display
-  // module took the slot. One <ul> per component; each <li> is one option
-  // tuple. Clicking emits the multi-`is` block via handleDisplayClick.
-  if (!rendered && ctx.components.length > 0) {
-    renderDefaultOptionLists(ctx);
-    displayPaneEl.style.display = "flex";
-    rightColumnEl.classList.add("has-display");
+  // Default option-list rendering: also surface active components alongside
+  // the display module so the raw choice list is always visible. One <ul>
+  // per component; each <li> is one option tuple, clicking emits the
+  // multi-`is` block via handleDisplayClick.
+  if (ctx.components.length > 0) {
+    row.appendChild(buildDefaultOptionLists(ctx));
     rendered = true;
   }
 
-  if (!rendered) {
-    displayEl.innerHTML = "";
+  if (rendered) {
+    displayEl.appendChild(row);
+    displayPaneEl.style.display = "flex";
+    rightColumnEl.classList.add("has-display");
+  } else {
     displayPaneEl.style.display = "none";
     rightColumnEl.classList.remove("has-display");
   }
@@ -624,9 +633,8 @@ async function run() {
   highlightResultNodes();
 }
 
-function renderDefaultOptionLists(ctx: DisplayCallContext): void {
-  if (!lastHc) return;
-  displayEl.innerHTML = "";
+function buildDefaultOptionLists(ctx: DisplayCallContext): HTMLElement {
+  const container = document.createElement("div");
   for (let ci = 0; ci < ctx.components.length; ci++) {
     const comp = ctx.components[ci]!;
     const wrap = document.createElement("div");
@@ -654,8 +662,9 @@ function renderDefaultOptionLists(ctx: DisplayCallContext): void {
       ul.appendChild(li);
     }
     wrap.appendChild(ul);
-    displayEl.appendChild(wrap);
+    container.appendChild(wrap);
   }
+  return container;
 }
 
 function renderTree(tree: Tree, depth: number): string {

@@ -1,6 +1,6 @@
 / display: ttt.js
-
 / basically tic-tac-toe
+
 + game
   + setup
   + turn
@@ -19,19 +19,12 @@
   - n C
   + cell R C
 
-/ surface every cell-row id so the per-turn ask has options to enumerate
-- [X] cell R C
-+ is-cell X
-
 / actor P fills a square with their mark.
-/   ? A             choice term; options come from `! is-cell A`
-/   + asked-cell A T  surfaces the (choice, turn) link at top level so
-/                     the click consumer below can locate the right turn
 -[T] turn
   - actor P
   ? A
   + choice A
-  ! is-cell A
+  ! eligible T A
 
 / Click resolution: once `+ is <A> <cellId>` is appended to source, derive
 / the fill under the asking turn. Top-level Match siblings let us see the
@@ -47,6 +40,14 @@
 - game
   - fill C P
   + not-empty C
+
+- [Cell] cell R C
+- [T] turn
+  / if count is zero
+  # count -> z
+    < fill (cell R C) _
+  / cell is eligible to be picked
+  + eligible T Cell
 
 - turn
   - fill _ _
