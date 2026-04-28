@@ -60,6 +60,6 @@ console.log(`  dedup-skipped:  ${stepStats.dedupSkipped} (${dedupPct}% of ${tota
 console.log(`              c:  ${unifyStats.c}`);
 
 
-const dupLogPath = "dup-log.txt";
-writeFileSync(dupLogPath, stepStats.dupLog.join("\n") + (stepStats.dupLog.length > 0 ? "\n" : ""));
-console.log(`  wrote ${stepStats.dupLog.length} duplicate entries to ${dupLogPath}`);
+//const dupLogPath = "dup-log.txt";
+//writeFileSync(dupLogPath, stepStats.dupLog.join("\n") + (stepStats.dupLog.length > 0 ? "\n" : ""));
+//console.log(`  wrote ${stepStats.dupLog.length} duplicate entries to ${dupLogPath}`);

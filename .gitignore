@@ -2,3 +2,6 @@
 /dist
 /ts/dist
 /ts/node_modules
+*.cpuprofile
+/notes/todo.md
+/notes/donot.md

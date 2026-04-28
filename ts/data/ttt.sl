@@ -1,10 +1,10 @@
 / display: ttt.js
-/ basically tic-tac-toe
+/ implementation of tic-tac-toe
 
 + game
   + setup
   + turn
-    + actor x
+    + actor o
 
 / players, grid
 - setup
@@ -15,21 +15,31 @@
   + n z
   + n (s z)
   + n (s (s z))
+  / for each Row and Column, make a cell
   - n R
   - n C
   + cell R C
 
-/ actor P fills a square with their mark.
--[T] turn
-  - actor P
-  ? A
-  + choice A
-  ! eligible T A
+/ A Cell can be chosen if it has not been filled earlier
+- [Cell] cell R C
+- [T] turn
+  # count -> z            / z = zero
+    < fill (cell R C) _
+  + eligible T Cell
 
-/ Click resolution: once `+ is <A> <cellId>` is appended to source, derive
-/ the fill under the asking turn. Top-level Match siblings let us see the
-/ click-asserted `is` row (also top-level) — a Match nested inside `turn`
-/ would only descend into turn's children and miss the sibling `is`.
+/ each turn, choose an eligible Cell to mark
+-[T] turn
+  ? Cell
+  + choice Cell
+  ! eligible T Cell
+
+/ nb: in this demo, decisions are recorded by 
+/ *appending* them to the program source.
+/ each is a tuple `is ChoiceId DecisionValue`.
+
+/ mark the R,C pair as filled
+/ `is` populated by environment whenever a choice is made
+/ relates id of choice to id of chosen cell
 - is A X
 - [X] cell R C
 - turn
@@ -37,41 +47,21 @@
   - choice A
   + fill (cell R C) P
 
-- game
-  - fill C P
-  + not-empty C
-
-- [Cell] cell R C
-- [T] turn
-  / if count is zero
-  # count -> z
-    < fill (cell R C) _
-  / cell is eligible to be picked
-  + eligible T Cell
-
+/ turn is done after choice is made
 - turn
   - fill _ _
-  + complete
+  + turn-complete
 
-/ after player fills a square, other player turns
+/ after turn is complete, other player turns
 - game
   - other P Op
   - turn
     - actor P
-    - complete
+    - turn-complete
   + turn
     + actor Op
 
-/ `<` demo
--[T] turn
-  - actor X
-  - complete
-  < player X
-    + acted T
-
-- fill (cell R C) _
-- cell R C
-  + filled
+/ 4 win condition rules /
 
 - game
   - fill (cell R z) M

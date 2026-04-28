@@ -1,5 +1,3 @@
-# GUI cleanup
-
 # rule name parsing
 plan: TODO
 
@@ -14,6 +12,13 @@ plan: TODO
   - if missing, do the current auto-gen behavior
 
 - before expansion, check that the initial program has unique name per rule
+
+# localizing constraint evaluation
+plan: TODO
+
+- we want the constrains associated with a choice to be evaluated a point in time
+- we'll use the id of the Ask node for this
+- before evaluating the query
 
 # separate id terms from atom
 plan: plans/separate-id-terms.md
