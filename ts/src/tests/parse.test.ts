@@ -190,9 +190,9 @@ function kid(t: BodyTree, ...path: number[]): BodyTree {
 {
   const input = readFileSync(join(__dir, "../../../example.sl"), "utf8");
   const tree1 = ok(input);
-  const formatted = treeChildren(tree1).map((t) => formatTree(t)).join("\n");
+  const formatted = formatTree(tree1);
   const tree2 = ok(formatted);
-  const formatted2 = treeChildren(tree2).map((t) => formatTree(t)).join("\n");
+  const formatted2 = formatTree(tree2);
   assert.equal(formatted, formatted2);
   console.log("PASS: format roundtrip stable");
 }
@@ -235,7 +235,7 @@ function kid(t: BodyTree, ...path: number[]): BodyTree {
 // atom roundtrip
 {
   const tree1 = ok("- foo (bar Baz (qux)) X");
-  const formatted = treeChildren(tree1).map((t) => formatTree(t)).join("\n");
+  const formatted = formatTree(tree1);
   const tree2 = ok(formatted);
   assert.deepEqual(treeAtom(tree1.children[0]!), treeAtom(tree2.children[0]!));
   console.log("PASS: atom roundtrip");
@@ -286,6 +286,68 @@ function kid(t: BodyTree, ...path: number[]): BodyTree {
   const result = parse("-[Id foo");
   assert("message" in result);
   console.log("PASS: unclosed bracket is error");
+}
+
+// `(@id …)` produces an `Id`-tagged term; round-trips through formatTree.
+{
+  const tree = ok("+ is X (@id r1 id1 X)");
+  const assertNode = tree.children[0]!;
+  assert.equal(assertNode.tag, "Assert");
+  const idTerm = treeAtomTerms(assertNode)[2];
+  assert.equal(idTerm?.tag, "Id", "third term should be Id-tagged");
+  if (idTerm?.tag === "Id") {
+    assert.deepEqual(idTerm.atom.terms, [
+      { tag: "Symbol", name: "r1" },
+      { tag: "Symbol", name: "id1" },
+      { tag: "Variable", name: "X" },
+    ]);
+  }
+  // Format and reparse — should still be Id-tagged with same body.
+  const formatted = formatTree(tree);
+  assert.match(formatted, /\(@id /, "formatTree should emit @id notation");
+  const reparsed = parse(formatted);
+  assert("tag" in reparsed);
+  if ("tag" in reparsed) {
+    const reTerm = treeAtomTerms(treeChildren(reparsed)[0]!)[2];
+    assert.equal(reTerm?.tag, "Id", "round-trip should preserve Id tag");
+  }
+  console.log("PASS: (@id …) parses to Id-tagged term and round-trips");
+}
+
+// Plain `(id …)` (no `@`) stays Atom-tagged — only `@id` flips the tag.
+{
+  const tree = ok("+ is X (id r1 X)");
+  const assertNode = tree.children[0]!;
+  const inner = treeAtomTerms(assertNode)[2];
+  assert.equal(inner?.tag, "Atom");
+  console.log("PASS: plain `(id …)` stays Atom-tagged");
+}
+
+// Round-trip property: parse(formatTree(parse(s))) = parse(s).
+// Holds for inputs without comments or blank lines (which would shift line
+// numbers and thus the auto-Variable ids the parser assigns to nodes
+// without an explicit `[Id]` binder).
+{
+  const inputs: string[] = [
+    "- foo",
+    "- foo\n  + bar",
+    "+ a\n+ b\n+ c",
+    "-[X] foo X\n  + bar X",
+    "- foo (bar Baz (qux)) X",
+    "+ is X (@id r1 id1 X)",
+    "= X Y",
+    "?\n+ done",
+    "- trigger\n  ? A B\n  + got A B",
+    "# sum X -> Total\n  - t X",
+    "- (a (b c))",
+    "-[Cell] cell R C\n  -[T] turn\n    + eligible T Cell",
+  ];
+  for (const s of inputs) {
+    const tree1 = ok(s);
+    const tree2 = ok(formatTree(tree1));
+    assert.deepEqual(tree2, tree1, `round-trip failed for input:\n${s}`);
+  }
+  console.log(`PASS: parse(formatTree(parse(s))) = parse(s) for ${inputs.length} inputs`);
 }
 
 function getAggInfo(node: Tree) {
@@ -342,7 +404,7 @@ function getAggInfo(node: Tree) {
 // aggregate roundtrip
 {
   const tree1 = ok("# sum X -> Total\n  - t X");
-  const formatted = formatTree(tree1.children[0]!);
+  const formatted = formatTree(tree1);
   const tree2 = ok(formatted);
   assert.equal(getAggInfo(tree2.children[0]!)?.funcName, "sum");
   assert.equal(treeChildren(tree2.children[0]!).length, 1);

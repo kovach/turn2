@@ -1,6 +1,8 @@
 # GUI cleanup
 
 # rule name parsing
+plan: TODO
+
 - add a step to the parser that parses an optional rulename prefix for each rule
   ```
   rule:
@@ -12,6 +14,14 @@
   - if missing, do the current auto-gen behavior
 
 - before expansion, check that the initial program has unique name per rule
+
+# separate id terms from atom
+plan: plans/separate-id-terms.md
+
+- it is dangerous to ever recursively traverse id nodes, because they grow exponentially in absolute size
+- currently they are represented using the same term node type (Atom) as user defined compound values, which typically do not grow exponentially
+- we will add a new Term constructor, `Id`: `| { tag: "Id"; atom: Atom }`,
+  which will behave like `Atom` in most respects, but individual functions will likely treat differently
 
 # implement constraint tuples pt1
 plan: plans/constraint-tuples.md

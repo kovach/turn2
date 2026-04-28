@@ -136,7 +136,7 @@ export function closeAggregates(
 
     // Insert `agg-result <lexId> <instanceId> <acc>` as a sibling of agg-instance.
     const rawResultId: Term = {
-      tag: "Atom",
+      tag: "Id",
       atom: { terms: [sym("id"), sym("_agg-result"), instance.lexId, instance.instanceId] },
     };
     const rawAtom = { terms: [sym("_agg-result"), instance.lexId, instance.instanceId, acc] };

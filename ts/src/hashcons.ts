@@ -8,25 +8,46 @@ interface TrieNode {
 export interface HashconsState {
   root: TrieNode;
   refToAtom: Map<number, Atom>;
+  // Sparse tag table for Refs whose body was constructed with `tag: "Id"`.
+  // Absence means the Ref's body was a regular `Atom`. Reads via `refTagOf`.
+  refTag: Map<number, "Id">;
   symIds: Map<string, number>;
   varIds: Map<string, number>;
   nextRefId: number;
   nextSymId: number;
   nextVarId: number;
   entryCount: number;
+  // Sentinel tokens used as the first trie key for hashcons body lookups,
+  // to keep `Atom` and `Id` keyspaces disjoint even when their bodies are
+  // structurally identical. Allocated once in `createHashcons` from the
+  // Symbol pool with names that the parser rejects.
+  atomTagToken: NodeId;
+  idTagToken: NodeId;
 }
 
 export function createHashcons(): HashconsState {
-  return {
+  const state: HashconsState = {
     root: {},
     refToAtom: new Map(),
+    refTag: new Map(),
     symIds: new Map(),
     varIds: new Map(),
     nextRefId: 1,
     nextSymId: 0,
     nextVarId: 0,
     entryCount: 0,
+    atomTagToken: 0,  // overwritten below
+    idTagToken: 0,    // overwritten below
   };
+  // Reserve sentinel Symbol tokens. Names contain `*`, which the parser
+  // rejects in symbol positions, so user input cannot synthesise them.
+  state.atomTagToken = tokenOf({ tag: "Symbol", name: "*atom*" }, state);
+  state.idTagToken = tokenOf({ tag: "Symbol", name: "*id*" }, state);
+  return state;
+}
+
+export function refTagOf(state: HashconsState, refId: number): "Atom" | "Id" {
+  return state.refTag.get(refId) ?? "Atom";
 }
 
 // Disjoint integer ranges per tag keep tokens unambiguous as Map keys:
@@ -57,16 +78,30 @@ function tokenOf(term: Term, s: HashconsState): NodeId {
       return id;
     }
     case "Atom":
-      throw new Error("tokenOf: nested Atom should have been flattened to Ref");
+    case "Id":
+      throw new Error(`tokenOf: nested ${term.tag} should have been flattened to Ref`);
   }
 }
 
 export function hashconsTerm(term: Term, state: HashconsState): Term {
-  if (term.tag !== "Atom") return term;
+  if (term.tag !== "Atom" && term.tag !== "Id") return term;
 
   const flatTerms = term.atom.terms.map((t) => hashconsTerm(t, state));
 
+  // Symmetric tag-prefix keying: `Atom` and `Id` bodies live in disjoint
+  // sub-tries off `state.root`, so two terms with identical bodies but
+  // different tags never collide.
   let node = state.root;
+  const tagToken = term.tag === "Id" ? state.idTagToken : state.atomTagToken;
+  {
+    const children = node.children ?? (node.children = new Map());
+    let next = children.get(tagToken);
+    if (next === undefined) {
+      next = {};
+      children.set(tagToken, next);
+    }
+    node = next;
+  }
   for (const t of flatTerms) {
     const tok = tokenOf(t, state);
     const children = node.children ?? (node.children = new Map());
@@ -83,6 +118,7 @@ export function hashconsTerm(term: Term, state: HashconsState): Term {
   const id = state.nextRefId++;
   node.id = id;
   state.refToAtom.set(id, { terms: flatTerms });
+  if (term.tag === "Id") state.refTag.set(id, "Id");
   state.entryCount++;
   return { tag: "Ref", id };
 }
@@ -95,5 +131,6 @@ export function expandTerm(term: Term, state: HashconsState): Term {
   if (term.tag !== "Ref") return term;
   const atom = state.refToAtom.get(term.id);
   if (!atom) return term;
-  return { tag: "Atom", atom: { terms: atom.terms.map((t) => expandTerm(t, state)) } };
+  const tag = refTagOf(state, term.id);
+  return { tag, atom: { terms: atom.terms.map((t) => expandTerm(t, state)) } };
 }

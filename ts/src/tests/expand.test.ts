@@ -60,9 +60,9 @@ function literalTypes(tree: Tree): string[] {
   assert.deepEqual(f.id, { tag: "Variable", name: "X1" });
   assert.deepEqual(h.id, { tag: "Variable", name: "X3" });
 
-  // + g id = Atom([id, r1, sym("id2"), X1])
-  assert.equal(g.id.tag, "Atom");
-  if (g.id.tag === "Atom") {
+  // + g id = Id([id, r1, sym("id2"), X1])
+  assert.equal(g.id.tag, "Id");
+  if (g.id.tag === "Id") {
     assert.deepEqual(g.id.atom.terms[0], { tag: "Symbol", name: "id" });
     assert.deepEqual(g.id.atom.terms[1], { tag: "Symbol", name: "r1" });
     assert.deepEqual(g.id.atom.terms[2], { tag: "Symbol", name: "id2" });
@@ -70,10 +70,10 @@ function literalTypes(tree: Tree): string[] {
     assert.equal(g.id.atom.terms.length, 4);
   }
 
-  // + i id = Atom([id, r1, sym("id4"), X1, X3])
+  // + i id = Id([id, r1, sym("id4"), X1, X3])
   // positive nodes don't push to previousVars, so g.id does not appear
-  assert.equal(i.id.tag, "Atom");
-  if (i.id.tag === "Atom") {
+  assert.equal(i.id.tag, "Id");
+  if (i.id.tag === "Id") {
     assert.deepEqual(i.id.atom.terms[0], { tag: "Symbol", name: "id" });
     assert.deepEqual(i.id.atom.terms[1], { tag: "Symbol", name: "r1" });
     assert.deepEqual(i.id.atom.terms[2], { tag: "Symbol", name: "id4" });
@@ -241,7 +241,7 @@ function literalTypes(tree: Tree): string[] {
 // --- rewriteUnboundAssertVars ---
 
 function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]): boolean {
-  if (t.tag !== "Atom") return false;
+  if (t.tag !== "Id") return false;
   const terms = t.atom.terms;
   if (terms.length !== 3 + expectedPreviousVars.length) return false;
   if (terms[0]?.tag !== "Symbol" || terms[0].name !== "id") return false;
@@ -273,8 +273,8 @@ function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]):
   const assertNode = kid(rules[0]!, 0, 0);
   const vSub = assertNode.atom.terms[1]!;
   const wSub = assertNode.atom.terms[2]!;
-  assert.ok(vSub.tag === "Atom" && wSub.tag === "Atom");
-  if (vSub.tag === "Atom" && wSub.tag === "Atom") {
+  assert.ok(vSub.tag === "Id" && wSub.tag === "Id");
+  if (vSub.tag === "Id" && wSub.tag === "Id") {
     const vLine = vSub.atom.terms[2]!;
     const wLine = wSub.atom.terms[2]!;
     assert.ok(vLine.tag === "Symbol" && wLine.tag === "Symbol");
@@ -343,7 +343,7 @@ function isIdAtomFor(t: Term, ruleName: string, expectedPreviousVars: string[]):
   function hasVariable(node: Tree): boolean {
     function termHas(t: Term): boolean {
       if (t.tag === "Variable") return true;
-      if (t.tag === "Atom") return t.atom.terms.some(termHas);
+      if (t.tag === "Atom" || t.tag === "Id") return t.atom.terms.some(termHas);
       return false;
     }
     if (treeAtomTerms(node).some(termHas)) return true;

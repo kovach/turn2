@@ -1,6 +1,6 @@
 import type { Atom, MatchConstraint, NodeId, Term, Trail, Tree } from "./types.js";
 import { newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
-import { hashconsAtom, hashconsTerm, tokenOfId, createHashcons, type HashconsState } from "./hashcons.js";
+import { hashconsAtom, hashconsTerm, refTagOf, tokenOfId, createHashcons, type HashconsState } from "./hashcons.js";
 import type { Candidate, NodeRow, RefStore, SymbolIndex } from "./refstore.js";
 import { addBeforeAfter, allCandidates, before, emptyRefStore, getNode, getRoot, idKey, insertChild, overlap, strictlyContains } from "./refstore.js";
 
@@ -35,8 +35,8 @@ function resolveVar(term: Term, trail: Trail): Term {
 // concrete term for insertion / path lookup.
 export function substTerm(term: Term, trail: Trail): Term {
   const t = resolveVar(term, trail);
-  if (t.tag === "Atom") {
-    return { tag: "Atom", atom: substAtom(t.atom, trail) };
+  if (t.tag === "Atom" || t.tag === "Id") {
+    return { tag: t.tag, atom: substAtom(t.atom, trail) };
   }
   return t;
 }
@@ -66,15 +66,15 @@ function assertGround(atom: Atom, trail: Trail): void {
     if (r.tag === "Variable") {
       throw new Error(`unify: cannot bind atom with free variable ${r.name}`);
     }
-    if (r.tag === "Atom") assertGround(r.atom, trail);
+    if (r.tag === "Atom" || r.tag === "Id") assertGround(r.atom, trail);
   }
 }
 
 function bindable(t: Term, trail: Trail, hc: HashconsState): Term {
-  if (t.tag !== "Atom") return t;
+  if (t.tag !== "Atom" && t.tag !== "Id") return t;
   const substituted = substAtom(t.atom, trail);
   assertGround(substituted, trail);
-  return hashconsTerm({ tag: "Atom", atom: substituted }, hc);
+  return hashconsTerm({ tag: t.tag, atom: substituted }, hc);
 }
 
 export function unifyTerms(a: Term, b: Term, trail: Trail, hc: HashconsState): boolean {
@@ -97,16 +97,25 @@ export function unifyTerms(a: Term, b: Term, trail: Trail, hc: HashconsState): b
     return true;
   }
 
+  // Atom-vs-Atom and Id-vs-Id unify by body. Atom-vs-Id never unify — they
+  // are distinct kinds (an `Id` term is opaque to the rest of the engine).
   if (sa.tag === "Atom" && sb.tag === "Atom") {
     return unifyAtoms(sa.atom, sb.atom, trail, hc);
   }
+  if (sa.tag === "Id" && sb.tag === "Id") {
+    return unifyAtoms(sa.atom, sb.atom, trail, hc);
+  }
 
-  // Atom vs Ref: look up the ref to get the stored atom
-  if (sa.tag === "Atom" && sb.tag === "Ref") {
+  // Atom/Id vs Ref: look up the ref's stored body and tag — only unify when
+  // tags match. `refTagOf` returns "Atom" for refs whose body was stored as
+  // a regular Atom, "Id" for id-headed bodies.
+  if ((sa.tag === "Atom" || sa.tag === "Id") && sb.tag === "Ref") {
+    if (refTagOf(hc, sb.id) !== sa.tag) return false;
     const refAtom = hc.refToAtom.get(sb.id);
     if (refAtom) return unifyAtoms(sa.atom, refAtom, trail, hc);
   }
-  if (sa.tag === "Ref" && sb.tag === "Atom") {
+  if (sa.tag === "Ref" && (sb.tag === "Atom" || sb.tag === "Id")) {
+    if (refTagOf(hc, sa.id) !== sb.tag) return false;
     const refAtom = hc.refToAtom.get(sa.id);
     if (refAtom) return unifyAtoms(refAtom, sb.atom, trail, hc);
   }

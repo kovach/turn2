@@ -1,6 +1,6 @@
 import { parseSource, formatTerm, buildSpanIndex } from "./parse.js";
 import { fixpoint } from "./fixpoint.js";
-import { expandTerm, type HashconsState } from "./hashcons.js";
+import { expandTerm, refTagOf, type HashconsState } from "./hashcons.js";
 import type { ComponentOptions } from "./constraint-query.js";
 import type { UnresolvedChoice } from "./scheduler.js";
 import type { Tree, Term, Atom } from "./types.js";
@@ -37,16 +37,6 @@ const MARKER_CHAR_SET: Set<string> = new Set(MARKER_CHARS);
 // a character range; `,`, `<`, `+`, etc. are safe verbatim inside a class.
 const MARKER_CLASS: string = MARKER_CHARS.map((c) => (c === "-" ? "\\-" : c)).join("");
 const MARKER_REGEX = new RegExp(`^(\\s*)([${MARKER_CLASS}])`);
-
-// expandTerm may only be used on Refs whose stored atom is NOT id-headed.
-// `(id …)` terms carry the previousVars chain and can be exponentially shared;
-// expanding one fully materializes that DAG as a tree. User terms (e.g.
-// `(s (s z))`, `(cell R C)`) are tree-shaped in practice and safe to expand.
-// See plans/web-no-expand-term.md.
-function isIdHeaded(atom: Atom): boolean {
-  const h = atom.terms[0];
-  return h?.tag === "Symbol" && h.name === "id";
-}
 
 const patternsEl = document.getElementById("patterns") as HTMLTextAreaElement;
 const resultEl = document.getElementById("result") as HTMLDivElement;
@@ -188,7 +178,7 @@ function getSourceInfo(id: Term): { rule: string; lineId: string } | null {
     const stored = lastHc.refToAtom.get(id.id);
     if (!stored) return null;
     terms = stored.terms;
-  } else if (id.tag === "Atom") {
+  } else if (id.tag === "Id") {
     terms = id.atom.terms;
   } else {
     return null;
@@ -204,7 +194,7 @@ function buildIdToLineMap(expandedPatterns: Tree[]): Map<string, number> {
   const map = new Map<string, number>();
   function walk(node: Tree) {
     if (node.tag === "Equal") return;  // Equal has no id; leaf
-    if (node.span && node.id.tag === "Atom") {
+    if (node.span && node.id.tag === "Id") {
       const info = getSourceInfo(node.id);
       if (info) {
         map.set(`${info.rule}:${info.lineId}`, node.span.line);
@@ -487,7 +477,7 @@ function compressRefs(roots: Term[], hc: HashconsState): { bindings: string[]; r
       if (stored) for (const sub of stored.terms) countRefs(sub);
       return;
     }
-    if (t.tag === "Atom") for (const sub of t.atom.terms) countRefs(sub);
+    if (t.tag === "Atom" || t.tag === "Id") for (const sub of t.atom.terms) countRefs(sub);
   }
   for (const root of roots) countRefs(root);
 
@@ -507,6 +497,12 @@ function compressRefs(roots: Term[], hc: HashconsState): { bindings: string[]; r
   const varMap = new Map<number, string>();
   sharedList.forEach((id, i) => varMap.set(id, `V${i + 1}`));
 
+  function wrapBody(refId: number, bodyText: string): string {
+    return refTagOf(hc, refId) === "Id"
+      ? (bodyText === "" ? "(@id)" : `(@id ${bodyText})`)
+      : `(${bodyText})`;
+  }
+
   function renderInner(t: Term): string {
     if (t.tag === "Ref") {
       const v = varMap.get(t.id);
@@ -514,10 +510,12 @@ function compressRefs(roots: Term[], hc: HashconsState): { bindings: string[]; r
       // refCount === 1 and not a root → inline its body exactly once.
       const stored = hc.refToAtom.get(t.id);
       if (!stored) return `*${t.id}`;
-      return `(${stored.terms.map(renderInner).join(" ")})`;
+      return wrapBody(t.id, stored.terms.map(renderInner).join(" "));
     }
-    if (t.tag === "Atom") {
-      return `(${t.atom.terms.map(renderInner).join(" ")})`;
+    if (t.tag === "Atom") return `(${t.atom.terms.map(renderInner).join(" ")})`;
+    if (t.tag === "Id") {
+      const body = t.atom.terms.map(renderInner).join(" ");
+      return body === "" ? "(@id)" : `(@id ${body})`;
     }
     return formatTerm(t);
   }
@@ -526,7 +524,7 @@ function compressRefs(roots: Term[], hc: HashconsState): { bindings: string[]; r
   for (const id of sharedList) {
     const stored = hc.refToAtom.get(id);
     if (!stored) continue;
-    bindings.push(`= ${varMap.get(id)} (${stored.terms.map(renderInner).join(" ")})`);
+    bindings.push(`= ${varMap.get(id)} ${wrapBody(id, stored.terms.map(renderInner).join(" "))}`);
   }
 
   const results = roots.map(renderInner);
@@ -711,21 +709,24 @@ function renderNode(tree: ResultTree): string {
   return `<span class="${cls}"${sourceAttr}>${body}</span>`;
 }
 
+// `expandTerm` may only be used on Refs whose stored body is NOT an `Id`.
+// `(id …)` bodies carry the previousVars chain and can be exponentially
+// shared; expanding one fully materializes that DAG as a tree. User terms
+// (`(s (s z))`, `(cell R C)`) are tree-shaped in practice and safe to expand.
+// See plans/web-no-expand-term.md.
 function renderTerm(term: Term, isPredicate = false): string {
   if (term.tag === "Ref") {
-    if (lastHc) {
-      const stored = lastHc.refToAtom.get(term.id);
-      if (stored && !isIdHeaded(stored)) {
-        const expanded = expandTerm(term, lastHc);
-        return renderTerm(expanded, isPredicate);
-      }
+    if (lastHc && refTagOf(lastHc, term.id) !== "Id") {
+      const expanded = expandTerm(term, lastHc);
+      return renderTerm(expanded, isPredicate);
     }
     return `<span class="lit-ref">*${term.id}</span>`;
   }
   switch (term.tag) {
     case "Symbol":   return `<span class="${isPredicate ? "lit-predicate" : "lit-symbol"}">${esc(term.name)}</span>`;
     case "Variable": return `<span class="lit-variable">${esc(term.name)}</span>`;
-    case "Atom":     return `(${term.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
+    case "Atom":
+    case "Id":       return `(${term.atom.terms.map((t) => renderTerm(t)).join(" ")})`;
     case "Wildcard": return `<span class="lit-wildcard">_</span>`;
   }
 }

@@ -2,6 +2,7 @@ export type Term =
   | { tag: "Symbol"; name: string }
   | { tag: "Variable"; name: string }
   | { tag: "Atom"; atom: Atom }
+  | { tag: "Id"; atom: Atom }
   | { tag: "Wildcard" }
   | { tag: "Ref"; id: number };
 
@@ -136,6 +137,8 @@ export const sym = (name: string): Term => ({ tag: "Symbol", name });
 export const vari = (name: string): Term => ({ tag: "Variable", name });
 export const ref = (id: number): Term => ({ tag: "Ref", id });
 export const atom = (terms: Term[]): Atom => ({ terms });
+export const idTerm = (a: Atom): Term => ({ tag: "Id", atom: a });
+export const isId = (t: Term): t is { tag: "Id"; atom: Atom } => t.tag === "Id";
 
 export const root = (children: Tree[]): Tree => ({
   tag: "Match",

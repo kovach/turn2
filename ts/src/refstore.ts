@@ -81,6 +81,14 @@ export interface RefStore {
   beforeAfter: Map<NodeId, Set<NodeId>>;
   afterBefore: Map<NodeId, Set<NodeId>>;
   index: SymbolIndex;
+  // Memoised reflexive-transitive `parent:child` closure. `descendantsCache.
+  // get(a)`, when present, is the full descendant set of `a` (including `a`
+  // itself). Filled lazily by `contains`/`descendantsOf` and maintained
+  // incrementally by `insertChild` — adds are monotone (parent:child edges
+  // are never removed), and every inserted row is fresh, so an insert under
+  // parent `p` only needs to extend each cached source whose set already
+  // contains `p`.
+  descendantsCache: Map<NodeId, Set<NodeId>>;
 }
 
 function addEdge(m: Map<NodeId, Set<NodeId>>, from: NodeId, to: NodeId): void {
@@ -127,6 +135,7 @@ export function emptyRefStore(hc: HashconsState): RefStore {
   const beforeAfter = new Map<NodeId, Set<NodeId>>();
   const afterBefore = new Map<NodeId, Set<NodeId>>();
   const index: SymbolIndex = new Map();
+  const descendantsCache = new Map<NodeId, Set<NodeId>>();
 
   // Use a sentinel symbol name unlikely to collide with anything a user (or
   // generated rule) writes: a normal `sym("root")` fact would otherwise hash
@@ -153,6 +162,7 @@ export function emptyRefStore(hc: HashconsState): RefStore {
     beforeAfter,
     afterBefore,
     index,
+    descendantsCache,
   };
 }
 
@@ -187,6 +197,15 @@ export function insertChild(
   addEdge(store.parentChild, parentKey, key);
   addEdge(store.parentsOf, key, parentKey);
 
+  // Maintain `descendantsCache`. The new row `key` is fresh (children list
+  // initialized empty above), so its own descendant set is `{key}` and adding
+  // `key` to every cached source that can reach `parentKey` is sufficient.
+  // If `insertChild` ever grows to add a parent edge to a *pre-existing* row,
+  // this needs to union in `descendantsOf(key)` instead of just `{key}`.
+  for (const set of store.descendantsCache.values()) {
+    if (set.has(parentKey)) set.add(key);
+  }
+
   const firstTerm = row.atom.terms[0];
   if (firstTerm?.tag === "Symbol") {
     let bucket = store.index.get(firstTerm.name);
@@ -212,20 +231,31 @@ export function addBeforeAfter(store: RefStore, prevId: Term, nextId: Term, hc: 
 // as a perf follow-up once profiles justify it.
 
 // Reflexive-transitive closure of parent:child. `contains(A, A)` is true.
+// Memoised via `descendantsOf`: O(|descendants(a)|) on first query for a
+// given source, O(1) thereafter (lookup + Set.has). Cache is maintained
+// incrementally by `insertChild`.
 export function contains(store: RefStore, a: NodeId, b: NodeId): boolean {
   if (a === b) return true;
-  const seen = new Set<NodeId>([a]);
+  return descendantsOf(store, a).has(b);
+}
+
+// Full descendant set of `a` (including `a` itself), cached on the store.
+// Cold path is a DFS over `parentChild`; hot path is a Map.get.
+function descendantsOf(store: RefStore, a: NodeId): Set<NodeId> {
+  const cached = store.descendantsCache.get(a);
+  if (cached !== undefined) return cached;
+  const out = new Set<NodeId>([a]);
   const stack: NodeId[] = [a];
   while (stack.length > 0) {
     const cur = stack.pop()!;
     const kids = store.parentChild.get(cur);
     if (!kids) continue;
     for (const k of kids) {
-      if (k === b) return true;
-      if (!seen.has(k)) { seen.add(k); stack.push(k); }
+      if (!out.has(k)) { out.add(k); stack.push(k); }
     }
   }
-  return false;
+  store.descendantsCache.set(a, out);
+  return out;
 }
 
 // `contains(a, b) && a !== b` — the check Match/Before do when descending

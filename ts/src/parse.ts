@@ -255,9 +255,18 @@ function parseTerms(tokens: string[], pos: { i: number } = { i: 0 }): Term[] {
   while (pos.i < tokens.length && tokens[pos.i] !== ")") {
     const tok = tokens[pos.i++]!;
     if (tok === "(") {
+      // `(@id …)` constructs an `Id`-tagged term; plain `(…)` is `Atom`. The
+      // `@id` marker is only meaningful immediately after `(`.
+      let isId = false;
+      if (tokens[pos.i] === "@id") {
+        isId = true;
+        pos.i++;
+      }
       const inner = parseTerms(tokens, pos);
       if (tokens[pos.i] === ")") pos.i++;
-      terms.push({ tag: "Atom", atom: { terms: inner } });
+      terms.push(isId
+        ? { tag: "Id", atom: { terms: inner } }
+        : { tag: "Atom", atom: { terms: inner } });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
     } else if (/^\*\d+$/.test(tok)) {
@@ -355,20 +364,47 @@ export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | Par
 
 // --- Formatting ---
 
+// True for the parser's default auto-assigned ids (`Variable` whose name is
+// all digits — the line number). Non-auto ids round-trip via the explicit
+// `prefix[id]` syntax; auto ids are reproduced by line number on reparse.
+function isAutoId(id: Term): boolean {
+  return id.tag === "Variable" && /^\d+$/.test(id.name);
+}
+
+function idBracket(id: Term): string {
+  return isAutoId(id) ? "" : `[${formatTerm(id)}]`;
+}
+
 export function formatTree(tree: Tree, indent = 0): string {
+  // At the top-level call, skip the synthetic root the parser wraps every
+  // input in (`tag: "Match"`, empty atom, id `Variable "0"`) — emit its
+  // children at indent 0. The shape is unambiguous: line numbers are
+  // 1-indexed, so no user line can produce id `Variable "0"`.
+  if (
+    indent === 0
+    && tree.tag === "Match"
+    && tree.atom.terms.length === 0
+    && tree.id.tag === "Variable" && tree.id.name === "0"
+  ) {
+    return tree.children.map((c) => formatTree(c, 0)).join("");
+  }
+
   const pad = "  ".repeat(indent);
   if (tree.tag === "Equal") {
     return `${pad}= ${formatTerm(tree.lhs)} ${formatTerm(tree.rhs)}\n`;
   }
   if (tree.tag === "Ask") {
+    const idStr = idBracket(tree.id);
     const terms = tree.atom.terms.map(formatTerm).join(" ");
-    return pad + (terms === "" ? "?" : `? ${terms}`) + "\n";
+    const body = terms === "" ? "" : ` ${terms}`;
+    return `${pad}?${idStr}${body}\n`;
   }
   let line: string;
   if (tree.tag === "Aggregate") {
+    const idStr = idBracket(tree.id);
     const { funcName, args, out } = tree.info;
     const argsStr = args.length > 0 ? " " + args.map(formatTerm).join(" ") : "";
-    line = `# ${funcName}${argsStr} -> ${formatTerm(out)}`;
+    line = `#${idStr} ${funcName}${argsStr} -> ${formatTerm(out)}`;
   } else {
     line = formatNode(tree);
   }
@@ -378,8 +414,10 @@ export function formatTree(tree: Tree, indent = 0): string {
 
 export function formatNode(tree: BodyTree): string {
   const prefix = tagToPrefix(tree.tag);
+  const idStr = idBracket(tree.id);
   const terms = tree.atom.terms.map(formatTerm).join(" ");
-  return terms === "" ? prefix : `${prefix} ${terms}`;
+  if (terms === "") return prefix + idStr;
+  return `${prefix}${idStr} ${terms}`;
 }
 
 export function formatAtom(atom: Atom): string {
@@ -391,6 +429,10 @@ export function formatTerm(term: Term): string {
     case "Symbol": return term.name;
     case "Variable": return term.name;
     case "Atom": return `(${formatAtom(term.atom)})`;
+    case "Id": {
+      const body = formatAtom(term.atom);
+      return body === "" ? "(@id)" : `(@id ${body})`;
+    }
     case "Wildcard": return "_";
     case "Ref": return `*${term.id}`;
   }

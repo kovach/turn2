@@ -13,7 +13,7 @@ export function idExpand(tree: BodyTree, name: string): BodyTree {
       // Positive-style id rewrite, no children to recurse into. Variables in
       // the Ask's atom get rewritten by the same `seen`-tracking pass that
       // handles Assert (`rewriteUnboundAssertVars`).
-      const newId: Term = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
+      const newId: Term = { tag: "Id", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
       let atom = node.atom;
       if (node.id.tag === "Variable") {
         const t = newTrail();
@@ -31,7 +31,7 @@ export function idExpand(tree: BodyTree, name: string): BodyTree {
     const bindsId = node.tag === "Match" || node.tag === "Before" || node.tag === "Overlap";
     let newId: Term;
     if (positive) {
-      newId = { tag: "Atom", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
+      newId = { tag: "Id", atom: { terms: [sym("id"), sym(name), sym("id" + counter++), ...previousVars] } };
     } else {
       const isAutoId = node.id.tag === "Variable" && /^\d+$/.test(node.id.name);
       newId = isAutoId ? vari("X" + counter++) : node.id;
@@ -124,7 +124,7 @@ function pruneAndConvert(
       tag: "Match",
       constraint: "any",
       id: {
-        tag: "Atom",
+        tag: "Id",
         atom: { terms: [sym("id"), sym("_agg-result"), aggMeta.lexId, aggMeta.nodeId] },
       },
       atom: { terms: [sym("_agg-result"), aggMeta.lexId, aggMeta.nodeId, aggMeta.info.out] },
@@ -285,7 +285,7 @@ function buildAggRule2(
   const localPatternIds = collectIds(aggMeta.localPattern);
 
   const bindingId: Term = {
-    tag: "Atom",
+    tag: "Id",
     atom: { terms: [sym("id"), sym("_agg-binding"), aggMeta.lexId, aggMeta.nodeId, ...localPatternIds] },
   };
   const aggBinding: Tree = {
@@ -379,7 +379,7 @@ let rewriteCounter = 0;
 // the id atom idExpand emitted. Detect that shape so we don't treat them
 // as pushers during previousVars recomputation.
 function isPositiveIdAtom(t: Term): boolean {
-  if (t.tag !== "Atom") return false;
+  if (t.tag !== "Id") return false;
   const terms = t.atom.terms;
   if (terms.length < 3) return false;
   const [head, nm, ln] = terms;
@@ -392,7 +392,7 @@ function findRuleName(rule: Tree): string | null {
   let found: string | null = null;
   function scan(node: Tree): boolean {
     if (node.tag === "Equal") return false;
-    if (isPositiveIdAtom(node.id) && node.id.tag === "Atom") {
+    if (isPositiveIdAtom(node.id) && node.id.tag === "Id") {
       const nm = node.id.atom.terms[1]!;
       if (nm.tag === "Symbol") { found = nm.name; return true; }
     }
@@ -456,7 +456,7 @@ export function rewriteUnboundAssertVars(rule: BodyTree): BodyTree {
       for (const v of mentions) {
         if (seen.has(v)) continue;
         const idAtom: Term = {
-          tag: "Atom",
+          tag: "Id",
           atom: { terms: [sym("id"), sym(name), sym("id" + ++rewriteCounter), ...previousVars] },
         };
         trailPush(subst, v, idAtom);

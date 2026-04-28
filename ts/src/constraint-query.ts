@@ -1,7 +1,7 @@
 import type { NodeId, Term, Tree } from "./types.js";
 import { newTrail, trailLookup, vari } from "./types.js";
 import type { HashconsState } from "./hashcons.js";
-import { hashconsTerm } from "./hashcons.js";
+import { hashconsTerm, refTagOf } from "./hashcons.js";
 import { idKey, type NodeRow, type RefStore } from "./refstore.js";
 import { walkTermDeep } from "./fringe.js";
 import { unifyTree } from "./unify.js";
@@ -169,9 +169,16 @@ function runComponent(
   });
 
   // Substitute choice/resolved terms inside an arbitrary Term, recursing
-  // through Refs and Atoms. A Ref whose body needs rewriting is unwrapped
-  // into a fresh Atom; the unifier's Atom-vs-Ref logic handles match-time
-  // expansion against the store side.
+  // through Refs whose body is a regular `Atom`. A Ref whose body needs
+  // rewriting is unwrapped into a fresh Atom; the unifier's Atom-vs-Ref
+  // logic handles match-time expansion against the store side.
+  //
+  // `Id`-bodied Refs are leaves here. If the Id-Ref itself is an active /
+  // existential / resolved choice term, the lookups above replace it; its
+  // body cannot contain any choice variable that isn't already exposed at
+  // some row's surface (the soundness argument from
+  // plans/separate-id-terms.md), so descending would only re-walk the
+  // exponentially shared previousVars chain for no benefit.
   function rewrite(term: Term): Term {
     const k = idKey(term, hc);
     const av = activeVarByKey.get(k);
@@ -180,7 +187,7 @@ function runComponent(
     if (ev) return ev;
     const rv = resolvedMap.get(k);
     if (rv) return rv;
-    if (term.tag === "Ref") {
+    if (term.tag === "Ref" && refTagOf(hc, term.id) === "Atom") {
       const atom = hc.refToAtom.get(term.id);
       if (!atom) return term;
       const rewrittenTerms: Term[] = [];
@@ -223,7 +230,7 @@ function runComponent(
     for (const name of activeVarNames) {
       const bound = trailLookup(trail, name);
       if (bound === undefined) return;
-      const canonical = bound.tag === "Atom" ? hashconsTerm(bound, hc) : bound;
+      const canonical = (bound.tag === "Atom" || bound.tag === "Id") ? hashconsTerm(bound, hc) : bound;
       tuple.push(canonical);
       key.push(idKey(canonical, hc));
     }
