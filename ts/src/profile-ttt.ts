@@ -39,9 +39,9 @@ const { result, steps, hc } = lastResult!;
 console.log("Steps:", steps);
 console.log("Hashcons entries:", hc.entryCount);
 
-function countNodes(tree: typeof result): number {
+function countNodes(tree: { children: { children: unknown[] }[] }): number {
   let n = 1;
-  for (const c of tree.children) n += countNodes(c);
+  for (const c of tree.children) n += countNodes(c as typeof tree);
   return n;
 }
 

@@ -1,9 +1,9 @@
-import { unifyTree, substAtom, substTerm } from "./unify.js";
-import { collectPositiveNodes } from "./tree.js";
+import { unifyConstraints, substAtom, substTerm } from "./unify.js";
+import { lower } from "./lower.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
-import type { Trail, Tree } from "./types.js";
+import type { Constraint, Trail, Tree, TurnExpr } from "./types.js";
 import { newTrail } from "./types.js";
-import { addBeforeAfter, hasNode, insertChild, nodeRowFromTree, type RefStore } from "./refstore.js";
+import { addBeforeAfter, addParentChild, hasNode, insertRow, type RefStore } from "./refstore.js";
 
 export const stepStats = {
   dedupSkipped: 0,
@@ -21,55 +21,83 @@ export function resetStepStats(): void {
 // after warmup, unification runs allocation-free on the trail itself.
 const sharedTrail: Trail = newTrail();
 
+// Per-pattern lowering cache. Lowering is deterministic and depends only on
+// the pattern's identity; expand() returns the same Tree references across
+// iterations, so a WeakMap keyed by the pattern lets us avoid re-walking
+// every fixpoint pass.
+const loweredCache = new WeakMap<Tree, TurnExpr>();
+function loweredFor(pattern: Tree): TurnExpr {
+  let te = loweredCache.get(pattern);
+  if (te === undefined) {
+    te = lower(pattern);
+    loweredCache.set(pattern, te);
+  }
+  return te;
+}
+
 // Mutates `reference` in place. Newly inserted rows carry gen === iteration,
 // so they are invisible to passesConstraint during this same pass (see
 // unify.ts notes on the mutation-during-iteration invariant).
 export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iteration: number = 1): boolean {
-  // Defensive: rewriteAskToChoose runs inside `expand`, so by the time a
-  // pattern reaches `step` no Ask should remain. Catch any leak.
   if (pattern.tag === "Ask") {
     throw new Error("step: pattern is an Ask — should have been rewritten to Assert(`_choose`) by expand");
   }
-  const positives = collectPositiveNodes(pattern);
+  const te = loweredFor(pattern);
   let anyInserted = false;
 
-  unifyTree(pattern, reference, sharedTrail, iteration, hc, (trail) => {
-    for (const { node: posNode, parent: posParent, prevBindableSibling } of positives) {
-      const parentRefId = hashconsTerm(substTerm(posParent.id, trail), hc);
-      if (!hasNode(reference, parentRefId, hc)) continue;
-
-      const rawAtom = substAtom(posNode.atom, trail);
-      const rawId = substTerm(posNode.id, trail);
-      const newAtom = hashconsAtom(rawAtom, hc);
-      const newId = hashconsTerm(rawId, hc);
-
-      // Global id uniqueness: hashconsed ids are content-addressed, so if
-      // this id exists anywhere in the store the row is a duplicate.
-      if (hasNode(reference, newId, hc)) {
-        stepStats.dedupSkipped++;
-        continue;
+  unifyConstraints(te, reference, sharedTrail, iteration, hc, (trail, suffixStart) => {
+    for (let i = suffixStart; i < te.constraints.length; i++) {
+      const c = te.constraints[i]!;
+      if (c.tag === "Assert" || c.tag === "Constrain") {
+        if (runAssertion(c, reference, trail, iteration, hc)) anyInserted = true;
+      } else if (c.tag === "AssertIntervalRel") {
+        runAssertIntervalRel(c, reference, trail, hc);
       }
-
-      insertChild(reference, parentRefId, nodeRowFromTree(posNode, {
-        id: newId,
-        atom: newAtom,
-        gen: iteration,
-      }), hc);
-
-      // Emit `before:after(prevSibling, new)` iff the positive node's
-      // pattern-preceding sibling binds an id — this is the "positive as
-      // sibling of match" case in plans/temporal-relationships.md §Step.ts.
-      if (prevBindableSibling !== null) {
-        const prevId = hashconsTerm(substTerm(prevBindableSibling.id, trail), hc);
-        if (hasNode(reference, prevId, hc)) {
-          addBeforeAfter(reference, prevId, newId, hc);
-        }
-      }
-
-      stepStats.inserted++;
-      anyInserted = true;
+      // Other tags are matching constraints — should not appear in the
+      // suffix per the lowering invariant. Defensively ignore.
     }
   });
 
   return anyInserted;
+}
+
+function runAssertion(
+  c: Extract<Constraint, { tag: "Assert" | "Constrain" }>,
+  reference: RefStore,
+  trail: Trail,
+  iteration: number,
+  hc: HashconsState,
+): boolean {
+  const newAtom = hashconsAtom(substAtom(c.atom, trail), hc);
+  const newId = hashconsTerm(substTerm(c.id, trail), hc);
+  if (hasNode(reference, newId, hc)) {
+    stepStats.dedupSkipped++;
+    return false;
+  }
+  insertRow(reference, {
+    tag: c.tag,
+    id: newId,
+    atom: newAtom,
+    gen: iteration,
+  }, hc);
+  stepStats.inserted++;
+  return true;
+}
+
+function runAssertIntervalRel(
+  c: Extract<Constraint, { tag: "AssertIntervalRel" }>,
+  reference: RefStore,
+  trail: Trail,
+  hc: HashconsState,
+): void {
+  const aId = hashconsTerm(substTerm(c.a, trail), hc);
+  const bId = hashconsTerm(substTerm(c.b, trail), hc);
+  switch (c.kind) {
+    case "contains":
+      addParentChild(reference, aId, bId, hc);
+      return;
+    case "before:after":
+      addBeforeAfter(reference, aId, bId, hc);
+      return;
+  }
 }

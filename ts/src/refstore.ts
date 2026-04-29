@@ -1,5 +1,5 @@
 import type { Atom, NodeId, Span, Term, Tree } from "./types.js";
-import { hashconsAtom, hashconsTerm, tokenOfId, type HashconsState } from "./hashcons.js";
+import { tokenOfId, type HashconsState } from "./hashcons.js";
 
 export type { NodeId } from "./types.js";
 
@@ -57,7 +57,6 @@ export interface Candidate {
 export type SymbolIndex = Map<string, Candidate[]>;
 
 export interface RefStore {
-  rootId: Term;
   nodes: Map<NodeId, NodeRow>;
   // Ordered child lists, keyed by parent id token. For every row in `nodes`,
   // `children.get(idKey(row.id))` gives its (possibly empty) children, in the
@@ -65,14 +64,11 @@ export interface RefStore {
   // relational model — order here is a storage artefact; temporal order
   // lives in `beforeAfter`. See plans/temporal-relationships.md.
   children: Map<NodeId, NodeRow[]>;
-  // Parent lookup by child token. Absent for the root. Kept in sync with
-  // `children` by `buildRefStore` / `insertChild`. Single-parent for now,
-  // promoted to a Set when multi-parent assertion syntax lands.
-  parentOf: Map<NodeId, NodeId>;
   // parent:child relation (parent → children) and its inverse (child →
-  // parents). Currently single-parent — parentsOf is always a singleton or
-  // absent (root) — but carried as Set to future-proof the multi-parent
-  // goal in plans/temporal-relationships.md.
+  // parents). Many-to-many in shape; today every node has at most one
+  // parent (multi-parent assertion syntax has not landed yet). Rows with
+  // no `parentsOf` entry are roots of the forest — `refStoreToTree`
+  // synthesises a wrapper over them at materialisation time.
   parentChild: Map<NodeId, Set<NodeId>>;
   parentsOf: Map<NodeId, Set<NodeId>>;
   // before:after relation (earlier → laters) and its inverse. Many-to-many
@@ -109,102 +105,58 @@ export function getNode(store: RefStore, id: Term, hc: HashconsState): NodeRow |
   return store.nodes.get(idKey(id, hc));
 }
 
-export function getRoot(store: RefStore, hc: HashconsState): NodeRow {
-  const row = store.nodes.get(idKey(store.rootId, hc));
-  if (!row) throw new Error("RefStore has no root row");
-  return row;
-}
-
-// Parent's id term, or null for the root. O(1).
+// First parent's id term, or null if `id` has no parent edge (root of the
+// forest). Single-parent today; if/when multi-parent assertions land, this
+// returns one of the parents — callers needing the full set should read
+// `store.parentsOf` directly.
 export function parentIdOf(store: RefStore, id: Term, hc: HashconsState): Term | null {
-  const parentKey = store.parentOf.get(idKey(id, hc));
-  if (parentKey === undefined) return null;
-  const parent = store.nodes.get(parentKey);
+  const parents = store.parentsOf.get(idKey(id, hc));
+  if (!parents || parents.size === 0) return null;
+  const firstKey = parents.values().next().value;
+  if (firstKey === undefined) return null;
+  const parent = store.nodes.get(firstKey);
   return parent ? parent.id : null;
 }
 
-// Build an empty RefStore seeded with a single synthetic Assert-tagged root
-// row. The root's tag is never consulted by any read path; Assert is chosen
-// so the store rows stay within the narrow {Assert, Constrain} union.
-export function emptyRefStore(hc: HashconsState): RefStore {
-  const nodes = new Map<NodeId, NodeRow>();
-  const children = new Map<NodeId, NodeRow[]>();
-  const parentOf = new Map<NodeId, NodeId>();
-  const parentChild = new Map<NodeId, Set<NodeId>>();
-  const parentsOf = new Map<NodeId, Set<NodeId>>();
-  const beforeAfter = new Map<NodeId, Set<NodeId>>();
-  const afterBefore = new Map<NodeId, Set<NodeId>>();
-  const index: SymbolIndex = new Map();
-  const descendantsCache = new Map<NodeId, Set<NodeId>>();
-
-  // Use a sentinel symbol name unlikely to collide with anything a user (or
-  // generated rule) writes: a normal `sym("root")` fact would otherwise hash
-  // to the same id and overwrite the synthetic row.
-  const rootId = hashconsTerm({ tag: "Symbol", name: "$root" }, hc);
-  const rootAtom = hashconsAtom({ terms: [] }, hc);
-  const rootRow: NodeRow = {
-    tag: "Assert",
-    id: rootId,
-    atom: rootAtom,
-    gen: 0,
-  };
-  const key = idKey(rootId, hc);
-  nodes.set(key, rootRow);
-  children.set(key, []);
-
+// Build a genuinely empty RefStore. No synthetic root row — top-level
+// inserts produce parentless rows directly, and `refStoreToTree`
+// synthesises a wrapper over the forest at materialisation time. See
+// plans/flat-relational-ir.md §Evaluator changes.
+export function emptyRefStore(_hc: HashconsState): RefStore {
   return {
-    rootId,
-    nodes,
-    children,
-    parentOf,
-    parentChild,
-    parentsOf,
-    beforeAfter,
-    afterBefore,
-    index,
-    descendantsCache,
+    nodes: new Map(),
+    children: new Map(),
+    parentChild: new Map(),
+    parentsOf: new Map(),
+    beforeAfter: new Map(),
+    afterBefore: new Map(),
+    index: new Map(),
+    descendantsCache: new Map(),
   };
 }
 
-// Insert a new row as a child of `parent`. `row` must already carry
+// Insert a row into the store with no parent edge. `row` must already carry
 // hashconsed id and atom. Mutation-during-iteration safety relies on the
 // caller stamping `row.gen = iteration` so passesConstraint hides the fresh
 // row from the live matching pass.
 //
-// Emits only `parent:child(parentId, row.id)`. Temporal sequencing is the
-// caller's job: step.ts writes `before:after` edges explicitly via
-// `addBeforeAfter` based on pattern source (see
-// plans/temporal-relationships.md §Step.ts). Inserts whose ordering is
-// genuinely unconstrained get no temporal edge — `children` is a pure
-// iteration index and conveys no temporal meaning.
-export function insertChild(
+// Idempotent on the row id: re-inserting the same id is a no-op (returns
+// the existing row). The symbol index is also kept idempotent.
+//
+// Edges (`parent:child`, `before:after`) are inserted separately via
+// `addParentChild` / `addBeforeAfter`. See plans/flat-relational-ir.md
+// §Evaluator changes.
+export function insertRow(
   store: RefStore,
-  parentId: Term,
   row: NodeRow,
-  hc: HashconsState,
+  _hc: HashconsState,
 ): NodeRow {
-  const parentKey = idKey(parentId, hc);
-  if (!store.nodes.has(parentKey)) {
-    throw new Error(`RefStore.insertChild: no parent with id token ${parentKey}`);
-  }
-  const siblings = store.children.get(parentKey) ?? [];
-  const key = idKey(row.id, hc);
-  store.nodes.set(key, row);
-  siblings.push(row);
-  store.children.set(parentKey, siblings);
-  store.children.set(key, []);
-  store.parentOf.set(key, parentKey);
-  addEdge(store.parentChild, parentKey, key);
-  addEdge(store.parentsOf, key, parentKey);
+  const key = tokenOfId(row.id, _hc);
+  const existing = store.nodes.get(key);
+  if (existing) return existing;
 
-  // Maintain `descendantsCache`. The new row `key` is fresh (children list
-  // initialized empty above), so its own descendant set is `{key}` and adding
-  // `key` to every cached source that can reach `parentKey` is sufficient.
-  // If `insertChild` ever grows to add a parent edge to a *pre-existing* row,
-  // this needs to union in `descendantsOf(key)` instead of just `{key}`.
-  for (const set of store.descendantsCache.values()) {
-    if (set.has(parentKey)) set.add(key);
-  }
+  store.nodes.set(key, row);
+  store.children.set(key, []);
 
   const firstTerm = row.atom.terms[0];
   if (firstTerm?.tag === "Symbol") {
@@ -213,6 +165,49 @@ export function insertChild(
     bucket.push({ node: row });
   }
   return row;
+}
+
+// Assert a `parent:child(parent, child)` edge between two existing rows.
+// Idempotent — re-asserting an existing edge is a no-op. Maintains
+// `children`, `parentChild`, `parentsOf`, and `descendantsCache`.
+export function addParentChild(
+  store: RefStore,
+  parentId: Term,
+  childId: Term,
+  hc: HashconsState,
+): void {
+  const parentKey = idKey(parentId, hc);
+  const childKey = idKey(childId, hc);
+  if (!store.nodes.has(parentKey)) {
+    throw new Error(`addParentChild: no parent row with id token ${parentKey}`);
+  }
+  const childRow = store.nodes.get(childKey);
+  if (!childRow) {
+    throw new Error(`addParentChild: no child row with id token ${childKey}`);
+  }
+
+  const existing = store.parentChild.get(parentKey);
+  if (existing && existing.has(childKey)) return;  // idempotent
+
+  addEdge(store.parentChild, parentKey, childKey);
+  addEdge(store.parentsOf, childKey, parentKey);
+
+  // Keep the children-cache list in sync — push the child row in insertion
+  // order. (Pure iteration index, no temporal meaning; see header.)
+  const siblings = store.children.get(parentKey) ?? [];
+  siblings.push(childRow);
+  store.children.set(parentKey, siblings);
+
+  // Maintain `descendantsCache`. The child may already have its own
+  // descendants (multi-parent or out-of-order edge insertion), so union the
+  // child's descendant set into every cached source that contains the
+  // parent — not just `{childKey}`.
+  const childDescendants = descendantsOf(store, childKey);
+  for (const set of store.descendantsCache.values()) {
+    if (set.has(parentKey)) {
+      for (const d of childDescendants) set.add(d);
+    }
+  }
 }
 
 // Assert a `before:after(prev, next)` edge. Both nodes must already be in
@@ -280,12 +275,14 @@ function ancestorsOf(store: RefStore, n: NodeId): Set<NodeId> {
   return out;
 }
 
-// `before(a, b)` = some ancestor-or-self of a reaches some ancestor-or-self
-// of b by following one or more `before:after` edges. This is the transitive
-// closure of the raw relation, lifted by containment on both ends — a
-// sibling-chain `a→x→b` produces `before(a, b)` even if the raw edges only
-// record the adjacent steps.
-export function before(store: RefStore, a: NodeId, b: NodeId): boolean {
+// `beforeAfter(a, b)` = "a is before, b is after". Some ancestor-or-self of
+// a reaches some ancestor-or-self of b by following one or more
+// `before:after` edges. This is the transitive closure of the raw relation,
+// lifted by containment on both ends — a sibling-chain `a→x→b` produces
+// `beforeAfter(a, b)` even if the raw edges only record the adjacent steps.
+// Name mirrors the `beforeAfter`/`afterBefore` storage maps so arg order is
+// manifest at the call site.
+export function beforeAfter(store: RefStore, a: NodeId, b: NodeId): boolean {
   const bAncestors = ancestorsOf(store, b);
   const seen = new Set<NodeId>();
   const stack: NodeId[] = [];
@@ -302,11 +299,11 @@ export function before(store: RefStore, a: NodeId, b: NodeId): boolean {
   return false;
 }
 
-// `prior(a, b)` = before(a, b) ∨ contains(b, a). Used by the aggregate fold
-// when scheduling inner instances before outer ones (see the fold pass in
-// aggregate-fold.ts).
+// `prior(a, b)` = beforeAfter(a, b) ∨ contains(b, a). Used by the aggregate
+// fold when scheduling inner instances before outer ones (see the fold pass
+// in aggregate-fold.ts).
 export function prior(store: RefStore, a: NodeId, b: NodeId): boolean {
-  return before(store, a, b) || (a !== b && contains(store, b, a));
+  return beforeAfter(store, a, b) || (a !== b && contains(store, b, a));
 }
 
 // `overlap(a, b)` = ∃ c. contains(a, c) ∧ contains(b, c). The descent check
@@ -351,31 +348,54 @@ export function* allCandidates(store: RefStore): Generator<Candidate> {
   }
 }
 
-// Result of materializing the store: a tree where every node mirrors a
-// `NodeRow`. Tags are narrowed to `Assert | Constrain` (the only tags rows
-// carry — see `NodeRow` above), `gen` is required (rows always populate it),
-// and `children` recurses into the same narrowed type, so an `Equal`/`Ask`/
-// pattern-only node can never appear anywhere in the result.
-interface ResultTreeBase {
+// Result of materializing the store. The wrapper is a Tree-compatible
+// synthetic Match node (empty atom, Wildcard id) — there is no `$root`
+// row in storage anymore, so this wrapper is built fresh per call to give
+// consumers a single root to walk. Inner rows mirror their NodeRow shape
+// (tags narrowed to `Assert | Constrain`).
+interface ResultRowBase {
   id: Term;
   atom: Atom;
   gen: number;
   span?: Span;
-  children: ResultTree[];
+  children: ResultRowTree[];
 }
-export type ResultTree =
-  | (ResultTreeBase & { tag: "Assert" })
-  | (ResultTreeBase & { tag: "Constrain" });
+export type ResultRowTree =
+  | (ResultRowBase & { tag: "Assert" })
+  | (ResultRowBase & { tag: "Constrain" });
 
-// Materialize the store as a nested ResultTree — used to hand the fixpoint
-// result to existing consumers (tests, web display) that expect a recursive
-// children-bearing tree. The store remains the source of truth during
+// Tree-compatible (matches the Match case of `Tree`). The synthetic wrapper
+// itself is *not* stored in the RefStore — it's purely an output shim so
+// callers expecting a single root keep working under the new "forest of
+// parentless rows" data model.
+export interface ResultTree {
+  tag: "Match";
+  constraint: "any";
+  id: Term;       // Wildcard
+  atom: Atom;     // empty terms list
+  children: ResultRowTree[];
+}
+
+// Materialize the store as a nested ResultTree. The wrapper's `children` is
+// the forest of parentless rows (rows with no incoming `parent:child`
+// edge) in insertion order. The store remains the source of truth during
 // evaluation.
 export function refStoreToTree(store: RefStore, hc: HashconsState): ResultTree {
-  return buildTreeFromRow(store, store.rootId, hc);
+  const forest: ResultRowTree[] = [];
+  for (const [key, row] of store.nodes) {
+    if (store.parentsOf.has(key)) continue;
+    forest.push(buildTreeFromRow(store, row.id, hc));
+  }
+  return {
+    tag: "Match",
+    constraint: "any",
+    id: { tag: "Wildcard" },
+    atom: { terms: [] },
+    children: forest,
+  };
 }
 
-function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): ResultTree {
+function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): ResultRowTree {
   const key = idKey(id, hc);
   const row = store.nodes.get(key);
   if (!row) throw new Error(`refStoreToTree: no row for id token ${key}`);
@@ -400,14 +420,7 @@ function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): ResultT
 export function checkIntegrity(store: RefStore, hc: HashconsState): void {
   const { nodes, children, index, parentChild, parentsOf, beforeAfter, afterBefore } = store;
 
-  // 1. Root present and matches store.rootId.
-  const rootKey = idKey(store.rootId, hc);
-  if (!nodes.has(rootKey)) throw new Error("integrity: store.rootId has no row");
-  if (store.parentOf.has(rootKey) || parentsOf.has(rootKey)) {
-    throw new Error("integrity: root row has a parent entry");
-  }
-
-  // 2. parent:child / parentsOf / parentOf / children-cache agreement.
+  // 1. parent:child / parentsOf / children-cache agreement.
   for (const [parent, kids] of parentChild) {
     if (!nodes.has(parent)) {
       throw new Error(`integrity: parentChild has unknown parent token ${parent}`);
@@ -429,21 +442,6 @@ export function checkIntegrity(store: RefStore, hc: HashconsState): void {
         throw new Error(`integrity: parentChild(${p}) missing forward edge to ${kid}`);
       }
     }
-  }
-  for (const [key, row] of nodes) {
-    if (key === rootKey) continue;
-    if (!parentsOf.has(key)) {
-      throw new Error(`integrity: non-root row ${key} has no parent edge`);
-    }
-    // parentOf cache must point to one of the row's parents.
-    const cached = store.parentOf.get(key);
-    if (cached === undefined) {
-      throw new Error(`integrity: parentOf cache missing entry for ${key}`);
-    }
-    if (!parentsOf.get(key)!.has(cached)) {
-      throw new Error(`integrity: parentOf cache for ${key} points to ${cached} which is not in parentsOf`);
-    }
-    void row;
   }
 
   // 3. Children-cache agreement: every entry in `children.get(p)` is a

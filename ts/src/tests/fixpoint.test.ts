@@ -501,9 +501,14 @@ if (false)
   if (status.kind === "active-choices") {
     assert.equal(status.components.length, 1);
     assert.equal(status.components[0]!.activeTerms.length, 2);
+    // Sort within each tuple as well as across tuples: the column order of
+    // `options` follows `activeTerms`, which is keyed on hashcons ref ids and
+    // can flip if allocation order shifts. The two value domains ({a,b} and
+    // {x,y}) are disjoint here, so within-tuple sort is unambiguous.
     const tuples = status.components[0]!.options.map((tup) =>
       tup
         .map((t) => (t.tag === "Symbol" ? t.name : "?"))
+        .sort()
         .join(","),
     ).sort();
     assert.deepEqual(tuples, ["a,x", "a,y", "b,y"]);

@@ -47,6 +47,7 @@ const syncStatusEl = document.getElementById("sync-status") as HTMLSpanElement;
 const displayPaneEl = document.getElementById("display-pane") as HTMLDivElement;
 const displayEl = document.getElementById("display") as HTMLDivElement;
 const rightColumnEl = displayPaneEl.parentElement as HTMLDivElement;
+const hideInternalEl = document.getElementById("hide-internal") as HTMLInputElement;
 
 // --- Server sync state ---
 
@@ -588,7 +589,7 @@ async function run() {
   clickableTerms = new Map();
   nextClickableKey = 0;
   iterationsEl.textContent = `${steps} step${steps === 1 ? "" : "s"}`;
-  resultEl.innerHTML = result.children.map((c) => renderTree(c, 0)).join("");
+  resultEl.innerHTML = visibleChildren(result).map((c) => renderTree(c, 0)).join("");
 
   if (status.kind === "empty-fringe-error") {
     showError(`empty fringe: choice term has no constraint row`);
@@ -684,10 +685,21 @@ function buildDefaultOptionLists(ctx: DisplayCallContext): HTMLElement {
   return container;
 }
 
+function isInternalRow(tree: ResultTree): boolean {
+  const head = tree.atom.terms[0];
+  return head?.tag === "Symbol" && head.name.startsWith("_");
+}
+
+function visibleChildren(tree: ResultTree): ResultTree[] {
+  return hideInternalEl.checked
+    ? tree.children.filter((c) => !isInternalRow(c))
+    : tree.children;
+}
+
 function renderTree(tree: ResultTree, depth: number): string {
   const indent = "  ".repeat(depth);
   return indent + renderNode(tree) + "\n" +
-    tree.children.map((c) => renderTree(c, depth + 1)).join("");
+    visibleChildren(tree).map((c) => renderTree(c, depth + 1)).join("");
 }
 
 function renderNode(tree: ResultTree): string {
@@ -799,6 +811,10 @@ resultEl.addEventListener("mouseout", (e) => {
       el.classList.remove("hover-highlight")
     );
   }
+});
+
+hideInternalEl.addEventListener("change", () => {
+  void scheduleRun();
 });
 
 initServer().then(() => {

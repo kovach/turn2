@@ -103,6 +103,56 @@ export function retag<T extends BodyTag>(
   return out as unknown as Extract<Tree, { tag: T }>;
 }
 
+// ----- TurnExpr (TE) IR -----
+//
+// The flat constraint-list IR that replaces the recursive Tree walk during
+// evaluation. Source parsing still produces a Tree; `lower(tree)` (in
+// lower.ts) flattens that Tree into a TurnExpr after `expand`. See
+// plans/flat-relational-ir.md for the design.
+//
+// Conventions:
+// - `Match` is the single negative leaf — replaces today's
+//   Match / Before / Overlap. Its temporal/structural relation to other
+//   ids is carried by sibling `IntervalRel` constraints, not by a tag.
+// - `Assert` and `Constrain` are the leaf positives. Edge insertion has
+//   its own positive constructor (`AssertIntervalRel`).
+// - `IntervalRel{kind: "before:after", a, b}` reads "a is before, b is
+//   after" — the colon mirrors the `beforeAfter`/`afterBefore` storage
+//   maps in refstore.ts so arg order is manifest at the call site.
+// - `AssertIntervalRel` is restricted to the two raw edges that actually
+//   land in the refstore (`before:after`, `parent:child`). `prior` and
+//   `overlap` are derived relations with no raw row to assert; they only
+//   appear on the negative `IntervalRel` side.
+
+// Match-mode flag for semi-naive evaluation, lifted from the existing
+// MatchConstraint type so call sites can read either name.
+export type AtomMode = MatchConstraint;
+
+export type IntervalRelKind = "before:after" | "contains" | "prior" | "overlap";
+export type AssertIntervalRelKind = "before:after" | "contains";
+
+export type Constraint =
+  | { tag: "Match";             mode: AtomMode;              id: Term; atom: Atom }
+  | { tag: "Assert";                                         id: Term; atom: Atom }
+  | { tag: "Constrain";                                      id: Term; atom: Atom }
+  | { tag: "IntervalRel";       kind: IntervalRelKind;       a: Term;  b: Term    }
+  | { tag: "AssertIntervalRel"; kind: AssertIntervalRelKind; a: Term;  b: Term    }
+  | { tag: "Equal";             lhs: Term; rhs: Term };
+
+// Tree-traversal order, with all Assert / AssertIntervalRel constraints
+// appended last so assertions fire only after the matching prefix has
+// succeeded. The evaluator runs left-to-right; Equal must precede the
+// constraints whose variables it binds (traversal order takes care of this
+// without a planner).
+export interface TurnExpr {
+  constraints: Constraint[];
+}
+
+export type PositiveConstraint = Extract<Constraint, { tag: "Assert" | "Constrain" | "AssertIntervalRel" }>;
+
+export const isPositiveConstraint = (c: Constraint): c is PositiveConstraint =>
+  c.tag === "Assert" || c.tag === "Constrain" || c.tag === "AssertIntervalRel";
+
 // Substitution trail: two parallel mutable arrays. Bind = push; backtrack = `.length = mark`.
 // After warmup the backing capacity is retained, so hot-path bind/unwind is allocation-free.
 // Lookup scans tail-first so the most recent binding of a name shadows earlier ones.

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { isTemporallyBefore, fringe, unionFringe, intersectionFringe, collectPositiveNodes } from "../tree.js";
+import { isTemporallyBefore, fringe, unionFringe, intersectionFringe } from "../tree.js";
 import { sym, fact } from "../types.js";
 import { createHashcons } from "../hashcons.js";
-import type { Tree } from "../types.js";
 
 const hc = createHashcons();
 
@@ -32,26 +31,6 @@ const hc = createHashcons();
   assert.equal(isTemporallyBefore(a, []), false);
   assert.equal(isTemporallyBefore([], a), false);
   console.log("PASS: isTemporallyBefore");
-}
-
-// --- collectPositiveNodes ---
-// Pattern: - root / + a / - b / + c
-// positives: a and c, parents are root and b respectively, paths [0] and [1, 0].
-{
-  const patC: Tree = { tag: "Assert", id: sym("c"), atom: { terms: [sym("c")] }, children: [] };
-  const patB: Tree = { tag: "Match", constraint: "any", id: sym("b"), atom: { terms: [sym("b")] }, children: [patC] };
-  const patA: Tree = { tag: "Assert", id: sym("a"), atom: { terms: [sym("a")] }, children: [] };
-  const patRoot: Tree = { tag: "Match", constraint: "any", id: sym("r"), atom: { terms: [] }, children: [patA, patB] };
-
-  const positives = collectPositiveNodes(patRoot);
-  assert.equal(positives.length, 2);
-  assert.equal(positives[0]!.node, patA);
-  assert.equal(positives[0]!.parent, patRoot);
-  assert.deepEqual(positives[0]!.path, [0]);
-  assert.equal(positives[1]!.node, patC);
-  assert.equal(positives[1]!.parent, patB);
-  assert.deepEqual(positives[1]!.path, [1, 0]);
-  console.log("PASS: collectPositiveNodes");
 }
 
 // --- fringe tests ---

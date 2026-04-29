@@ -13,12 +13,40 @@ plan: TODO
 
 - before expansion, check that the initial program has unique name per rule
 
-# localizing constraint evaluation
+# top-down predicates
 plan: TODO
 
-- we want the constrains associated with a choice to be evaluated a point in time
-- we'll use the id of the Ask node for this
-- before evaluating the query
+- as a step away from the current aggregation approach, add a new leaf TE
+  constructor representing a functional predicate that may aggregate rows
+- these functional predicates are defined separately from patterns like this:
+  ```
+  ```
+
+# new flat relational IR
+plan: plans/flat-relational-ir.md
+
+- new IR called TurnExpr (*TE* for short); convert tree into TurnExpr before evaluation
+- TE is a list of constraints, each of which is an *atom* or an *episode relationship*
+- key idea is that the temporal relationships handled by parent/child and before/after (via TreeBody.children) are more explicit
+- episode relationships:
+  before:after, contains, prior, overlap
+- atoms: same as now: an id and a list of terms, usually the first one being a symbol
+- each of Assert, Constrain, Aggregate, Ask will become a leaf node in the new type
+- there will be only one negative leaf node
+- the current negative nodes (Match, Before, Overlap) will be translated to one leaf node + whatever constraints on their children
+- key question: where in pipeline do we implement this
+
+# reifying choice option tuples
+plan: plans/reify-choice-options.md
+status: pending refactorings to simplify; currently abandoned
+
+- instead of evaluating choice "components" outside of the fixpoint loop,
+  materialize the option query as a pattern and evaluate it "normally"
+- first step: add a general method for adding a new pattern rule to a fixpoint in progress.
+  the new rule should see all tuples it would have seen had it been present all along;
+  we will assume that this feature is only used on *safe* rules that would not have changed the course of the program, that is (in pseudocode):
+    -- running join program from empty set = running joint program from fixpoint of base program
+    fix(P+P', {}) = fix(P+P', fix(P))
 
 # separate id terms from atom
 plan: plans/separate-id-terms.md

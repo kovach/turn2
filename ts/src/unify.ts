@@ -1,8 +1,9 @@
-import type { Atom, MatchConstraint, NodeId, Term, Trail, Tree } from "./types.js";
-import { newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
-import { hashconsAtom, hashconsTerm, refTagOf, tokenOfId, createHashcons, type HashconsState } from "./hashcons.js";
+import type { Atom, Constraint, MatchConstraint, Term, Trail, Tree, TurnExpr } from "./types.js";
+import { isPositiveConstraint, newTrail, trailLength, trailLookup, trailPush, trailUnwind } from "./types.js";
+import { hashconsAtom, hashconsTerm, refTagOf, createHashcons, type HashconsState } from "./hashcons.js";
 import type { Candidate, NodeRow, RefStore, SymbolIndex } from "./refstore.js";
-import { addBeforeAfter, allCandidates, before, emptyRefStore, getNode, getRoot, idKey, insertChild, overlap, strictlyContains } from "./refstore.js";
+import { addBeforeAfter, addParentChild, allCandidates, beforeAfter, emptyRefStore, idKey, insertRow, overlap, prior, strictlyContains } from "./refstore.js";
+import { lower } from "./lower.js";
 
 export type { Candidate, SymbolIndex } from "./refstore.js";
 
@@ -131,18 +132,6 @@ function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolea
   return true;
 }
 
-// --- Node unification (id + literal) ---
-
-function unifyNode(pat: Tree, ref: NodeRow, trail: Trail, hc: HashconsState): boolean {
-  const patTag = pat.tag;
-  if (patTag !== "Match" && patTag !== "Before" && patTag !== "Overlap") return false;
-  // Constrain rows are insertable but not unification targets — keep this
-  // explicit even though the narrowed NodeRow union forbids Match/etc here.
-  if (ref.tag === "Constrain") return false;
-  if (!unifyTerms(pat.id, ref.id, trail, hc)) return false;
-  return unifyAtoms(pat.atom, ref.atom, trail, hc);
-}
-
 // --- Reference enumeration ---
 //
 // The reference tree is reified as a flat RefStore (see refstore.ts and
@@ -168,126 +157,130 @@ function passesConstraint(row: { gen: number }, constraint: MatchConstraint, ite
   return true;
 }
 
-// --- Main search ---
+// --- TE-driven unifier ---
 //
-// The search is visitor-style: each successful leaf invokes `visit()` while the
-// trail is live, then backtracking unwinds the trail before moving to the next
-// candidate. `SearchState` is a single long-lived record mutated in place during
-// descent — `deepest` is save/restored inline to avoid per-branch object copies.
+// Walks the matching prefix of a TurnExpr (Match / IntervalRel / Equal),
+// pushing/unwinding the trail at choice points. When the prefix is
+// satisfied, calls `visit(trail, suffixStart)` — `suffixStart` is the
+// index of the first positive constraint (Assert / Constrain /
+// AssertIntervalRel), or `cs.length` if there are none. Caller dispatches
+// the assertion suffix in the visit callback (see step.ts).
 //
-// The callback must NOT re-enter the unifier on the same trail. If a caller ever
-// needs nested unification, it should pass a fresh trail to the inner call.
+// IntervalRel.kind dispatch maps to the existing refstore helpers:
+//   contains     → strictlyContains   (excludes self, matches Match descent today)
+//   before:after → beforeAfter        (a precedes b)
+//   overlap      → overlap
+//   prior        → prior
+//
+// Mutation-during-iteration: row inserts during the visit are allocated
+// with `gen === iteration`; passesConstraint hides them from the live
+// matching pass under any/old/delta semantics. Edge inserts have no gen
+// and are not matched against — they only refine subsequent constraints
+// in the same TE, never spawn new candidates.
 
-interface SearchState {
-  // NodeId of the nearest pattern ancestor's reference image. Candidates for
-  // a Match child must be strictly contained by this node. Initialised to
-  // the reference root at unifyTree entry.
-  deepest: NodeId;
-  trail: Trail;
-  store: RefStore;
-  iteration: number;
-  hc: HashconsState;
-}
-
-type Visit = () => void;
-
-function matchChildren(patChildren: Tree[], state: SearchState, visit: Visit): void {
-  matchChildrenFrom(patChildren, 0, state, visit);
-}
-
-function matchChildrenFrom(
-  patChildren: Tree[],
-  idx: number,
-  state: SearchState,
-  visit: Visit,
+export function unifyConstraints(
+  te: TurnExpr,
+  store: RefStore,
+  trail: Trail,
+  iteration: number,
+  hc: HashconsState,
+  visit: (trail: Trail, suffixStart: number) => void,
 ): void {
-  if (idx >= patChildren.length) { visit(); return; }
-  const head = patChildren[idx]!;
+  const cs = te.constraints;
+  unifyConstraintsAt(cs, 0, store, trail, iteration, hc, visit);
+}
 
-  if (head.tag === "Equal") {
-    // Equal is not a choice point, but it pushes bindings that later siblings
-    // must see. The unwind runs after the recursive call returns — later
-    // siblings observe the binding during descent, and it disappears on return.
-    const mark = trailLength(state.trail);
-    if (unifyTerms(head.lhs, head.rhs, state.trail, state.hc)) {
-      matchChildrenFrom(patChildren, idx + 1, state, visit);
+function unifyConstraintsAt(
+  cs: readonly Constraint[],
+  start: number,
+  store: RefStore,
+  trail: Trail,
+  iteration: number,
+  hc: HashconsState,
+  visit: (trail: Trail, suffixStart: number) => void,
+): void {
+  // Walk linear (no choice-point) constraints inline, recurse on choice
+  // points (Match / Equal). Hand off to `visit` at the first positive
+  // constraint or when the list is exhausted.
+  let i = start;
+  while (i < cs.length) {
+    const c = cs[i]!;
+
+    if (isPositiveConstraint(c)) {
+      visit(trail, i);
+      return;
     }
-    trailUnwind(state.trail, mark);
+
+    if (c.tag === "IntervalRel") {
+      if (!checkIntervalRel(c, store, trail, hc)) return;
+      i++;
+      continue;
+    }
+
+    if (c.tag === "Equal") {
+      const mark = trailLength(trail);
+      if (unifyTerms(c.lhs, c.rhs, trail, hc)) {
+        unifyConstraintsAt(cs, i + 1, store, trail, iteration, hc, visit);
+      }
+      trailUnwind(trail, mark);
+      return;
+    }
+
+    // c.tag === "Match" — choice point.
+    matchAt(c, cs, i, store, trail, iteration, hc, visit);
     return;
   }
-
-  if (head.tag !== "Match" && head.tag !== "Before" && head.tag !== "Overlap") {
-    matchChildrenFrom(patChildren, idx + 1, state, visit);
-    return;
-  }
-
-  const anchor = computeAnchor(patChildren, idx, state);
-  // Siblings at this level share the *outer* deepest (the parent's image), not the
-  // current sibling's match path. Restore before descending into the next sibling
-  // and re-apply on the way back so matchSubtree's loop continues correctly.
-  const outerDeepest = state.deepest;
-  matchSubtree(head, state, anchor, () => {
-    const innerDeepest = state.deepest;
-    state.deepest = outerDeepest;
-    matchChildrenFrom(patChildren, idx + 1, state, visit);
-    state.deepest = innerDeepest;
-  });
+  visit(trail, cs.length);
 }
 
-function computeAnchor(
-  siblings: Tree[],
-  idx: number,
-  state: SearchState,
-): NodeId {
-  const node = siblings[idx]!;
-  if (node.tag !== "Before") return state.deepest;
-
-  for (let i = idx - 1; i >= 0; i--) {
-    const sib = siblings[i]!;
-    if (sib.tag === "Match" || sib.tag === "Before" || sib.tag === "Overlap") {
-      const boundId = substTerm(sib.id, state.trail);
-      const row = getNode(state.store, boundId, state.hc);
-      if (row) return idKey(row.id, state.hc);
-    }
-  }
-  return state.deepest;
-}
-
-function matchSubtree(
-  pat: Tree,
-  state: SearchState,
-  anchor: NodeId,
-  visit: Visit,
+function matchAt(
+  match: Extract<Constraint, { tag: "Match" }>,
+  cs: readonly Constraint[],
+  i: number,
+  store: RefStore,
+  trail: Trail,
+  iteration: number,
+  hc: HashconsState,
+  visit: (trail: Trail, suffixStart: number) => void,
 ): void {
-  // Equal is handled inline by matchChildrenFrom; the only patterns that
-  // reach matchSubtree are Match/Before/Overlap (the bindable tags).
-  if (pat.tag !== "Match" && pat.tag !== "Before" && pat.tag !== "Overlap") return;
-  const constraint = pat.constraint;
-
-  const firstTerm = pat.atom.terms[0];
+  const firstTerm = match.atom.terms[0];
   const candidates: Iterable<Candidate> = (firstTerm?.tag === "Symbol")
-    ? (state.store.index.get(firstTerm.name) ?? [])
-    : allCandidates(state.store);
+    ? (store.index.get(firstTerm.name) ?? [])
+    : allCandidates(store);
 
-  const prevDeepest = state.deepest;
   for (const { node } of candidates) {
-    if (!passesConstraint(node, constraint, state.iteration)) continue;
-    const candId = idKey(node.id, state.hc);
-    if (pat.tag === "Before") {
-      if (!before(state.store, candId, anchor)) continue;
-    } else if (pat.tag === "Overlap") {
-      if (!overlap(state.store, prevDeepest, candId)) continue;
-    } else {
-      if (!strictlyContains(state.store, prevDeepest, candId)) continue;
+    if (!passesConstraint(node, match.mode, iteration)) continue;
+    if (node.tag === "Constrain") continue;  // Constrain rows aren't unification targets
+    const mark = trailLength(trail);
+    if (unifyTerms(match.id, node.id, trail, hc) &&
+        unifyAtoms(match.atom, node.atom, trail, hc)) {
+      unifyConstraintsAt(cs, i + 1, store, trail, iteration, hc, visit);
     }
-    const mark = trailLength(state.trail);
-    if (unifyNode(pat, node, state.trail, state.hc)) {
-      state.deepest = candId;
-      matchChildren(pat.children, state, visit);
-    }
-    trailUnwind(state.trail, mark);
+    trailUnwind(trail, mark);
   }
-  state.deepest = prevDeepest;
+}
+
+function checkIntervalRel(
+  c: Extract<Constraint, { tag: "IntervalRel" }>,
+  store: RefStore,
+  trail: Trail,
+  hc: HashconsState,
+): boolean {
+  const aTerm = substTerm(c.a, trail);
+  const bTerm = substTerm(c.b, trail);
+  if (aTerm.tag === "Variable" || bTerm.tag === "Variable") return false;
+  const aId = idKey(toRefIfNested(aTerm, hc), hc);
+  const bId = idKey(toRefIfNested(bTerm, hc), hc);
+  switch (c.kind) {
+    case "contains":     return strictlyContains(store, aId, bId);
+    case "before:after": return beforeAfter(store, aId, bId);
+    case "overlap":      return overlap(store, aId, bId);
+    case "prior":        return prior(store, aId, bId);
+  }
+}
+
+function toRefIfNested(t: Term, hc: HashconsState): Term {
+  return (t.tag === "Atom" || t.tag === "Id") ? hashconsTerm(t, hc) : t;
 }
 
 // --- Entry point ---
@@ -312,31 +305,23 @@ export function unifyTree(
   hc: HashconsState,
   visit: (trail: Trail) => void,
 ): void {
-  if (pattern.tag !== "Match" || pattern.atom.terms.length !== 0) return;
-  const root = getRoot(reference, hc);
-  if (!passesConstraint(root, pattern.constraint, iteration)) return;
-
-  const mark = trailLength(trail);
-  if (!unifyTerms(pattern.id, root.id, trail, hc)) {
-    trailUnwind(trail, mark);
-    return;
-  }
-  const state: SearchState = {
-    deepest: tokenOfId(root.id, hc),
-    trail,
-    store: reference,
-    iteration,
-    hc,
-  };
-  matchChildren(pattern.children, state, () => visit(trail));
-  trailUnwind(trail, mark);
+  // Shim: lower the pattern to a TurnExpr and drive matching via
+  // unifyConstraints. The visit fires only after the matching prefix is
+  // satisfied; the assertion suffix (Assert/Constrain/AssertIntervalRel)
+  // is the caller's responsibility — they can iterate
+  // `te.constraints.slice(suffixStart)` themselves. This shim ignores it,
+  // matching the pre-TE `unifyTree` contract for callers that only want
+  // bindings (see `collectMatches`, `constraint-query.ts`).
+  const te = lower(pattern);
+  unifyConstraints(te, reference, trail, iteration, hc, () => visit(trail));
 }
 
 // --- Test-only helper: collect all substitutions as plain records. ---
 // Intended for tests that need to assert over the set of solutions. The
-// `reference` Tree's outer wrapper is discarded — only its children are
-// inserted into the store, so the synthetic root row supplied by
-// `emptyRefStore` is the unique root the pattern unifies against.
+// `reference` Tree's outer wrapper is discarded — its children become the
+// roots of the store's forest (parentless rows). Sibling `before:after`
+// edges are emitted between consecutive children at every level, mirroring
+// the implicit ordering that the source-tree-walker provided.
 export function collectMatches(
   pattern: Tree,
   reference: Tree,
@@ -347,7 +332,7 @@ export function collectMatches(
   const hc = createHashcons();
   const store = emptyRefStore(hc);
 
-  function insertSubtree(node: Tree, parentId: Term): Term {
+  function insertSubtree(node: Tree, parentId: Term | null): Term {
     if (node.tag !== "Assert" && node.tag !== "Constrain") {
       throw new Error(`collectMatches: reference subtree has tag ${node.tag}; expected Assert/Constrain`);
     }
@@ -359,10 +344,10 @@ export function collectMatches(
       atom: hashedAtom,
       gen: node.gen ?? 0,
     };
-    insertChild(store, parentId, row, hc);
-    // Mirror the sibling before:after edges that the old buildRefStore added,
-    // so Before-pattern tests still observe each child as before its right
-    // neighbour.
+    insertRow(store, row, hc);
+    if (parentId !== null) addParentChild(store, parentId, hashedId, hc);
+    // Sibling before:after edges: mirror the ordering that the source-tree
+    // walker provided for nested children.
     let prev: Term | null = null;
     for (const child of node.children) {
       const childId = insertSubtree(child, hashedId);
@@ -376,7 +361,7 @@ export function collectMatches(
   }
   let prev: Term | null = null;
   for (const child of reference.children) {
-    const childId = insertSubtree(child, store.rootId);
+    const childId = insertSubtree(child, null);
     if (prev !== null) addBeforeAfter(store, prev, childId, hc);
     prev = childId;
   }

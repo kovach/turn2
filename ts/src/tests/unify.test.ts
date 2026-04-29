@@ -189,15 +189,20 @@ function substStr(s: Map<string, Term>): Record<string, string> {
   console.log("PASS 14: Before excludes descendants of parent image");
 }
 
-// 15. Before at top level of pattern → nothing is before the root, no match
+// 15. Before at top level of pattern is a programmer error: `<` needs an
+//     anchor (prior bindable sibling or non-root parent), and the synthetic
+//     root doesn't count. lower throws.
 {
   const pattern = root([
     { tag: "Before", constraint: "any", id: vari("M"), atom: { terms: [sym("move"), vari("X")] }, children: [] },
   ]);
   const reference = root([fact(sym("ma"), [sym("move"), sym("a")])]);
-  const results = unifyTree(pattern, reference);
-  assert.equal(results.length, 0);
-  console.log("PASS 15: Before at top level has no anchor → no match");
+  assert.throws(
+    () => unifyTree(pattern, reference),
+    /top-level Before .* has no anchor/,
+    "top-level Before with no anchor throws",
+  );
+  console.log("PASS 15: Before at top level has no anchor → throws");
 }
 
 // 16. Before uses previous sibling as anchor, not parent

@@ -1,4 +1,3 @@
-import { isPositive } from "./types.js";
 import type { BodyTree, Term, Tree } from "./types.js";
 import { refTagOf, type HashconsState } from "./hashcons.js";
 
@@ -30,47 +29,6 @@ export function termEq(a: Term, b: Term, hc: HashconsState): boolean {
     return refAtom ? atomEq(refAtom.terms, b.atom.terms, hc) : false;
   }
   return false;
-}
-
-// Positive descendants of `pattern`, each carried with its parent, path, and
-// its immediately preceding "bindable" (Match/Before/Overlap) sibling in the
-// pattern tree if any. The latter is what drives the `before:after` edge
-// emitted at insertion time — see plans/temporal-relationships.md §Step.ts.
-// Pattern roots are Match, so the root itself is never positive; every
-// returned entry has a non-null parent. Equal nodes are leaves and never
-// positive — the positive node is always body-bearing, as is its parent
-// (Equal can't have children).
-export interface PositiveNode {
-  node: BodyTree;
-  parent: BodyTree;
-  path: number[];
-  prevBindableSibling: BodyTree | null;
-}
-
-// Called from `step` after the Ask → Assert(`_choose`) post-pass — so
-// Ask never reaches this walk. Throw if it does.
-export function collectPositiveNodes(pattern: Tree): PositiveNode[] {
-  const out: PositiveNode[] = [];
-  function walk(node: Tree, parent: BodyTree | null, path: number[]): void {
-    if (node.tag === "Ask") {
-      throw new Error("collectPositiveNodes: unexpected Ask — should have been rewritten to Assert(`_choose`) by expand");
-    }
-    if (parent !== null && isPositive(node) && node.tag !== "Equal") {
-      const selfIdx = path[path.length - 1]!;
-      let prev: BodyTree | null = null;
-      for (let i = selfIdx - 1; i >= 0; i--) {
-        const sib = parent.children[i]!;
-        if (sib.tag === "Match" || sib.tag === "Before" || sib.tag === "Overlap") { prev = sib; break; }
-      }
-      out.push({ node, parent, path, prevBindableSibling: prev });
-    }
-    if (node.tag === "Equal") return;
-    for (let i = 0; i < node.children.length; i++) {
-      walk(node.children[i]!, node, [...path, i]);
-    }
-  }
-  walk(pattern, null, []);
-  return out;
 }
 
 // Path-based temporal ordering: a is before b and not an ancestor of b.

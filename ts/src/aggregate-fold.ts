@@ -3,13 +3,17 @@ import { sym } from "./types.js";
 import { termEq } from "./tree.js";
 import { getAggregator } from "./aggregators.js";
 import { hashconsTerm, hashconsAtom, type HashconsState } from "./hashcons.js";
-import { before, idKey, insertChild, parentIdOf, type NodeRow, type RefStore } from "./refstore.js";
+import { addParentChild, beforeAfter, idKey, insertRow, parentIdOf, type NodeRow, type RefStore } from "./refstore.js";
 
 export interface AggInstance {
   row: NodeRow;
   lexId: Term;
   instanceId: Term;
-  parentId: Term;
+  // Parent in the refstore, or `null` for parentless (top-level) instances.
+  // Top-level aggregates (whose pattern position was a direct child of the
+  // synthetic root) yield parentless agg-instance rows under the post-PR2
+  // forest model; their agg-result is also inserted parentless.
+  parentId: Term | null;
 }
 
 interface AggBinding {
@@ -38,13 +42,11 @@ export function collectAggNodes(
   for (const row of ref.index.get("_agg-instance") ?? []) {
     const terms = row.node.atom.terms;
     if (terms.length < 2) continue;
-    const parent = parentIdOf(ref, row.node.id, hc);
-    if (parent === null) continue;
     instances.push({
       row: row.node,
       lexId: terms[1]!,
       instanceId: row.node.id,
-      parentId: parent,
+      parentId: parentIdOf(ref, row.node.id, hc),
     });
   }
 
@@ -94,8 +96,8 @@ function sortBindings(ref: RefStore, hc: HashconsState, bindings: AggBinding[], 
   return [...bindings].sort((a, b) => {
     const aId = idKey(a.row.id, hc);
     const bId = idKey(b.row.id, hc);
-    if (before(ref, aId, bId)) return -1;
-    if (before(ref, bId, aId)) return 1;
+    if (beforeAfter(ref, aId, bId)) return -1;
+    if (beforeAfter(ref, bId, aId)) return 1;
     if (commutative) return 0;
     throw new Error(
       `cannot order agg-bindings: nodes ${idKey(a.row.id, hc)} and ${idKey(b.row.id, hc)} are temporally incomparable`,
@@ -143,12 +145,15 @@ export function closeAggregates(
     const resultId = hashconsTerm(rawResultId, hc);
     const resultAtom = hashconsAtom(rawAtom, hc);
 
-    insertChild(ref, instance.parentId, {
+    insertRow(ref, {
       tag: "Assert",
       id: resultId,
       atom: resultAtom,
       gen: iteration,
     }, hc);
+    if (instance.parentId !== null) {
+      addParentChild(ref, instance.parentId, resultId, hc);
+    }
     changed = true;
   }
 

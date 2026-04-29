@@ -173,6 +173,29 @@
       font-style: italic;
     }
 
+    .result-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #hide-internal-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      color: #888;
+      text-transform: none;
+      letter-spacing: 0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    #hide-internal-label input {
+      margin: 0;
+      cursor: pointer;
+    }
+
     #result {
       flex: 1;
       overflow: auto;
@@ -315,7 +338,13 @@
       <div class="result-pane">
         <div class="pane-label">
           <span>Result</span>
-          <span id="iterations"></span>
+          <span class="result-controls">
+            <label id="hide-internal-label">
+              <input type="checkbox" id="hide-internal" checked />
+              hide internal
+            </label>
+            <span id="iterations"></span>
+          </span>
         </div>
         <div id="result"></div>
       </div>
