@@ -1,18 +1,3 @@
-# rule name parsing
-plan: TODO
-
-- add a step to the parser that parses an optional rulename prefix for each rule
-  ```
-  rule:
-  - foo
-    + bar
-  ```
-
-  the syntax is `<name> : <rule>`
-  - if missing, do the current auto-gen behavior
-
-- before expansion, check that the initial program has unique name per rule
-
 # top-down predicates
 plan: TODO
 
@@ -20,7 +5,44 @@ plan: TODO
   constructor representing a functional predicate that may aggregate rows
 - these functional predicates are defined separately from patterns like this:
   ```
+  at X Location :=
+    #last L -> Location
+      < move X L
+
+  has-three-dahan Loc :=
+    location Loc
+    count -> N
+      at X Loc
+      dahan X
+    @ge N 3
+
+  has-three-dahan Loc :=
+    < location Loc
+    #count -> N
+      < at X Loc
+      < dahan X
+    @ge N 3
   ```
+
+# rule name parsing
+plan: plans/rule-name-parsing.md
+
+- add a step to the parser that parses an optional rulename prefix for each rule
+  ```
+  : rule
+  - foo
+    + bar
+  ```
+
+  - new `:` node
+  - at most one per rule, must be first statement
+  - if missing, do the current auto-gen behavior (r1, r2, ...)
+
+- before expansion, check that the initial program has unique name per rule
+
+# static dispatch
+plan: plans/static-dispatch.md
+status: waiting
 
 # new flat relational IR
 plan: plans/flat-relational-ir.md

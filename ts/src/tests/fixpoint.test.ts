@@ -5,7 +5,7 @@ import type { BodyTree, Tree } from "../types.js";
 import { treeAtomTerms, treeChildren } from "../types.js";
 
 function parseRules(input: string, prefix = "r"): Tree[] {
-  const result = parsePatterns(input, prefix);
+  const result = parsePatterns(input, [prefix]);
   if ("message" in result) throw new Error(`parse error: ${result.message}`);
   return result;
 }

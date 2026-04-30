@@ -23,7 +23,7 @@
 //   assertions appended at the end so they fire only after the matching
 //   prefix has succeeded.
 
-import type { BodyTree, Constraint, Tree, TurnExpr } from "./types.js";
+import type { BodyTree, MatchingConstraint, PositiveConstraint, Tree, TurnExpr } from "./types.js";
 
 const isBindableTag = (tag: Tree["tag"]): boolean =>
   tag === "Match" || tag === "Before" || tag === "Overlap";
@@ -33,8 +33,8 @@ export function lower(tree: Tree): TurnExpr {
     throw new Error(`lower: top-level ${tree.tag} — pattern root must be body-bearing`);
   }
 
-  const matching: Constraint[] = [];
-  const assertions: Constraint[] = [];
+  const matching: MatchingConstraint[] = [];
+  const assertions: PositiveConstraint[] = [];
 
   // `parent` is the pattern parent's BodyTree, or null when `node` is a
   // direct child of the (stripped) synthetic root. `prevBindable` is the
@@ -54,6 +54,13 @@ export function lower(tree: Tree): TurnExpr {
 
     switch (node.tag) {
       case "Match": {
+        // Match first, then IntervalRel{contains} as a check. This preserves
+        // the symbol-index prefilter the pre-TE matcher relied on: matchAt
+        // iterates the (typically small) `index.get(headSymbol)` bucket and
+        // each survivor is then filtered by `strictlyContains(parent, …)`.
+        // Reordering to IntervalRel-first would force descendant iteration
+        // and lose that prefilter — slow when the parent's subtree is large
+        // but the head symbol is rare.
         matching.push({ tag: "Match", mode: node.constraint, id: node.id, atom: node.atom });
         if (parent !== null) {
           matching.push({ tag: "IntervalRel", kind: "contains", a: parent.id, b: node.id });
@@ -125,5 +132,5 @@ export function lower(tree: Tree): TurnExpr {
     }
   }
 
-  return { constraints: [...matching, ...assertions] };
+  return { matching, assertions };
 }

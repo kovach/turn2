@@ -1,11 +1,13 @@
 / display: ttt.js
 / implementation of tic-tac-toe
 
+: start
 + game
   + setup
   + turn
     + actor o
 
+: setup
 / players, grid
 - setup
   + player x
@@ -16,9 +18,13 @@
   + n (s z)
   + n (s (s z))
   / for each Row and Column, make a cell
-  - n R
+  , n R
   - n C
   + cell R C
+
+- setup
+  , n X
++ hi X
 
 / A Cell can be chosen if it has not been filled earlier
 - [Cell] cell R C
@@ -86,3 +92,21 @@
   - fill (cell (s z) (s z)) M
   - fill (cell z (s (s z))) M
   + won M diag2
+
+
+
+
+= V1 (@id id r1 id2)
+= V2 (@id id r4 id1 (@id id r1 id3))
+= V3 (@id id r2 id6 V1)
+= V4 (@id id r2 id11 V1 V3 V3)
++ is V2 V4
+
+= V1 (@id id r1 id2)
+= V2 (@id id r1 id3)
+= V3 (@id id r2 id6 V1)
+= V4 (@id id r1 id4)
+= V5 (@id id r2 id7 V1)
+= V6 (@id id r2 id11 V1 V5 V5)
+= V7 (@id id r4 id1 (@id id r7 id6 (@id id r1 id1) (@id id r2 id5 V1) V2 V4 (@id id r6 id3 V2 (@id id r5 id5 (@id id r12 id1) (@id id r2 id11 V1 V3 V3) V2 V4 (@id id r4 id2 V2)))))
++ is V7 V6

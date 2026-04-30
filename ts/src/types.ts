@@ -38,6 +38,10 @@ export interface TreeBase {
   macroInvocation?: MacroInvocation;
   span?: Span;
   gen?: number;
+  // Set by `parsePatterns` on the synthetic chunk-root `Match` when the rule
+  // had an explicit `: name` line. Carries through `idExpand` only so
+  // `formatTree` can round-trip the `:` line; downstream passes ignore it.
+  ruleName?: string;
 }
 
 // Body fields common to every Tree case except Equal — see
@@ -139,16 +143,19 @@ export type Constraint =
   | { tag: "AssertIntervalRel"; kind: AssertIntervalRelKind; a: Term;  b: Term    }
   | { tag: "Equal";             lhs: Term; rhs: Term };
 
-// Tree-traversal order, with all Assert / AssertIntervalRel constraints
-// appended last so assertions fire only after the matching prefix has
-// succeeded. The evaluator runs left-to-right; Equal must precede the
-// constraints whose variables it binds (traversal order takes care of this
-// without a planner).
-export interface TurnExpr {
-  constraints: Constraint[];
-}
-
+// Two phases: `matching` constraints run first (the unifier walks them to
+// build a trail of bindings); when matching succeeds, `assertions` fire
+// against the resulting trail to derive new rows and edges. Both fields
+// are arrays for stable iteration / tie-breaking, but the unifier treats
+// them as conjunction sets — emission order is not load-bearing for
+// correctness. See plans/order-robust-unifier.md.
 export type PositiveConstraint = Extract<Constraint, { tag: "Assert" | "Constrain" | "AssertIntervalRel" }>;
+export type MatchingConstraint = Exclude<Constraint, PositiveConstraint>;
+
+export interface TurnExpr {
+  matching: MatchingConstraint[];
+  assertions: PositiveConstraint[];
+}
 
 export const isPositiveConstraint = (c: Constraint): c is PositiveConstraint =>
   c.tag === "Assert" || c.tag === "Constrain" || c.tag === "AssertIntervalRel";

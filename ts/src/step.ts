@@ -45,16 +45,13 @@ export function step(pattern: Tree, reference: RefStore, hc: HashconsState, iter
   const te = loweredFor(pattern);
   let anyInserted = false;
 
-  unifyConstraints(te, reference, sharedTrail, iteration, hc, (trail, suffixStart) => {
-    for (let i = suffixStart; i < te.constraints.length; i++) {
-      const c = te.constraints[i]!;
+  unifyConstraints(te, reference, sharedTrail, iteration, hc, (trail) => {
+    for (const c of te.assertions) {
       if (c.tag === "Assert" || c.tag === "Constrain") {
         if (runAssertion(c, reference, trail, iteration, hc)) anyInserted = true;
-      } else if (c.tag === "AssertIntervalRel") {
+      } else {
         runAssertIntervalRel(c, reference, trail, hc);
       }
-      // Other tags are matching constraints — should not appear in the
-      // suffix per the lowering invariant. Defensively ignore.
     }
   });
 

@@ -327,11 +327,15 @@ export function parseSource(
   return { frontmatter, body, patterns };
 }
 
-// `ruleNamePrefix` is the lex-namespace baked into positive id atoms via
-// `idExpand`. Callers that combine multiple `parsePatterns` outputs into one
-// fixpoint must use distinct prefixes, or two positives with matching
-// (prefix, idN) tails will hashcons to the same Ref and silently dedup.
-export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | ParseError {
+// `nameSegments` is the lex-namespace baked into positive id atoms via
+// `idExpand`. Each rule's final name is `[...nameSegments, baseName].join("#")`
+// where `baseName` is either the explicit `: name` from the source or an
+// auto-generated counter (`1`, `2`, …). The default segments `["_r"]` live in
+// the reserved `_`-prefix space so user-written names cannot collide with
+// auto names. Callers that combine multiple `parsePatterns` outputs into one
+// fixpoint should pass distinct `nameSegments` per call so user-explicit names
+// don't collide across batches.
+export function parsePatterns(input: string, nameSegments: string[] = ["_r"]): Tree[] | ParseError {
   const lines = input.split("\n");
   const chunks: Array<{ startLine: number; text: string }> = [];
   let start = 0;
@@ -341,10 +345,31 @@ export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | Par
       start = i + 1;
     }
   }
-  const trees: Tree[] = [];
-  let ruleIndex = 1;
+  // First pass: extract explicit rule names per chunk and check for duplicates.
+  const seenNames = new Map<string, number>();
+  type Prepared = { startLine: number; text: string; name: string | undefined; nameLine: number | undefined };
+  const prepared: Prepared[] = [];
   for (const { startLine, text } of chunks) {
     if (text.trim() === "") continue;
+    const extracted = extractRuleName(text);
+    if ("message" in extracted) {
+      return { line: startLine + extracted.line - 1, message: extracted.message };
+    }
+    if (extracted.name !== undefined) {
+      const prevLine = seenNames.get(extracted.name);
+      if (prevLine !== undefined) {
+        return {
+          line: startLine + extracted.nameLine! - 1,
+          message: `duplicate rule name '${extracted.name}' (first defined at line ${prevLine})`,
+        };
+      }
+      seenNames.set(extracted.name, startLine + extracted.nameLine! - 1);
+    }
+    prepared.push({ startLine, text: extracted.text, name: extracted.name, nameLine: extracted.nameLine });
+  }
+  const trees: Tree[] = [];
+  let ruleIndex = 1;
+  for (const { startLine, text, name } of prepared) {
     const result = parse(text);
     if ("message" in result) {
       return { line: startLine + result.line - 1, message: result.message };
@@ -356,10 +381,76 @@ export function parsePatterns(input: string, ruleNamePrefix = "r"): Tree[] | Par
     // `expanded` is body-bearing; guard for the type.
     if (expanded.tag === "Equal" || expanded.tag === "Ask") continue;
     // Skip chunks that contain only comments — they produce no rule nodes.
+    // A `:` line with no body still produces a tree (the synthetic root has
+    // no children); skip those too, but record the name in `seenNames`
+    // already so duplicates are caught.
     if (expanded.children.length === 0) continue;
-    trees.push(idExpand(expanded, `${ruleNamePrefix}${ruleIndex++}`));
+    const baseName = name ?? String(ruleIndex++);
+    const fullName = [...nameSegments, baseName].join("#");
+    const withName = name !== undefined ? { ...expanded, ruleName: name } : expanded;
+    trees.push(idExpand(withName, fullName));
   }
   return trees;
+}
+
+// Strip an optional `: rule-name` line from the start of a chunk and return
+// the name (if any) plus the text with that line replaced by a blank so
+// downstream line numbers stay aligned. Reports errors with chunk-local line
+// numbers; the caller offsets them.
+function extractRuleName(
+  text: string,
+): { name: string | undefined; nameLine: number | undefined; text: string } | ParseError {
+  const lines = text.split("\n");
+  // Locate first non-blank, non-comment line.
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!;
+    const indent = raw.length - raw.trimStart().length;
+    const after = raw.slice(indent).replace(/\/.*$/, "");
+    if (after === "" || after.trim() === "") continue;
+    idx = i;
+    break;
+  }
+  if (idx === -1) return { name: undefined, nameLine: undefined, text };
+  const line = lines[idx]!;
+  const indent = line.length - line.trimStart().length;
+  const after = line.slice(indent).replace(/\/.*$/, "");
+  if (after[0] !== ":") return { name: undefined, nameLine: undefined, text };
+  const lineno = idx + 1;
+  if (indent !== 0) {
+    return { line: lineno, message: "':' rule-name must be at indentation 0" };
+  }
+  const tokens = after.slice(1).trim().split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) {
+    return { line: lineno, message: "':' rule-name requires a name token" };
+  }
+  if (tokens.length > 1) {
+    return { line: lineno, message: `':' rule-name expects exactly one name token, got ${tokens.length}` };
+  }
+  const name = tokens[0]!;
+  if (name[0] === "_") {
+    return { line: lineno, message: `rule names starting with '_' are reserved (got '${name}')` };
+  }
+  if (/^\d+$/.test(name)) {
+    return { line: lineno, message: `rule names cannot be all digits (got '${name}')` };
+  }
+  if (name.includes("#")) {
+    return { line: lineno, message: `rule names cannot contain '#' (got '${name}')` };
+  }
+  // Next content line must not be indented (':' has no children).
+  for (let j = idx + 1; j < lines.length; j++) {
+    const r = lines[j]!;
+    const ind = r.length - r.trimStart().length;
+    const aft = r.slice(ind).replace(/\/.*$/, "");
+    if (aft === "" || aft.trim() === "") continue;
+    if (ind > 0) {
+      return { line: j + 1, message: "':' rule-name line cannot have child nodes" };
+    }
+    break;
+  }
+  const out = lines.slice();
+  out[idx] = "";
+  return { name, nameLine: lineno, text: out.join("\n") };
 }
 
 // --- Formatting ---
@@ -386,7 +477,8 @@ export function formatTree(tree: Tree, indent = 0): string {
     && tree.atom.terms.length === 0
     && tree.id.tag === "Variable" && tree.id.name === "0"
   ) {
-    return tree.children.map((c) => formatTree(c, 0)).join("");
+    const head = tree.ruleName !== undefined ? `: ${tree.ruleName}\n` : "";
+    return head + tree.children.map((c) => formatTree(c, 0)).join("");
   }
 
   const pad = "  ".repeat(indent);

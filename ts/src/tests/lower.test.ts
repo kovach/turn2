@@ -50,6 +50,12 @@ const root = (children: Tree[]): Tree => ({
   children,
 });
 
+// Flatten a TurnExpr back to a single list for shape assertions: matching
+// first, then assertions. Tests that care about ordering across the
+// matching/assertion boundary keep working unchanged.
+const allConstraints = (te: ReturnType<typeof lower>): Constraint[] =>
+  [...te.matching, ...te.assertions];
+
 // Find all constraints matching a predicate (used for shape assertions).
 const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] =>
   cs.filter(pred);
@@ -59,8 +65,8 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const a = matchNode(sym("a"), "a");
   const te = lower(root([a]));
   // Exactly one Match constraint, no IntervalRel constraints (root is stripped).
-  const matches = find(te.constraints, (c) => c.tag === "Match");
-  const intervals = find(te.constraints, (c) => c.tag === "IntervalRel");
+  const matches = find(allConstraints(te), (c) => c.tag === "Match");
+  const intervals = find(allConstraints(te), (c) => c.tag === "IntervalRel");
   assert.equal(matches.length, 1, "one Match constraint");
   assert.equal(intervals.length, 0, "no IntervalRel: root is stripped");
   console.log("PASS: synthetic root stripped");
@@ -71,7 +77,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const inner = matchNode(sym("b"), "b");
   const outer = matchNode(sym("a"), "a", [inner]);
   const te = lower(root([outer]));
-  const intervals = find(te.constraints, (c) => c.tag === "IntervalRel") as Extract<Constraint, { tag: "IntervalRel" }>[];
+  const intervals = find(allConstraints(te), (c) => c.tag === "IntervalRel") as Extract<Constraint, { tag: "IntervalRel" }>[];
   assert.equal(intervals.length, 1);
   assert.equal(intervals[0]!.kind, "contains");
   assert.deepEqual(intervals[0]!.a, sym("a"));
@@ -88,7 +94,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const x = beforeNode(sym("x"), "x");
   const outer = matchNode(sym("p"), "p", [s, x]);
   const te = lower(root([outer]));
-  const baCons = find(te.constraints, (c) => c.tag === "IntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "IntervalRel" }>[];
+  const baCons = find(allConstraints(te), (c) => c.tag === "IntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "IntervalRel" }>[];
   assert.equal(baCons.length, 1, "one before:after IntervalRel for the Before node");
   assert.deepEqual(baCons[0]!.a, sym("x"), "matched id is the earlier (before)");
   assert.deepEqual(baCons[0]!.b, sym("s"), "anchor is the later (after)");
@@ -100,7 +106,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const x = beforeNode(sym("x"), "x");
   const outer = matchNode(sym("p"), "p", [x]);
   const te = lower(root([outer]));
-  const baCons = find(te.constraints, (c) => c.tag === "IntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "IntervalRel" }>[];
+  const baCons = find(allConstraints(te), (c) => c.tag === "IntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "IntervalRel" }>[];
   assert.equal(baCons.length, 1);
   assert.deepEqual(baCons[0]!.a, sym("x"), "matched id (earlier)");
   assert.deepEqual(baCons[0]!.b, sym("p"), "fallback anchor is the parent (later)");
@@ -126,7 +132,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const x = overlapNode(sym("x"), "x");
   const outer = matchNode(sym("p"), "p", [x]);
   const te = lower(root([outer]));
-  const overlaps = find(te.constraints, (c) => c.tag === "IntervalRel" && c.kind === "overlap") as Extract<Constraint, { tag: "IntervalRel" }>[];
+  const overlaps = find(allConstraints(te), (c) => c.tag === "IntervalRel" && c.kind === "overlap") as Extract<Constraint, { tag: "IntervalRel" }>[];
   assert.equal(overlaps.length, 1);
   assert.deepEqual(overlaps[0]!.a, sym("p"));
   assert.deepEqual(overlaps[0]!.b, sym("x"));
@@ -138,8 +144,8 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const a = assertNode(sym("a"), "a");
   const outer = matchNode(sym("p"), "p", [a]);
   const te = lower(root([outer]));
-  const asserts = find(te.constraints, (c) => c.tag === "Assert");
-  const aiContains = find(te.constraints, (c) => c.tag === "AssertIntervalRel" && c.kind === "contains") as Extract<Constraint, { tag: "AssertIntervalRel" }>[];
+  const asserts = find(allConstraints(te), (c) => c.tag === "Assert");
+  const aiContains = find(allConstraints(te), (c) => c.tag === "AssertIntervalRel" && c.kind === "contains") as Extract<Constraint, { tag: "AssertIntervalRel" }>[];
   assert.equal(asserts.length, 1);
   assert.equal(aiContains.length, 1);
   assert.deepEqual(aiContains[0]!.a, sym("p"));
@@ -151,8 +157,8 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
 {
   const a = assertNode(sym("a"), "a");
   const te = lower(root([a]));
-  const asserts = find(te.constraints, (c) => c.tag === "Assert");
-  const aiContains = find(te.constraints, (c) => c.tag === "AssertIntervalRel" && c.kind === "contains");
+  const asserts = find(allConstraints(te), (c) => c.tag === "Assert");
+  const aiContains = find(allConstraints(te), (c) => c.tag === "AssertIntervalRel" && c.kind === "contains");
   assert.equal(asserts.length, 1);
   assert.equal(aiContains.length, 0, "no contains edge when synthetic root is stripped");
   console.log("PASS: top-level positive is parentless");
@@ -164,7 +170,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const a = assertNode(sym("a"), "a");
   const outer = matchNode(sym("p"), "p", [s, a]);
   const te = lower(root([outer]));
-  const aiBA = find(te.constraints, (c) => c.tag === "AssertIntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "AssertIntervalRel" }>[];
+  const aiBA = find(allConstraints(te), (c) => c.tag === "AssertIntervalRel" && c.kind === "before:after") as Extract<Constraint, { tag: "AssertIntervalRel" }>[];
   assert.equal(aiBA.length, 1);
   assert.deepEqual(aiBA[0]!.a, sym("s"), "earlier = prior bindable sibling");
   assert.deepEqual(aiBA[0]!.b, sym("a"), "later = the positive being inserted");
@@ -178,7 +184,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const b = assertNode(sym("b"), "b");
   const outer = matchNode(sym("p"), "p", [a, b]);
   const te = lower(root([outer]));
-  const aiBA = find(te.constraints, (c) => c.tag === "AssertIntervalRel" && c.kind === "before:after");
+  const aiBA = find(allConstraints(te), (c) => c.tag === "AssertIntervalRel" && c.kind === "before:after");
   assert.equal(aiBA.length, 0, "two positives in a row do not chain a before:after edge");
   console.log("PASS: consecutive positives do not chain before:after");
 }
@@ -188,8 +194,8 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const c = constrainNode(sym("c"), "c");
   const outer = matchNode(sym("p"), "p", [c]);
   const te = lower(root([outer]));
-  const constrains = find(te.constraints, (cc) => cc.tag === "Constrain");
-  const aiContains = find(te.constraints, (cc) => cc.tag === "AssertIntervalRel" && cc.kind === "contains");
+  const constrains = find(allConstraints(te), (cc) => cc.tag === "Constrain");
+  const aiContains = find(allConstraints(te), (cc) => cc.tag === "AssertIntervalRel" && cc.kind === "contains");
   assert.equal(constrains.length, 1);
   assert.equal(aiContains.length, 1);
   console.log("PASS: Constrain emits Constrain + AssertIntervalRel{contains}");
@@ -201,8 +207,8 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const a = assertNode(sym("a"), "a");
   const te = lower(root([eq, a]));
   // Equal must come before Assert in the constraint list (assertions appended last).
-  const eqIdx = te.constraints.findIndex((c) => c.tag === "Equal");
-  const aIdx = te.constraints.findIndex((c) => c.tag === "Assert");
+  const eqIdx = allConstraints(te).findIndex((c) => c.tag === "Equal");
+  const aIdx = allConstraints(te).findIndex((c) => c.tag === "Assert");
   assert.notEqual(eqIdx, -1);
   assert.notEqual(aIdx, -1);
   assert.ok(eqIdx < aIdx, "Equal precedes Assert in constraint list");
@@ -216,7 +222,7 @@ const find = (cs: Constraint[], pred: (c: Constraint) => boolean): Constraint[] 
   const outer = matchNode(sym("p"), "p", [inner, a]);
   const te = lower(root([outer]));
   let sawAssertish = false;
-  for (const c of te.constraints) {
+  for (const c of allConstraints(te)) {
     const isAssertish = c.tag === "Assert" || c.tag === "Constrain" || c.tag === "AssertIntervalRel";
     if (isAssertish) sawAssertish = true;
     else assert.ok(!sawAssertish, `matching constraint ${c.tag} appeared after an assertion`);

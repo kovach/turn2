@@ -1,5 +1,5 @@
 import type { Atom, NodeId, Span, Term, Tree } from "./types.js";
-import { tokenOfId, type HashconsState } from "./hashcons.js";
+import { hashconsTerm, tokenOfId, type HashconsState } from "./hashcons.js";
 
 export type { NodeId } from "./types.js";
 
@@ -63,7 +63,14 @@ export interface RefStore {
   // order they were appended. Used as a *pure iteration index* under the
   // relational model — order here is a storage artefact; temporal order
   // lives in `beforeAfter`. See plans/temporal-relationships.md.
-  children: Map<NodeId, NodeRow[]>;
+  // Pure id-keyed iteration index. Maintained alongside `parentChild`;
+  // the two contain the same edge set, but `children` preserves
+  // insertion order (a NodeId[] rather than a Set) so consumers like
+  // `refStoreToTree` can produce stable output. Storing ids — not
+  // NodeRow refs — lets edges be inserted before either endpoint row
+  // exists; row absence shows up at iteration time, where the natural
+  // fail point catches it.
+  children: Map<NodeId, NodeId[]>;
   // parent:child relation (parent → children) and its inverse (child →
   // parents). Many-to-many in shape; today every node has at most one
   // parent (multi-parent assertion syntax has not landed yet). Rows with
@@ -167,9 +174,12 @@ export function insertRow(
   return row;
 }
 
-// Assert a `parent:child(parent, child)` edge between two existing rows.
-// Idempotent — re-asserting an existing edge is a no-op. Maintains
-// `children`, `parentChild`, `parentsOf`, and `descendantsCache`.
+// Assert a `parent:child(parent, child)` edge. Pure id-level operation:
+// no row-existence check, idempotent on `(parent, child)`. Either
+// endpoint's row may be inserted before or after this call — id-keyed
+// caches stay consistent either way, and missing rows surface at
+// iteration time (e.g. `refStoreToTree`'s `buildTreeFromRow`). See
+// plans/order-robust-unifier.md §"Phase 2 (assertions): just iterate".
 export function addParentChild(
   store: RefStore,
   parentId: Term,
@@ -178,13 +188,6 @@ export function addParentChild(
 ): void {
   const parentKey = idKey(parentId, hc);
   const childKey = idKey(childId, hc);
-  if (!store.nodes.has(parentKey)) {
-    throw new Error(`addParentChild: no parent row with id token ${parentKey}`);
-  }
-  const childRow = store.nodes.get(childKey);
-  if (!childRow) {
-    throw new Error(`addParentChild: no child row with id token ${childKey}`);
-  }
 
   const existing = store.parentChild.get(parentKey);
   if (existing && existing.has(childKey)) return;  // idempotent
@@ -192,16 +195,16 @@ export function addParentChild(
   addEdge(store.parentChild, parentKey, childKey);
   addEdge(store.parentsOf, childKey, parentKey);
 
-  // Keep the children-cache list in sync — push the child row in insertion
-  // order. (Pure iteration index, no temporal meaning; see header.)
+  // Keep the children-cache list in sync — push the child id in
+  // insertion order. (Pure iteration index, no temporal meaning.)
   const siblings = store.children.get(parentKey) ?? [];
-  siblings.push(childRow);
+  siblings.push(childKey);
   store.children.set(parentKey, siblings);
 
   // Maintain `descendantsCache`. The child may already have its own
-  // descendants (multi-parent or out-of-order edge insertion), so union the
-  // child's descendant set into every cached source that contains the
-  // parent — not just `{childKey}`.
+  // descendants (multi-parent or out-of-order edge insertion), so union
+  // the child's descendant set into every cached source that contains
+  // the parent — not just `{childKey}`.
   const childDescendants = descendantsOf(store, childKey);
   for (const set of store.descendantsCache.values()) {
     if (set.has(parentKey)) {
@@ -236,7 +239,7 @@ export function contains(store: RefStore, a: NodeId, b: NodeId): boolean {
 
 // Full descendant set of `a` (including `a` itself), cached on the store.
 // Cold path is a DFS over `parentChild`; hot path is a Map.get.
-function descendantsOf(store: RefStore, a: NodeId): Set<NodeId> {
+export function descendantsOf(store: RefStore, a: NodeId): Set<NodeId> {
   const cached = store.descendantsCache.get(a);
   if (cached !== undefined) return cached;
   const out = new Set<NodeId>([a]);
@@ -261,7 +264,7 @@ export function strictlyContains(store: RefStore, a: NodeId, b: NodeId): boolean
 
 // All nodes that contain `n` (including `n` itself). Used by `before` so
 // the same ancestor-set isn't walked twice per check.
-function ancestorsOf(store: RefStore, n: NodeId): Set<NodeId> {
+export function ancestorsOf(store: RefStore, n: NodeId): Set<NodeId> {
   const out = new Set<NodeId>([n]);
   const stack: NodeId[] = [n];
   while (stack.length > 0) {
@@ -339,6 +342,77 @@ export function overlap(store: RefStore, a: NodeId, b: NodeId): boolean {
   return false;
 }
 
+// ----- Enumerators (one bound endpoint, all candidates for the other) -----
+//
+// Used by the unifier when an `IntervalRel` runs before its companion
+// `Match` has bound one of its endpoints. Uncached for now; per-call
+// cost is O(|relevant subgraph|), which mirrors the corresponding check
+// functions above. Caches mirroring `descendantsCache` are an option
+// once profiles justify it (see plans/order-robust-unifier.md).
+
+// All `b` such that `beforeAfter(a, b)` holds. The lifted closure: walk
+// ancestorsOf(a) forward via the raw `beforeAfter` edges, then expand
+// each result through descendantsOf to lift through containment on the
+// `b` side. Mirrors the `beforeAfter()` check function exactly.
+export function successorsOf(store: RefStore, a: NodeId): Set<NodeId> {
+  const out = new Set<NodeId>();
+  const seen = new Set<NodeId>(ancestorsOf(store, a));
+  const stack: NodeId[] = [...seen];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const afters = store.beforeAfter.get(cur);
+    if (!afters) continue;
+    for (const next of afters) {
+      if (!seen.has(next)) { seen.add(next); stack.push(next); }
+      // Every descendant of `next` is also a successor of `a` (lifted).
+      for (const d of descendantsOf(store, next)) out.add(d);
+    }
+  }
+  return out;
+}
+
+// All `a` such that `beforeAfter(a, b)` holds. Symmetric to `successorsOf`:
+// walk ancestorsOf(b) backward via `afterBefore`, then lift through
+// descendantsOf on the predecessor side.
+export function predecessorsOf(store: RefStore, b: NodeId): Set<NodeId> {
+  const out = new Set<NodeId>();
+  const seen = new Set<NodeId>(ancestorsOf(store, b));
+  const stack: NodeId[] = [...seen];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const befores = store.afterBefore.get(cur);
+    if (!befores) continue;
+    for (const next of befores) {
+      if (!seen.has(next)) { seen.add(next); stack.push(next); }
+      for (const d of descendantsOf(store, next)) out.add(d);
+    }
+  }
+  return out;
+}
+
+// All `a` such that `overlap(a, b)` holds. By definition: every node
+// containing some descendant of `b`. Self is included (overlap is
+// reflexive). Symmetric in its argument, so this is also "all `b` such
+// that overlap(a, b) holds" with `a` substituted in.
+export function overlapsOf(store: RefStore, b: NodeId): Set<NodeId> {
+  const out = new Set<NodeId>();
+  for (const c of descendantsOf(store, b)) {
+    for (const a of ancestorsOf(store, c)) out.add(a);
+  }
+  return out;
+}
+
+// All `a` such that `prior(a, b)` holds. `prior(a, b) = beforeAfter(a, b)
+// ∨ (a !== b ∧ contains(b, a))` — union of predecessors and strict
+// descendants of `b`.
+export function priorOf(store: RefStore, b: NodeId): Set<NodeId> {
+  const out = predecessorsOf(store, b);
+  for (const d of descendantsOf(store, b)) {
+    if (d !== b) out.add(d);
+  }
+  return out;
+}
+
 // Iterate every row in the store. Order is insertion order (initial tree
 // pre-order, then appended rows in insertion order). Consumers MUST NOT
 // assume pre-order; descendant / temporal-before filters apply per candidate.
@@ -399,15 +473,117 @@ function buildTreeFromRow(store: RefStore, id: Term, hc: HashconsState): ResultR
   const key = idKey(id, hc);
   const row = store.nodes.get(key);
   if (!row) throw new Error(`refStoreToTree: no row for id token ${key}`);
-  const kids = store.children.get(key) ?? [];
+  const kidKeys = store.children.get(key) ?? [];
+  const kids: ResultRowTree[] = [];
+  for (const childKey of kidKeys) {
+    const childRow = store.nodes.get(childKey);
+    if (!childRow) {
+      throw new Error(`refStoreToTree: parent:child edge (${key}, ${childKey}) names a missing child row`);
+    }
+    kids.push(buildTreeFromRow(store, childRow.id, hc));
+  }
   return {
     tag: row.tag,
     id: row.id,
     atom: row.atom,
-    children: kids.map((c) => buildTreeFromRow(store, c.id, hc)),
+    children: kids,
     gen: row.gen,
     ...(row.span !== undefined ? { span: row.span } : {}),
   };
+}
+
+// ----- Structural equality -----
+//
+// Two RefStores are equal iff they declare the same content: same set
+// of node ids, each with the same `tag` + hashconsed atom; and the same
+// id-keyed edge sets in `parentChild` and `beforeAfter`. Derived /
+// incidental fields are deliberately excluded:
+//
+//   - `gen` (evaluation artefact, not declared semantics)
+//   - `span` (parser bookkeeping)
+//   - `index` (derived from the node set)
+//   - `children` (derived iteration order — temporal meaning lives in
+//     `beforeAfter`, structural meaning in `parentChild`)
+//   - `descendantsCache` (memo of `parentChild`)
+//   - `parentsOf` and `afterBefore` (inverses of `parentChild` and
+//     `beforeAfter`; if the forward maps agree, the inverses must too,
+//     and `checkIntegrity` covers any divergence)
+//
+// Both stores must share the hashcons state — atom equality is by id
+// token, not deep walk.
+
+export type RefStoreEqualResult = true | { reason: string };
+
+function setEq<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
+function edgeSetEq(
+  a: Map<NodeId, Set<NodeId>>,
+  b: Map<NodeId, Set<NodeId>>,
+): { ok: true } | { ok: false; reason: string } {
+  for (const [from, tos] of a) {
+    const bTos = b.get(from);
+    if (bTos === undefined) {
+      if (tos.size === 0) continue;
+      return { ok: false, reason: `edge source ${from} present in a but absent in b` };
+    }
+    if (!setEq(tos, bTos)) {
+      const onlyA = [...tos].filter((t) => !bTos.has(t));
+      const onlyB = [...bTos].filter((t) => !tos.has(t));
+      return {
+        ok: false,
+        reason: `edges from ${from} differ: only-in-a=${JSON.stringify(onlyA)} only-in-b=${JSON.stringify(onlyB)}`,
+      };
+    }
+  }
+  for (const [from, tos] of b) {
+    if (a.has(from)) continue;
+    if (tos.size === 0) continue;
+    return { ok: false, reason: `edge source ${from} present in b but absent in a` };
+  }
+  return { ok: true };
+}
+
+export function refStoreEquals(a: RefStore, b: RefStore, hc: HashconsState): RefStoreEqualResult {
+  // 1. Same set of node ids, with matching tag and atom.
+  if (a.nodes.size !== b.nodes.size) {
+    return { reason: `node count differs: a=${a.nodes.size} b=${b.nodes.size}` };
+  }
+  for (const [key, rowA] of a.nodes) {
+    const rowB = b.nodes.get(key);
+    if (rowB === undefined) {
+      return { reason: `node ${key} present in a, missing in b` };
+    }
+    if (rowA.tag !== rowB.tag) {
+      return { reason: `node ${key} tag differs: a=${rowA.tag} b=${rowB.tag}` };
+    }
+    if (idKey(rowA.id, hc) !== idKey(rowB.id, hc)) {
+      return { reason: `node ${key} id token differs (hashcons mismatch?)` };
+    }
+    // Atom equality via hashcons token: wrap each atom as an Atom-tagged
+    // Term and hashcons; identical content yields identical Ref ids.
+    const refA = hashconsTerm({ tag: "Atom", atom: rowA.atom }, hc);
+    const refB = hashconsTerm({ tag: "Atom", atom: rowB.atom }, hc);
+    if (refA.tag !== "Ref" || refB.tag !== "Ref" || refA.id !== refB.id) {
+      return { reason: `node ${key} atom differs` };
+    }
+  }
+  // 2. parentChild edges agree.
+  const pcEq = edgeSetEq(a.parentChild, b.parentChild);
+  if (!pcEq.ok) return { reason: `parentChild: ${pcEq.reason}` };
+  // 3. beforeAfter edges agree.
+  const baEq = edgeSetEq(a.beforeAfter, b.beforeAfter);
+  if (!baEq.ok) return { reason: `beforeAfter: ${baEq.reason}` };
+  return true;
+}
+
+export function assertRefStoreEquals(a: RefStore, b: RefStore, hc: HashconsState): void {
+  const r = refStoreEquals(a, b, hc);
+  if (r === true) return;
+  throw new Error(`refStoreEquals: ${r.reason}`);
 }
 
 // ----- Integrity check -----
@@ -445,16 +621,13 @@ export function checkIntegrity(store: RefStore, hc: HashconsState): void {
   }
 
   // 3. Children-cache agreement: every entry in `children.get(p)` is a
-  //    parent:child edge, and every parent:child edge has the child present
-  //    in the cache.
+  //    parent:child edge, and every parent:child edge has the child
+  //    present in the cache. The cache is now id-keyed; row existence is
+  //    not checked here — that's what `refStoreToTree` does at materialization.
   for (const [p, kidList] of children) {
-    if (!nodes.has(p)) {
-      throw new Error(`integrity: children cache has unknown parent token ${p}`);
-    }
     const forward = parentChild.get(p) ?? new Set<NodeId>();
     const seenKids = new Set<NodeId>();
-    for (const kid of kidList) {
-      const kidKey = idKey(kid.id, hc);
+    for (const kidKey of kidList) {
       if (!forward.has(kidKey)) {
         throw new Error(`integrity: children cache[${p}] contains ${kidKey} with no parent:child edge`);
       }

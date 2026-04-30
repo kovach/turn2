@@ -4,7 +4,7 @@ import { expandTerm, refTagOf, type HashconsState } from "./hashcons.js";
 import type { ComponentOptions } from "./constraint-query.js";
 import type { UnresolvedChoice } from "./scheduler.js";
 import type { Tree, Term, Atom } from "./types.js";
-import type { ResultTree } from "./refstore.js";
+import type { ResultRowTree, ResultTree } from "./refstore.js";
 
 // Single source of truth for line-leading markers. The `Record<LiteralTag, …>`
 // shape makes TS fail this file if a new Tree case is added without a marker
@@ -23,10 +23,11 @@ const LITERAL_MARKERS: Record<LiteralTag, { char: string; cssClass: string }> = 
   Equal:     { char: "=", cssClass: "lit-equal" },
 };
 
-// Non-literal line markers (e.g. comments). These participate in keyboard
-// handling but don't appear as `LiteralType` tags, so they live alongside
-// the table rather than inside it.
-const EXTRA_MARKER_CHARS: string[] = ["/"];
+// Non-literal line markers (comments, rule names). These participate in
+// keyboard handling but don't appear as `LiteralType` tags, so they live
+// alongside the table rather than inside it. `:` is the rule-name marker
+// (`parsePatterns` peels it off as metadata; it never produces a Tree).
+const EXTRA_MARKER_CHARS: string[] = ["/", ":"];
 
 const MARKER_CHARS: string[] = [
   ...Object.values(LITERAL_MARKERS).map((m) => m.char),
@@ -173,6 +174,11 @@ function getSourceInfo(id: Term): { rule: string; lineId: string } | null {
   // in a hashconsed atom those are already non-Atom (Symbol/Ref). Read the
   // stored atom directly — no recursive expandTerm, which for a deeply shared
   // Ref would materialize the full subtree just to look at the head.
+  //
+  // `<rule>` is the `#`-joined name produced by `parsePatterns`
+  // (`<segments…>#<base>`, e.g. `_r#1` for an unnamed rule or `_r#foo` for
+  // `: foo`). It's opaque here — used only as a Map key for source linking,
+  // so producer and consumer must agree on the exact string.
   let terms: Term[];
   if (id.tag === "Ref") {
     if (!lastHc) return null;
@@ -232,8 +238,9 @@ function highlightResultNodes() {
   const matches = resultEl.querySelectorAll(`[data-source-line="${currentLine}"]`);
   matches.forEach(el => el.classList.add("source-highlight"));
 
-  const first = resultEl.querySelector(".source-highlight");
-  if (first) first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const highlights = resultEl.querySelectorAll(".source-highlight");
+  const last = highlights[highlights.length - 1];
+  if (last) last.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 // Source line highlight overlay
@@ -685,24 +692,24 @@ function buildDefaultOptionLists(ctx: DisplayCallContext): HTMLElement {
   return container;
 }
 
-function isInternalRow(tree: ResultTree): boolean {
+function isInternalRow(tree: ResultTree | ResultRowTree): boolean {
   const head = tree.atom.terms[0];
   return head?.tag === "Symbol" && head.name.startsWith("_");
 }
 
-function visibleChildren(tree: ResultTree): ResultTree[] {
+function visibleChildren(tree: ResultTree | ResultRowTree): ResultRowTree[] {
   return hideInternalEl.checked
     ? tree.children.filter((c) => !isInternalRow(c))
     : tree.children;
 }
 
-function renderTree(tree: ResultTree, depth: number): string {
+function renderTree(tree: ResultTree | ResultRowTree, depth: number): string {
   const indent = "  ".repeat(depth);
   return indent + renderNode(tree) + "\n" +
     visibleChildren(tree).map((c) => renderTree(c, depth + 1)).join("");
 }
 
-function renderNode(tree: ResultTree): string {
+function renderNode(tree: ResultTree | ResultRowTree): string {
   const tag = tree.tag;
   const [prefix, cls] = literalStyle(tag);
   const terms = tree.atom.terms.map((t, i) => renderTerm(t, i === 0)).join(" ");
