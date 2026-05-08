@@ -34,9 +34,7 @@ function listTuples(store: Store): string[] {
   return store.tuples.map((t) => renderAtom(store, t.atom));
 }
 
-function listOutputs(store: Store): string[] {
-  return store.outputs.map((o) => renderAtom(store, o.atom));
-}
+// (outputs removed — `!` is now Constrain, not output sink)
 
 // 1) play-card / it / move
 {
@@ -183,12 +181,136 @@ prop X Y
 + points -> 4
 + bar
 points -> N
-! result N
++ result N
 `;
   const { store } = runFixpoint(ok(src));
-  const outputs = listOutputs(store);
-  assert(outputs.includes("result 7"), `expected output 'result 7', got: ${outputs.join(" | ")}`);
+  const tuples = listTuples(store);
+  assert(tuples.includes("result 7"), `expected tuple 'result 7', got: ${tuples.join(" | ")}`);
   console.log("PASS: aggregation sum");
+}
+
+// 6b) aggregation with a free key in the weighted-match pattern. `score X
+// -> N` has X free, so the aggregation groups by X and emits one agg-result
+// per distinct X value, with the weights summed within each group.
+{
+  const src = `
+% score -> sum
+
+~ game, ( ~ init ); ( ~ check )
+
+-- "global" tuples
+init
++ score alice -> 10
++ score alice -> 5
++ score bob -> 20
++ marker
+
+check
+score X -> N
++ total X N
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("total alice 15"), `expected 'total alice 15', got: ${tuples.join(" | ")}`);
+  assert(tuples.includes("total bob 20"), `expected 'total bob 20', got: ${tuples.join(" | ")}`);
+  console.log("PASS: aggregation sum with free key (groupby)");
+}
+
+// 7) `= X bar` binds X via equality; pruning works.
+{
+  const src = `
++ foo bar
++ foo baz
+
+foo X
+= X bar
++ saw X
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("saw bar"), `missing 'saw bar': ${tuples}`);
+  assert(!tuples.includes("saw baz"), `unexpected 'saw baz': ${tuples}`);
+  console.log("PASS: = binds and prunes");
+}
+
+// 8) `= X Y` aliases two unifying-bound vars; only diagonal pairs survive.
+{
+  const src = `
++ foo a
++ foo b
+
+foo X
+foo Y
+= X Y
++ same X
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("same a"), `missing 'same a': ${tuples}`);
+  assert(tuples.includes("same b"), `missing 'same b': ${tuples}`);
+  console.log("PASS: = aliasing");
+}
+
+// 9) Structural unification: `= X (a Y)` decomposes the matched compound.
+{
+  const src = `
++ foo (a 1)
++ foo b
+
+foo X
+= X (a Y)
++ got Y
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("got 1"), `missing 'got 1': ${tuples}`);
+  // Only one match.
+  assert(tuples.filter((s) => s.startsWith("got ")).length === 1, `extra got rows: ${tuples}`);
+  console.log("PASS: = structural unify");
+}
+
+// 10) Equal inside a sub-rule.
+{
+  const src = `
++ foo bar
+
+foo X
+  ( = X bar
+    + ok )
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("ok"), `missing 'ok': ${tuples}`);
+  console.log("PASS: = inside sub-rule");
+}
+
+// 11) `=foo` (no space) stays a Symbol-headed match atom, not equality.
+{
+  const src = `
++ =foo bar
+
+=foo X
++ saw X
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("=foo bar"), `missing '=foo bar': ${tuples}`);
+  assert(tuples.includes("saw bar"), `missing 'saw bar': ${tuples}`);
+  console.log("PASS: =foo stays a Symbol");
+}
+
+// 12) Parser errors on malformed `=`.
+{
+  for (const [src, frag] of [
+    ["= X\n", "exactly two"],
+    ["= X Y Z\n", "exactly two"],
+    ["= X -> 2\n", "weight"],
+  ] as const) {
+    const r = parse(src);
+    assert("message" in r, `expected ParseError for ${JSON.stringify(src)}`);
+    assert(r.message.includes(frag), `unexpected message ${r.message}`);
+  }
+  console.log("PASS: = parser errors");
 }
 
 console.log("ALL v2 eval tests passed");

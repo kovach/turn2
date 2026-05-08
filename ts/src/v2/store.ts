@@ -3,7 +3,7 @@
 // is just integer equality on Ref ids.
 
 import type { Atom, Term } from "../types.js";
-import type { OutputTuple, Tuple } from "./types.js";
+import type { Tuple } from "./types.js";
 import {
   createHashcons,
   hashconsAtom,
@@ -17,7 +17,6 @@ export interface Store {
   tuples: Tuple[];
   // head-sym name -> tuple indices in `tuples` whose first term is that sym
   byHead: Map<string, number[]>;
-  outputs: OutputTuple[];
   // Forward adjacency on the moment-order relation. Keyed and valued by
   // hashcons token (NodeId from tokenOfId). Closure is computed lazily by
   // BFS in `lessThan`.
@@ -29,10 +28,24 @@ export interface Store {
   // Dedup set for moment-order edges already asserted, keyed as
   // `${ltTok},${gtTok}`. Avoids re-walking the closure during inserts.
   edgeSet: Set<string>;
+  // Memoization for `lessThanTok`. `ltPos` records pairs known to satisfy
+  // a < b — monotone w.r.t. edge inserts, never invalidated. `ltNeg` records
+  // pairs known to be false at the time they were computed; cleared on every
+  // `addOrder` since a new edge can flip a previous `false` to `true`.
+  ltPos: Map<number, Set<number>>;
+  ltNeg: Map<number, Set<number>>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
-  // Dedup set for output tuples, keyed as `${atomTok}`.
-  outputSet: Set<number>;
+  // Hard cap on inserted tuples. When exceeded, `addTuple` throws GasError;
+  // `runFixpoint` catches it and surfaces a `gas` status. 0 disables the
+  // check (initial value; runFixpoint sets a real budget).
+  tupleGas: number;
+}
+
+// Sentinel thrown by `addTuple` when `tupleGas` is exhausted. Caught by
+// `runFixpoint` so deeply nested CPS evaluator state can unwind cleanly.
+export class GasError extends Error {
+  constructor() { super("v2: tupleGas exhausted"); }
 }
 
 export function createStore(): Store {
@@ -43,15 +56,16 @@ export function createStore(): Store {
     hash,
     tuples: [],
     byHead: new Map(),
-    outputs: [],
     orderFwd: new Map(),
     bot,
     top,
     botTok: tokenOfId(bot, hash),
     topTok: tokenOfId(top, hash),
     edgeSet: new Set(),
+    ltPos: new Map(),
+    ltNeg: new Map(),
     tupleSet: new Set(),
-    outputSet: new Set(),
+    tupleGas: 0,
   };
 }
 
@@ -77,6 +91,9 @@ export function addTuple(store: Store, atom: Atom, l: Term, r: Term): boolean {
   const rTok = tokenOf(store, r);
   const key = `${atomTok},${lTok},${rTok}`;
   if (store.tupleSet.has(key)) return false;
+  if (store.tupleGas > 0 && store.tuples.length >= store.tupleGas) {
+    throw new GasError();
+  }
   store.tupleSet.add(key);
   const t: Tuple = { atom, l, r };
   const idx = store.tuples.length;
@@ -93,15 +110,6 @@ export function addTuple(store: Store, atom: Atom, l: Term, r: Term): boolean {
   return true;
 }
 
-export function addOutput(store: Store, atom: Atom): boolean {
-  const ref = hashconsTerm({ tag: "Atom", atom }, store.hash);
-  const tok = tokenOfId(ref, store.hash);
-  if (store.outputSet.has(tok)) return false;
-  store.outputSet.add(tok);
-  store.outputs.push({ atom });
-  return true;
-}
-
 // Assert lt < gt. No-op if already known. Bot/top edges are implicit and
 // not stored.
 export function addOrder(store: Store, lt: Term, gt: Term): void {
@@ -112,6 +120,9 @@ export function addOrder(store: Store, lt: Term, gt: Term): void {
   const key = `${ltTok},${gtTok}`;
   if (store.edgeSet.has(key)) return;
   store.edgeSet.add(key);
+  // A new edge can convert previously-false reachability into true; ltPos
+  // remains valid (monotone), but ltNeg must be discarded.
+  store.ltNeg.clear();
   let succs = store.orderFwd.get(ltTok);
   if (succs === undefined) {
     succs = new Set();
@@ -134,6 +145,10 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
   if (bTok === store.botTok) return false;
   if (aTok === store.botTok) return true;
   if (bTok === store.topTok) return true;
+  const pos = store.ltPos.get(aTok);
+  if (pos !== undefined && pos.has(bTok)) return true;
+  const neg = store.ltNeg.get(aTok);
+  if (neg !== undefined && neg.has(bTok)) return false;
   // BFS closure search.
   const stack = [aTok];
   const seen = new Set<number>([aTok]);
@@ -141,7 +156,12 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
     const cur = stack.pop()!;
     const succs = store.orderFwd.get(cur);
     if (succs === undefined) continue;
-    if (succs.has(bTok)) return true;
+    if (succs.has(bTok)) {
+      let cache = store.ltPos.get(aTok);
+      if (cache === undefined) { cache = new Set(); store.ltPos.set(aTok, cache); }
+      cache.add(bTok);
+      return true;
+    }
     for (const s of succs) {
       if (!seen.has(s)) {
         seen.add(s);
@@ -149,6 +169,9 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
       }
     }
   }
+  let cache = store.ltNeg.get(aTok);
+  if (cache === undefined) { cache = new Set(); store.ltNeg.set(aTok, cache); }
+  cache.add(bTok);
   return false;
 }
 

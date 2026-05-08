@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slide v2</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #1a1a1a; color: #d4d4d4; height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 8px 16px; background: #252525; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 16px; }
+    header h1 { font-size: 14px; font-weight: normal; color: #888; letter-spacing: 2px; text-transform: uppercase; }
+    #file-name { font-size: 13px; color: #aaa; }
+    #status-line { font-size: 12px; color: #888; margin-left: auto; }
+    #status-line.error { color: #f87171; }
+    .workspace { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
+    .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .pane-label { padding: 5px 12px; font-size: 11px; color: #666; background: #1e1e1e; border-bottom: 1px solid #2a2a2a; letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
+    textarea { flex: 1; background: #1a1a1a; color: #d4d4d4; border: none; outline: none; padding: 12px; font-family: monospace; font-size: 14px; line-height: 1.6; resize: none; tab-size: 2; white-space: pre; }
+    .editors { display: flex; flex-direction: column; border-right: 1px solid #333; min-height: 0; }
+    .right-column { display: flex; flex-direction: column; min-height: 0; }
+    .display-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #333; }
+    #display { flex: 1; overflow: auto; padding: 12px; display: flex; align-items: flex-start; justify-content: center; }
+    .db-pane { flex: 0 0 40%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #333; }
+    #db { flex: 1; overflow: auto; padding: 8px 12px; font-size: 12px; line-height: 1.4; white-space: pre; color: #c8c8c8; font-family: monospace; }
+    #db .head { color: #4fc1ff; }
+    #db .interval { color: #666; }
+    #db .ref { color: #c586c0; }
+    #db .sym { color: #d4d4d4; }
+    #db .pred { color: #4ec9b0; }
+    #db .var { color: #dcdcaa; }
+    #db .group-heading { color: #888; margin-top: 6px; }
+    .info-pane { flex: 0 0 200px; display: flex; flex-direction: column; min-height: 0; }
+    #info { flex: 1; overflow: auto; padding: 8px 12px; font-size: 12px; line-height: 1.4; white-space: pre-wrap; color: #aaa; }
+    #info .err { color: #f87171; }
+    #info .opt { color: #4fc1ff; cursor: pointer; }
+    #info .opt:hover { background: #2a2a2a; }
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; }
+    .tab-btn { background: transparent; color: #888; border: 1px solid #333; padding: 3px 10px; font-family: monospace; font-size: 11px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; }
+    .tab-btn:hover { color: #d4d4d4; }
+    .tab-btn.active { background: #2a2a2a; color: #d4d4d4; border-color: #555; }
+    .tab-pane.hidden { display: none !important; }
+    /* Timeline */
+    #timeline-tab { flex: 1; display: flex; flex-direction: row; min-height: 0; }
+    #timeline-content { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    #timeline-toolbar { padding: 6px 12px; background: #1e1e1e; border-bottom: 1px solid #2a2a2a; font-size: 11px; color: #888; display: flex; gap: 8px; align-items: center; }
+    #timeline-toolbar button { background: transparent; color: #888; border: 1px solid #333; padding: 2px 8px; font-family: monospace; font-size: 11px; cursor: pointer; }
+    #timeline-toolbar button.active { background: #2a2a2a; color: #d4d4d4; border-color: #555; }
+    #timeline-main { flex: 1; overflow-x: auto; overflow-y: auto; padding: 12px; min-width: 0; }
+    .timeline-svg { display: block; }
+    #timeline-sidebar-host { flex: 0 0 280px; overflow: auto; border-left: 1px solid #333; background: #1e1e1e; padding: 4px 0; }
+    .timeline-sidebar-heading { color: #888; font-size: 11px; padding: 8px 12px 4px; letter-spacing: 1px; text-transform: uppercase; }
+    .timeline-sidebar-row { color: #c8c8c8; font-family: monospace; font-size: 12px; padding: 2px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .timeline-sidebar-row:hover { background: #2a2a2a; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Slide v2</h1>
+    <span id="file-name"></span>
+    <span class="tabs">
+      <button class="tab-btn active" id="tab-editor" data-tab="editor">Editor</button>
+      <button class="tab-btn" id="tab-timeline" data-tab="timeline">Timeline</button>
+    </span>
+    <span id="status-line">—</span>
+  </header>
+  <div class="workspace tab-pane" id="editor-tab">
+    <div class="editors">
+      <div class="pane">
+        <div class="pane-label"><span>Source (.t)</span></div>
+        <textarea id="source" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <div class="right-column">
+      <div class="display-pane">
+        <div class="pane-label"><span>Display</span></div>
+        <div id="display"></div>
+      </div>
+      <div class="db-pane">
+        <div class="pane-label"><span>Database</span><label style="font-size: 11px; color: #888;"><input type="checkbox" id="hide-internal" checked /> hide internal</label></div>
+        <div id="db"></div>
+      </div>
+      <div class="info-pane">
+        <div class="pane-label"><span>Info</span></div>
+        <div id="info"></div>
+      </div>
+    </div>
+  </div>
+  <div class="tab-pane hidden" id="timeline-tab">
+    <div id="timeline-content">
+      <div id="timeline-toolbar">
+        <span>orientation:</span>
+        <button id="timeline-orient-h" class="active">horizontal</button>
+        <button id="timeline-orient-v">vertical</button>
+      </div>
+      <div id="timeline-main"></div>
+    </div>
+    <div id="timeline-sidebar-host"></div>
+  </div>
+  <script type="module" src="/src/web-v2.js"></script>
+</body>
+</html>

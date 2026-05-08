@@ -1,3 +1,37 @@
+# v2 design notes
+see notes/v2-design.md (living document for cross-file v2 invariants)
+
+# v2 — tag compiler-generated identity terms as Id
+plan: plans/v2-id-tagging.md
+
+# v2 timeline view
+plan: plans/v2-timeline-view.md
+
+- a visualization pane that lays moments out left-to-right by partial order
+- `~` episodes as labeled bars between their endpoints
+- `+` facts as vertical lines at their left endpoint with the tuple text below
+- arrows between moments along the Hasse reduction of the moment order
+- `^` tuples align automatically since identical moments share an x-coordinate
+
+# update editor keybindings
+plan: plans/v2-editor-keybindings.md
+
+# update editor
+plan: plans/v2-editor-ttt.md
+
+# redo choice
+plan: plans/redo-choice.md
+
+- port the choice syntax to v2
+  - see end of notes/turn-program-1.t and the edit inside it to `!` tuples
+
+- re-establish the "scheduling" pattern
+  - rules with an aggregate as their next operation should block until other rules reach a fixpoint
+  - any `_choose` tuple is also "blocked"
+  - earliest blocked _choose or aggregate may proceed. to proceed:
+    - aggregate is computed
+    - in case of choice, computation is just stuck. the harness waits for a new user choice and restarts computation from scratch
+
 # new semantics
 plan: plans/new-semantics.md
 
@@ -7,102 +41,6 @@ there is substantial conceptual overlap with the existing language and editing t
 
 see this program for a tutorial:
 notes/turn-program-1.t
-
-# enclosing relation and aggregates
-plan: TODO
-
-- beyond Assert and Constrain NodeRows, add Episode
-  - syntax for asserting one: `~ foo X Y Z`
-- define a relation between asserted tuples called *encloses*, denoted a<b below for "a encloses b"
-  (Assert x) < y = x before y
-  (Episode x) < y = x contains y
-- given a set of tuples S and target tuple t, define { s : S | s < t } the *S context* of t
-- intuition:
-  - an Assert tuple `+ foo` extends indefinitely into the future after its assertion;
-  - an Episode tuple `~ foo` defines a span of time
-  - `a < b` represents whether the period of time at `b` can "see" `a`
-  - we are going to use this to define local aggregates: an aggregate value at `b` includes all and only those tuples that enclose `b`.
-
-- add a new syntax for defining an aggregate relation.
-  - for example, say we want to keep a count of how many times each card has been played.
-  - first, define a *relation schema* `% play-count : card -> sum`
-    - `card` is just a name of some other relation.
-    - `sum` is the name of an aggregate function
-      - functions to use for now: sum, count, last
-    - this declares that whenever the program asserts `play-count C -> 1`, repeats will be aggregated by summing up the values after `->` rather than not aggregated and stored as a multiset
-      - in particular, these tuples will *not* get an `id` the way tuples currently do
-      - at query time, we can access the count by writing a query like `play-count card -> N`
-- maintain the aggregate
-  - whenever we insert `+play-count C -> N` or `~play-count C -> N`, we store `_play-count C N` marked with `+/~`
-  - when we see a Match `-play-count C N`, we expand it into `~ do-agg play-count Id C`, similar to how `agg-instance` is generated.
-  - when it's scheduled, compute the enclosing set of the parent, and the aggregate value with a fresh id
-  - example sketch of expansion:
-    ```
-      - activate
-        - card C
-        - play-count C -> N
-        + foo N
-    ```
-    expands to
-    ```
-      - activate
-        - card C
-        + do-agg play-count Id C
-      - activate
-        - card C
-        - agg-result Id N
-        + foo N
-    ```
-  - in this example, the scheduler will aggregate the enclosing set (or "play-count context") of
-    the `activate` tuple since it is the parent of `do-agg`.
-
-- summary:
-  - new syntax mechanism to declare aggregated relations
-    `% foo : p1 p2 -> sum`
-  - new syntax to assert aggregate atoms
-    `+ play-count Card -> 1`
-  - new syntax to query aggregate values
-    `play-count Card -> N`
-  - change to expand: when expanding aggregate relation, don't give unique ids
-  - new evaluation mechanism
-
-- other schema definition examples:
-```
-  / two parameters: how much of each mana type does player have
-  % player:mana:total : player mana-type -> sum
-  / no parameters: how many cards were bought in a particular turn
-  % card-bought : count
-
-  - turn
-    - card-buy
-```
-
-# top-down predicates
-plan: TODO
-status: skip
-
-- as a step away from the current aggregation approach, add a new leaf TE
-  constructor representing a functional predicate that may aggregate rows
-- these functional predicates are defined separately from patterns like this:
-  ```
-  at X Location :=
-    #last L -> Location
-      < move X L
-
-  has-three-dahan Loc :=
-    location Loc
-    count -> N
-      at X Loc
-      dahan X
-    @ge N 3
-
-  has-three-dahan Loc :=
-    < location Loc
-    #count -> N
-      < at X Loc
-      < dahan X
-    @ge N 3
-  ```
 
 # rule name parsing
 plan: plans/rule-name-parsing.md
@@ -140,7 +78,7 @@ plan: plans/flat-relational-ir.md
 
 # reifying choice option tuples
 plan: plans/reify-choice-options.md
-status: pending refactorings to simplify; currently abandoned
+status: pending refactorings to simplify. abandoned
 
 - instead of evaluating choice "components" outside of the fixpoint loop,
   materialize the option query as a pattern and evaluate it "normally"

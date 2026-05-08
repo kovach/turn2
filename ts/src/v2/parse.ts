@@ -6,6 +6,7 @@
 
 import type { Atom, Term, Span } from "../types.js";
 import type { Marker, Program, Rule, RuleAtom, SchemaDecl } from "./types.js";
+import { RESERVED_HEAD_SYMS } from "./types.js";
 
 export interface ParseError {
   line: number;
@@ -16,6 +17,7 @@ type Token =
   | { tag: "open"; line: number }
   | { tag: "close"; sequence: boolean; line: number }
   | { tag: "atom"; marker: Marker; text: string; line: number }
+  | { tag: "equal"; text: string; line: number }
   | { tag: "schema"; text: string; line: number }
   | { tag: "ruleEnd"; line: number };
 
@@ -31,7 +33,7 @@ function stripComment(line: string): string {
 }
 
 function isMarkerChar(ch: string): boolean {
-  return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!";
+  return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!" || ch === "?";
 }
 
 function markerOf(ch: string): Marker {
@@ -40,7 +42,8 @@ function markerOf(ch: string): Marker {
     case "~": return "episode";
     case "+": return "fact";
     case "^": return "anchor";
-    case "!": return "output";
+    case "?": return "ask";
+    case "!": return "constrain";
     default: throw new Error(`internal: not a marker char '${ch}'`);
   }
 }
@@ -109,16 +112,22 @@ function tokenize(input: string): Token[] | ParseError {
       const text = raw.slice(start, pos).trim();
       if (text.length > 0) {
         const m = text[0]!;
-        let marker: Marker;
-        let body: string;
-        if (isMarkerChar(m)) {
-          marker = markerOf(m);
-          body = text.slice(1).trim();
+        // `=` is the equality marker only when followed by whitespace (or
+        // bare). `=foo` stays a Symbol-headed match atom.
+        if (m === "=" && (text.length === 1 || /\s/.test(text[1]!))) {
+          tokens.push({ tag: "equal", text: text.slice(1).trim(), line: lineno });
         } else {
-          marker = "match";
-          body = text;
+          let marker: Marker;
+          let body: string;
+          if (isMarkerChar(m)) {
+            marker = markerOf(m);
+            body = text.slice(1).trim();
+          } else {
+            marker = "match";
+            body = text;
+          }
+          tokens.push({ tag: "atom", marker, text: body, line: lineno });
         }
-        tokens.push({ tag: "atom", marker, text: body, line: lineno });
       }
       atomStart = false;
     }
@@ -181,6 +190,13 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         i++;
         continue;
       }
+      if (tok.tag === "equal") {
+        const parsedEq = parseEqualText(tok.text, tok.line);
+        if ("message" in parsedEq) return parsedEq;
+        stack[stack.length - 1]!.push(parsedEq);
+        i++;
+        continue;
+      }
       const parsed = parseAtomText(tok.text, tok.marker, tok.line);
       if ("message" in parsed) return parsed;
       stack[stack.length - 1]!.push(parsed);
@@ -220,6 +236,19 @@ function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {
   return { relation, aggregator, span: { line } };
 }
 
+function parseEqualText(text: string, line: number): RuleAtom | ParseError {
+  if (findTopArrow(text) >= 0) {
+    return { line, message: "'=' atom cannot carry '-> weight'" };
+  }
+  const tokens = tokenizeTermText(text);
+  const terms = parseTerms(tokens, line);
+  if ("message" in terms) return terms;
+  if (terms.length !== 2) {
+    return { line, message: `'=' atom must have exactly two terms, got ${terms.length}` };
+  }
+  return { tag: "Equal", lhs: terms[0]!, rhs: terms[1]!, span: { line } };
+}
+
 function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | ParseError {
   // Optional trailing `-> term` weight. Top-level arrow only (depth 0).
   const arrow = findTopArrow(text);
@@ -241,6 +270,17 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   const terms = parseTerms(tokens, line);
   if ("message" in terms) return terms;
   const atom: Atom = { terms };
+  // Reject reserved head syms at the *outermost* head position. Nested
+  // occurrences (inside an Atom term) are fine — they're just user data.
+  const headTerm = atom.terms[0];
+  if (headTerm !== undefined && headTerm.tag === "Symbol") {
+    if (RESERVED_HEAD_SYMS.has(headTerm.name)) {
+      return { line, message: `'${headTerm.name}' is a reserved head sym; user rules may not emit it directly` };
+    }
+    if (headTerm.name.startsWith("*")) {
+      return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
+    }
+  }
   const out: RuleAtom = { tag: "Atom", marker, atom, span: { line } };
   if (weight !== undefined) out.weight = weight;
   return out;
@@ -279,7 +319,13 @@ function parseTerms(tokens: string[], line: number, pos: { i: number } = { i: 0 
       if (!Array.isArray(inner)) return inner;
       if (tokens[pos.i] !== ")") return { line, message: "unbalanced '(' in term" };
       pos.i++;
-      terms.push({ tag: "Atom", atom: { terms: inner } });
+      // Convention: a compound whose head is a Symbol starting with `*` is a
+      // compiler-generated identity term (e.g. `*choose`, `*id`, `*mom`).
+      // Tag it as `Id` so it round-trips with the Id-opacity invariant
+      // intact (notes/v2-design.md). Anything else is plain data.
+      const head = inner[0];
+      const tag = (head !== undefined && head.tag === "Symbol" && head.name.startsWith("*")) ? "Id" : "Atom";
+      terms.push({ tag, atom: { terms: inner } });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
     } else if (tok.length > 0 && tok[0]! >= "A" && tok[0]! <= "Z") {

@@ -92,6 +92,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/v2" || pathname === "/index-v2.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(fs.readFileSync(path.join(ROOT, "index-v2.html")));
+    return;
+  }
+
+  // v2 source/display files. `/data/v2/*.t` is text; `/data/v2/*.js` is a
+  // display module loaded via dynamic import. Plus a tiny GET API for the
+  // editor to fetch `data/v2/*.t` source files.
+  if (pathname.startsWith("/data/v2/")) {
+    const file = pathname.slice("/data/v2/".length);
+    if (file.includes("..") || file.includes("/")) {
+      res.writeHead(400); res.end("Invalid path");
+      return;
+    }
+    try {
+      const v2Dir = path.join(ROOT, "data", "v2");
+      const content = fs.readFileSync(path.join(v2Dir, file));
+      const ct = file.endsWith(".js")
+        ? "application/javascript"
+        : "text/plain; charset=utf-8";
+      res.writeHead(200, { "Content-Type": ct });
+      res.end(content);
+    } catch { res.writeHead(404); res.end("Not found"); }
+    return;
+  }
+
+  const v2FileMatch = pathname.match(/^\/api\/v2-file\/([^/]+)$/);
+  if (v2FileMatch) {
+    const name = decodeURIComponent(v2FileMatch[1]!);
+    if (name.includes("..") || name.includes("/") || !name.endsWith(".t")) {
+      sendJson(res, 400, { error: "invalid filename" });
+      return;
+    }
+    const filePath = path.join(ROOT, "data", "v2", name);
+    if (method === "GET") {
+      try {
+        const content = fs.readFileSync(filePath, "utf8");
+        sendJson(res, 200, { content });
+      } catch { sendJson(res, 404, { error: "not found" }); }
+      return;
+    }
+    if (method === "PUT") {
+      try {
+        fs.writeFileSync(filePath, await readBody(req), "utf8");
+        sendJson(res, 200, { ok: true });
+      } catch { sendJson(res, 500, { error: "write error" }); }
+      return;
+    }
+  }
+
   if (pathname.startsWith("/src/")) {
     const file = pathname.slice(5);
     try {

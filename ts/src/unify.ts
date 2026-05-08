@@ -21,7 +21,7 @@ export function resetUnifyStats(): void {
 // into atoms — sub-terms of atoms stay unresolved. This is what unifyTerms
 // needs internally: any Variables inside an Atom will be resolved lazily
 // when unifyAtoms descends into them.
-function resolveVar(term: Term, trail: Trail): Term {
+export function resolveVar(term: Term, trail: Trail): Term {
   let t = term;
   while (t.tag === "Variable") {
     const bound = trailLookup(trail, t.name);
@@ -124,7 +124,7 @@ export function unifyTerms(a: Term, b: Term, trail: Trail, hc: HashconsState): b
   return false;
 }
 
-function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolean {
+export function unifyAtoms(pa: Atom, ra: Atom, trail: Trail, hc: HashconsState): boolean {
   if (pa.terms.length !== ra.terms.length) return false;
   for (let i = 0; i < pa.terms.length; i++) {
     if (!unifyTerms(pa.terms[i]!, ra.terms[i]!, trail, hc)) return false;

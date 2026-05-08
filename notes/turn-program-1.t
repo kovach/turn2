@@ -29,11 +29,11 @@ play-card E, it E Card, ~ move Card play-area
 --   note that, since we require comparable endpoints, this interval is a well-defined pair of moments
 
 -- there are several ways for a rule to assert a new tuple, each of which also asserts temporal info about its interval:
---   `~`: the new atom interval `(l', r')` is fresh-generated and strictly contained within the anchor
---   `+`: the new atom interval `(l', top)` has fresh left endpoint and right endpoint equal to top
+--   `~`: the new tuple interval `(l', r')` is fresh-generated and strictly contained within the anchor
+--   `+`: the new tuple interval `(l', top)` has fresh left endpoint and right endpoint equal to top
 --     for anchor (l, r), assert l < l' < r
---   `^`: the new atom interval is exactly the current anchor
---   `!`: the new atom is marked as an *output* tuple; it is stored apart from other tuples, doesn't have an interval, cannot match atom patterns
+--   `^`: the new tuple interval is exactly the current anchor
+--   `!`: the new tuple interval is generated as in the `~` case. the new tuple is marked as an *output*; it is stored apart from other tuples, cannot match patterns
 -- fresh moment values are constructed analogously to the interval id values currently constructed: they contain a lexical part (the rule name and location in the rule) and a dynamic part (the variables bound by the query so far)
 -- in any case, execution proceeds with an updated anchor: in the case of `~` for example, since the new interval is strictly smaller, it becomes the new anchor
 
@@ -179,3 +179,54 @@ foo
 
 -- this doesn't show the moment assertions that are produced as we handle `~e1` and `~e2`;
 -- in particular, the key point is that evaluation asserts e1_r < e2_l; that is, e1 comes before e2 in the interval order
+
+-- Choices --
+-- a *choice* is a special term introduced using `?`
+-- choices can be *constrained* using `!` tuples
+
+turn
+  ? C
+  + cell-choice C
+
+cell-choice C
+  ! cell C
+
+-- choices behave as they did in v1; `?` introduces a special tuple; a choice is resolved by asserting `is <choice-id> <value>`; execution blocks on the earliest choice/aggregate
+
+-- Aggregation, free variables, and group-by --
+
+-- a weighted query may contain variables in the pattern that are *not bound* before it appears in the rule. these are the aggregation's *free variables*.
+-- example: with `% score key -> sum`,
+--
+--   score X -> N
+--   + total X N
+--
+-- here X is free (not bound by any earlier atom) and N is free (the weight slot).
+-- evaluation behaves as if the aggregation groups its contribution set by the distinct values of free *key* positions, then aggregates over the weight position within each group, and emits one result per group.
+
+-- internally, rule splitting produces a `do-agg` row whose wrapped pattern has every free position replaced by a reserved symbol `_free`. for the example above:
+--   ^ do-agg <id> (score _free _free)
+-- bound key positions in the wrapped pattern act as filters; positions marked `_free` match anything.
+
+-- the scheduler closes a `do-agg` row by:
+--   - selecting candidate tuples with the same head and arity, whose interval contains the do-agg's interval, and whose bound positions match
+--   - grouping candidates by the tuple of values at free *key* positions (positions before the weight)
+--   - per group: for sum/count, emit one `agg-result <id> (head k1 ... kK W)` row where W is the aggregate of weights in the group and k1..kK are the group's actual key values. for `last`, emit one such row per maximal-under-interval-order candidate within the group, with W = that candidate's own weight.
+--
+-- the consumer side of the split rule matches `agg-result <id> <pattern-with-original-vars>`, so the original variable names (X, N here) bind from the emitted row.
+
+-- examples (with `% position token -> last`):
+--   query `position T -> x`  (T free, weight = literal `x`)
+--     do-agg shape:    do-agg <id> (position _free x)
+--     agg-result rows: agg-result <id> (position t1 x), agg-result <id> (position t2 x), ...
+--       (one per distinct T whose `position T x` row is maximal-under-interval-order in its group)
+--
+--   query `position x -> Y`  (Y free, key = literal `x`)
+--     do-agg shape:    do-agg <id> (position x _free)
+--     agg-result row:  agg-result <id> (position x l1)
+--       (the maximal `position x _` candidate; one row, no key grouping since x is bound)
+
+-- empty groups: count/sum still emit one agg-result row carrying the aggregator's zero (and `_free` left in any free key slot, since the empty case has no representative). last fails — no agg-result row is emitted.
+
+-- the symbol `_free` is reserved. user source cannot construct it, since identifiers starting with `_` are parsed as variables.
+
