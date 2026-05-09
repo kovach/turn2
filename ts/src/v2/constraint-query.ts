@@ -21,6 +21,7 @@ import type { BlockedChoose, ComponentOptions } from "./types.js";
 import { refTagOf } from "../hashcons.js";
 import {
   candidatesByHead,
+  intervalsOverlap,
   tokenOf,
   type Store,
 } from "./store.js";
@@ -91,11 +92,16 @@ interface ConstrainRow {
   wrapped: Atom;
   // Active tokens this row touches.
   touched: Set<number>;
+  // The constrain row's own stored interval. Candidates for this row's
+  // wrapped atom are filtered to tuples whose interval overlaps [l, r] —
+  // each row in a component anchors its own query independently.
+  l: Term;
+  r: Term;
 }
 
 function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow[] {
   const out: ConstrainRow[] = [];
-  for (const idx of candidatesByHead(store, "constrain")) {
+  for (const idx of candidatesByHead(store, "_constrain")) {
     const t = store.tuples[idx]!;
     const wrappedTerm = t.atom.terms[1];
     if (wrappedTerm === undefined) continue;
@@ -103,7 +109,7 @@ function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow
     if (wrapped === null) continue;
     const touched = activeTokensIn(wrapped, store, activeSet);
     if (touched.size === 0) continue;
-    out.push({ rowIndex: idx, wrapped, touched });
+    out.push({ rowIndex: idx, wrapped, touched, l: t.l, r: t.r });
   }
   return out;
 }
@@ -210,6 +216,7 @@ function runComponent(
     for (const cidx of candidatesByHead(store, headTerm.name)) {
       const cand = store.tuples[cidx]!;
       if (cand.atom.terms.length !== arity) continue;
+      if (!intervalsOverlap(store, row.l, row.r, cand.l, cand.r)) continue;
       const trial = new Map(sub);
       let ok = true;
       for (let i = 0; i < arity; i++) {

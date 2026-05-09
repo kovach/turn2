@@ -195,7 +195,7 @@ function evalAssert(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () =>
 // rows itself. The evaluator's job is just to emit the row.
 //
 // Stored row terms (3 entries):
-//   [ Symbol "choose", chooseId, Atom { wrappedTerms } ]
+//   [ Symbol "_choose", chooseId, Atom { wrappedTerms } ]
 function evalAsk(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => void): void {
   const anchor = topAnchor(ctx);
   const mark = trailLength(ctx.trail);
@@ -203,7 +203,7 @@ function evalAsk(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => vo
   const wrappedAtom: Term = { tag: "Atom", atom: { terms: wrappedTerms } };
   const chooseId = freshChooseId(a, ctx);
   const rowTerms: Term[] = [
-    { tag: "Symbol", name: "choose" },
+    { tag: "Symbol", name: "_choose" },
     chooseId,
     wrappedAtom,
   ];
@@ -224,14 +224,14 @@ function evalAsk(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => vo
 }
 
 // Constrain `! atom` desugars to `+ constrain (<atom>)`. Stored row terms (2
-// entries): [ Symbol "constrain", Atom { atom.terms with bindUnbound } ].
+// entries): [ Symbol "_constrain", Atom { atom.terms with bindUnbound } ].
 function evalConstrain(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => void): void {
   const anchor = topAnchor(ctx);
   const mark = trailLength(ctx.trail);
   const wrappedTerms = a.atom.terms.map((t) => bindUnbound(t, a, ctx));
   const wrappedAtom: Term = { tag: "Atom", atom: { terms: wrappedTerms } };
   const rowTerms: Term[] = [
-    { tag: "Symbol", name: "constrain" },
+    { tag: "Symbol", name: "_constrain" },
     wrappedAtom,
   ];
   const internedAtom = internAtom(ctx.store, { terms: rowTerms });

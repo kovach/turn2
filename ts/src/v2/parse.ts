@@ -6,7 +6,6 @@
 
 import type { Atom, Term, Span } from "../types.js";
 import type { Marker, Program, Rule, RuleAtom, SchemaDecl } from "./types.js";
-import { RESERVED_HEAD_SYMS } from "./types.js";
 
 export interface ParseError {
   line: number;
@@ -270,16 +269,14 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   const terms = parseTerms(tokens, line);
   if ("message" in terms) return terms;
   const atom: Atom = { terms };
-  // Reject reserved head syms at the *outermost* head position. Nested
-  // occurrences (inside an Atom term) are fine — they're just user data.
+  // Head syms starting with `*` are reserved for compiler-generated identity
+  // terms (e.g. `*id`, `*mom`, `*choose`). Engine-emitted predicates like
+  // `_choose` / `_constrain` / `_do-agg` / `_agg-result` are reserved by the
+  // general `_`-prefix rule (such tokens parse as Variables, not Symbols, so
+  // they cannot appear as a Symbol head from user source).
   const headTerm = atom.terms[0];
-  if (headTerm !== undefined && headTerm.tag === "Symbol") {
-    if (RESERVED_HEAD_SYMS.has(headTerm.name)) {
-      return { line, message: `'${headTerm.name}' is a reserved head sym; user rules may not emit it directly` };
-    }
-    if (headTerm.name.startsWith("*")) {
-      return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
-    }
+  if (headTerm !== undefined && headTerm.tag === "Symbol" && headTerm.name.startsWith("*")) {
+    return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
   }
   const out: RuleAtom = { tag: "Atom", marker, atom, span: { line } };
   if (weight !== undefined) out.weight = weight;

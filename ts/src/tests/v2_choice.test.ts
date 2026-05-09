@@ -43,8 +43,8 @@ turn
 `;
   const { store, status } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  const chooseRows = tuples.filter((t) => t.startsWith("choose "));
-  assert.equal(chooseRows.length, 1, `expected 1 choose row, got: ${chooseRows.join(" | ")}`);
+  const chooseRows = tuples.filter((t) => t.startsWith("_choose "));
+  assert.equal(chooseRows.length, 1, `expected 1 _choose row, got: ${chooseRows.join(" | ")}`);
   // Without a constrain row this fails the empty-fringe check; the
   // cell-choice row is still emitted by the inner loop before the scheduler
   // surfaces the error.
@@ -63,11 +63,11 @@ a
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  const cs = tuples.filter((t) => t.startsWith("constrain"));
-  assert.equal(cs.length, 1, `expected 1 constrain row, got: ${cs.join(" | ")}`);
-  // Shape: "constrain (foo bar)"
+  const cs = tuples.filter((t) => t.startsWith("_constrain"));
+  assert.equal(cs.length, 1, `expected 1 _constrain row, got: ${cs.join(" | ")}`);
+  // Shape: "_constrain (foo bar)"
   assert(cs[0]!.includes("(foo bar)"), `expected wrapped (foo bar), got: ${cs[0]}`);
-  console.log("PASS: ! emits one constrain row");
+  console.log("PASS: ! emits one _constrain row");
 }
 
 // 3) Choice + constraint surfaces an active-choices status.

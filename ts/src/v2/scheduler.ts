@@ -37,14 +37,14 @@ type Blocked =
 // Scan store for do-agg rows lacking matching agg-result rows.
 export function collectBlockedDoAggs(store: Store): BlockedDoAgg[] {
   const resolved = new Set<number>();
-  for (const idx of candidatesByHead(store, "agg-result")) {
+  for (const idx of candidatesByHead(store, "_agg-result")) {
     const t = store.tuples[idx]!;
     const idTerm = t.atom.terms[1];
     if (idTerm === undefined) continue;
     resolved.add(tokenOf(store, idTerm));
   }
   const out: BlockedDoAgg[] = [];
-  for (const idx of candidatesByHead(store, "do-agg")) {
+  for (const idx of candidatesByHead(store, "_do-agg")) {
     const t = store.tuples[idx]!;
     const idTerm = t.atom.terms[1];
     const wrappedTerm = t.atom.terms[2];
@@ -70,7 +70,7 @@ export function collectBlockedChooses(store: Store): BlockedChoose[] {
     resolved.add(tokenOf(store, T));
   }
   const out: BlockedChoose[] = [];
-  for (const idx of candidatesByHead(store, "choose")) {
+  for (const idx of candidatesByHead(store, "_choose")) {
     const t = store.tuples[idx]!;
     const chooseId = t.atom.terms[1];
     const wrappedTerm = t.atom.terms[2];
@@ -179,17 +179,18 @@ export function closeDoAgg(
   }
   const aggregator = getAggregator(aggName);
 
-  // wrapped.terms layout: [headSym, k1, ..., kK, weight]. A position is
-  // "free" iff its term is the reserved Symbol `_free`; bound positions
-  // require equality with the candidate. Free key positions become group-by
-  // dimensions; the free weight position (if any) just doesn't filter.
-  const isFree = (t: Term): boolean =>
-    t.tag === "Symbol" && t.name === "_free";
+  // wrapped.terms layout: [headSym, k1, ..., kK, weight]. The reserved
+  // Symbol `_free` acts as a wildcard, *recursively* — `(cell _free _free)`
+  // at a top-level position means that position takes any cell value and
+  // contributes the cell to the group key. A position is "free" if it
+  // contains `_free` at any depth; otherwise its candidate value must match
+  // the wrapped pattern by recursive token unification.
   const arity = wrapped.terms.length;
   if (arity < 2) return false;
 
   // Candidates: tuples with same head sym + arity, interval contains the
-  // do-agg's interval, and bound positions equal pointwise.
+  // do-agg's interval, and each non-free wrapped position structurally
+  // matches the candidate's term.
   type Cand = { idx: number; terms: readonly Term[] };
   const candidates: Cand[] = [];
   for (const idx of candidatesByHead(store, headTerm.name)) {
@@ -198,8 +199,7 @@ export function closeDoAgg(
     if (!intervalContains(store, t.l, t.r, blocked.l, blocked.r)) continue;
     let ok = true;
     for (let i = 0; i < arity; i++) {
-      if (isFree(wrapped.terms[i]!)) continue;
-      if (!termsEqualByToken(store, wrapped.terms[i]!, t.atom.terms[i]!)) {
+      if (!matchFreePattern(wrapped.terms[i]!, t.atom.terms[i]!, store)) {
         ok = false;
         break;
       }
@@ -208,10 +208,13 @@ export function closeDoAgg(
     candidates.push({ idx, terms: t.atom.terms });
   }
 
-  // Group by free *key* positions (positions 1..arity-2). Key signature is
-  // a `|`-joined string of hashcons tokens.
+  // Group by positions whose wrapped term contains `_free` anywhere
+  // (positions 1..arity-2; the weight position is excluded). Key signature
+  // is a `|`-joined string of the candidate's full-position hashcons tokens.
   const keyPositions: number[] = [];
-  for (let i = 1; i < arity - 1; i++) if (isFree(wrapped.terms[i]!)) keyPositions.push(i);
+  for (let i = 1; i < arity - 1; i++) {
+    if (containsFree(wrapped.terms[i]!, store)) keyPositions.push(i);
+  }
   const groups = new Map<string, Cand[]>();
   for (const c of candidates) {
     const sig = keyPositions.map((p) => tokenOf(store, c.terms[p]!)).join("|");
@@ -220,9 +223,17 @@ export function closeDoAgg(
     bucket.push(c);
   }
   if (groups.size === 0) {
-    // No contributions. count/sum still emit one row using their zero;
-    // last fails (per spec, last on empty has no agg-result).
+    // No contributions.
+    //   - last fails (per spec, last on empty has no agg-result).
+    //   - With free key positions (group-by), there are no groups — emit
+    //     nothing. Otherwise the consumer's match against the agg-result's
+    //     inner pattern would unify its key Variables against the literal
+    //     `_free` Symbol, and that bogus binding would leak into downstream
+    //     emissions.
+    //   - With no free key positions, "empty" still means a single fully-
+    //     specified group with count/sum zero — emit one zero row.
     if (aggName === "last") return false;
+    if (keyPositions.length > 0) return false;
     return emitAggResultRow(store, blocked, wrapped, null, aggregator.zero);
   }
 
@@ -264,17 +275,14 @@ function emitAggResultRow(
   weight: Term,
 ): boolean {
   const arity = wrapped.terms.length;
-  const isFree = (t: Term): boolean =>
-    t.tag === "Symbol" && t.name === "_free";
   const filledTerms: Term[] = [];
   for (let i = 0; i < arity - 1; i++) {
     const w = wrapped.terms[i]!;
-    if (isFree(w)) {
+    if (containsFree(w, store)) {
       if (rep === null) {
-        // No representative (empty count/sum group). Leave `_free` in place;
-        // there should be no free-key positions in the empty case since we
-        // only reach here when groups.size === 0 and there are no candidates
-        // to drive groupby. Consumer pattern's free-var binds to `_free`.
+        // No representative — only reachable when groups.size === 0 and
+        // there are no key positions, so this branch should never see a
+        // free-containing position.
         filledTerms.push(w);
       } else {
         filledTerms.push(rep.terms[i]!);
@@ -286,7 +294,7 @@ function emitAggResultRow(
   filledTerms.push(weight);
   const inner: Term = { tag: "Atom", atom: { terms: filledTerms.map((t) => hashconsTerm(t, store.hash)) } };
   const internedInner = hashconsTerm(inner, store.hash);
-  const sym: Term = { tag: "Symbol", name: "agg-result" };
+  const sym: Term = { tag: "Symbol", name: "_agg-result" };
   const atom: Atom = { terms: [sym, blocked.aggId, internedInner] };
   const inserted = addTuple(store, atom, blocked.l, blocked.r);
   if (inserted) {
@@ -295,6 +303,42 @@ function emitAggResultRow(
   return inserted;
 }
 
-function termsEqualByToken(store: Store, a: Term, b: Term): boolean {
-  return tokenOf(store, a) === tokenOf(store, b);
+// Recursive structural match where the reserved Symbol `_free` in `pat`
+// stands for any value. Both `pat` and `val` are ground (no Variables).
+// Returns true iff every non-`_free` position in `pat` matches `val` by
+// hashcons-token equality, descending through Atom-tagged Refs / literal
+// Atoms. `Id`-tagged terms are opaque per notes/v2-design.md — they're
+// compared by token only.
+function matchFreePattern(pat: Term, val: Term, store: Store): boolean {
+  if (pat.tag === "Symbol" && pat.name === "_free") return true;
+  if (tokenOf(store, pat) === tokenOf(store, val)) return true;
+  const pTerms = atomChildren(pat, store);
+  const vTerms = atomChildren(val, store);
+  if (pTerms === null || vTerms === null) return false;
+  if (pTerms.length !== vTerms.length) return false;
+  for (let i = 0; i < pTerms.length; i++) {
+    if (!matchFreePattern(pTerms[i]!, vTerms[i]!, store)) return false;
+  }
+  return true;
+}
+
+// True iff `t` contains the reserved Symbol `_free` at any depth, walking
+// only through Atom-tagged compound structure (Id terms are opaque).
+function containsFree(t: Term, store: Store): boolean {
+  if (t.tag === "Symbol") return t.name === "_free";
+  const children = atomChildren(t, store);
+  if (children === null) return false;
+  for (const c of children) if (containsFree(c, store)) return true;
+  return false;
+}
+
+// Children of an Atom-tagged compound, or null for non-compound / Id terms.
+function atomChildren(term: Term, store: Store): readonly Term[] | null {
+  if (term.tag === "Atom") return term.atom.terms;
+  if (term.tag === "Ref") {
+    if (refTagOf(store.hash, term.id) !== "Atom") return null;
+    const a = store.hash.refToAtom.get(term.id);
+    return a ? a.terms : null;
+  }
+  return null;
 }

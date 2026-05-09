@@ -110,18 +110,6 @@ export const isMatchAtom = (a: RuleAtom): a is Extract<RuleAtom, { tag: "Atom" }
 export const isAssertAtom = (a: RuleAtom): a is Extract<RuleAtom, { tag: "Atom" }> =>
   a.tag === "Atom" && a.marker !== "match";
 
-// Reserved head syms — produced by lowering `?` / `!` and by rule splitting.
-// User rules cannot emit them as the outermost head of an atom. Nested
-// occurrences (e.g., as the wrapped-atom argument inside a constrain) are
-// fine; only the *outer* head is reserved.
-//
-// Note: `is` is *not* reserved. It's the resolution relation — but it's
-// just a regular fact relation with a privileged name. User emission of
-// `is` rows is fine and participates in resolution lookup.
-export const RESERVED_HEAD_SYMS = new Set<string>([
-  "choose", "constrain", "do-agg", "agg-result",
-]);
-
 // Outcome of a fixpoint run.
 export type FixpointStatus =
   | { kind: "done" }

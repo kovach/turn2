@@ -1,8 +1,8 @@
 // Rule splitting at weighted matches.
 //
 // A rule containing a weighted match `foo X -> N` splits into:
-//   - producer: prefix + `^ do-agg <aggIdVar> (foo X)`
-//   - consumer: prefix + `do-agg <aggIdVar> (foo X)` + `agg-result <aggIdVar> N` + suffix
+//   - producer: prefix + `^ _do-agg <aggIdVar> (foo X)`
+//   - consumer: prefix + `_do-agg <aggIdVar> (foo X)` + `_agg-result <aggIdVar> N` + suffix
 //
 // `aggIdVar` is a synthesized Variable; both rules carry the *original* rule
 // name so their prefix runs produce identical fresh-ids (mom/id) and dedupe.
@@ -119,24 +119,23 @@ function assignIds(rule: Rule): void {
 }
 
 function splitRule(rule: Rule): Rule[] {
-  const idx = findTopWeightedMatch(rule.body);
-  if (idx < 0) return [rule];
-  const wm = rule.body[idx]!;
+  const path = findFirstWeightedMatch(rule.body);
+  if (path === null) return [rule];
+  const wm = atPath(rule.body, path);
   if (wm.tag !== "Atom") throw new Error("unreachable");
   if (wm.weight === undefined) throw new Error("unreachable");
 
-  const prefix = rule.body.slice(0, idx);
-  const suffix = rule.body.slice(idx + 1);
-
-  const aggVarName = `_aggId_${idx}`;
+  const aggVarName = `_aggId_${path.join("_")}`;
   const aggIdVar: Term = { tag: "Variable", name: aggVarName };
 
   // The wrapped pattern includes the weight position. Variables that the
-  // prefix doesn't bind (the aggregation's free variables) are replaced by
-  // the reserved `_free` Symbol; the scheduler treats those positions as
-  // wildcards and groups contributions by their distinct values.
+  // prefix (everything lexically before the weighted match — including
+  // surrounding sub-rule prefixes) doesn't bind become aggregation free
+  // variables and are replaced by the reserved `_free` Symbol; the scheduler
+  // treats those positions as wildcards and groups contributions by their
+  // distinct values.
   const boundByPrefix = new Set<string>();
-  collectBoundVarsInBody(prefix, boundByPrefix);
+  collectBoundVarsBeforePath(rule.body, path, boundByPrefix);
   const freeSym: Term = { tag: "Symbol", name: "_free" };
   const freeify = (t: Term): Term => {
     if (t.tag === "Variable") {
@@ -149,7 +148,11 @@ function splitRule(rule: Rule): Rule[] {
     }
     return t;
   };
-  const wrappedFreeTerms: Term[] = [...wm.atom.terms.map(freeify), freeify(wm.weight)];
+  // Weight position is the *output* of aggregation, not a filter on
+  // contributions. Always leave it free in the do-agg pattern; the consumer's
+  // agg-result match (originalPatternAtom) enforces equality against any
+  // user-written literal weight.
+  const wrappedFreeTerms: Term[] = [...wm.atom.terms.map(freeify), freeSym];
   const wrappedFreeAtom: Term = { tag: "Atom", atom: { terms: wrappedFreeTerms } };
   // Consumer's agg-result match keeps the original variable names so they
   // bind from each emitted agg-result row.
@@ -158,8 +161,8 @@ function splitRule(rule: Rule): Rule[] {
     atom: { terms: [...wm.atom.terms, wm.weight] },
   };
 
-  const symDoAgg: Term = { tag: "Symbol", name: "do-agg" };
-  const symAggResult: Term = { tag: "Symbol", name: "agg-result" };
+  const symDoAgg: Term = { tag: "Symbol", name: "_do-agg" };
+  const symAggResult: Term = { tag: "Symbol", name: "_agg-result" };
 
   const producerEmit: RuleAtom = {
     tag: "Atom",
@@ -182,32 +185,91 @@ function splitRule(rule: Rule): Rule[] {
     span: wm.span,
   };
 
+  const producerBody = buildProducerBody(rule.body, path, producerEmit);
+  const consumerBody = buildConsumerBody(rule.body, path, consumerDoAgg, consumerAggResult);
+
   const producerRule: Rule = {
     name: rule.name,
-    body: [...prefix, producerEmit],
+    body: producerBody,
     span: rule.span,
   };
 
   const consumerRule: Rule = {
     name: rule.name,
-    body: [...prefix, consumerDoAgg, consumerAggResult, ...suffix],
+    body: consumerBody,
     span: rule.span,
   };
 
   return [producerRule, ...splitRule(consumerRule)];
 }
 
-// Index of the first top-level weighted match in body, or -1. We don't recurse
-// into sub-rules — weighted matches inside `(...)` are not yet supported.
-function findTopWeightedMatch(body: RuleAtom[]): number {
+// Path of indices into nested Sub bodies locating the first weighted match,
+// or null if none. `[i]` is a top-level position; `[i, j, ...]` walks into
+// `body[i]` (a Sub), then its body[j], etc.
+type WMPath = number[];
+
+function findFirstWeightedMatch(body: RuleAtom[]): WMPath | null {
   for (let i = 0; i < body.length; i++) {
     const a = body[i]!;
-    if (a.tag === "Atom" && a.marker === "match" && a.weight !== undefined) return i;
-    if (a.tag === "Sub" && containsWeightedMatch(a.body)) {
-      throw new Error("weighted match inside sub-rule not yet supported by expand");
+    if (a.tag === "Atom" && a.marker === "match" && a.weight !== undefined) return [i];
+    if (a.tag === "Sub") {
+      const inner = findFirstWeightedMatch(a.body);
+      if (inner !== null) return [i, ...inner];
     }
   }
-  return -1;
+  return null;
+}
+
+function atPath(body: RuleAtom[], path: WMPath): RuleAtom {
+  const head = body[path[0]!]!;
+  if (path.length === 1) return head;
+  if (head.tag !== "Sub") throw new Error("unreachable: path expected Sub");
+  return atPath(head.body, path.slice(1));
+}
+
+// Producer rule body: everything lexically before the weighted match, plus
+// the producer-emit at the weighted match's position. Anything after is
+// dropped — the producer's job is just to emit the do-agg row.
+function buildProducerBody(body: RuleAtom[], path: WMPath, emit: RuleAtom): RuleAtom[] {
+  const i = path[0]!;
+  if (path.length === 1) return [...body.slice(0, i), emit];
+  const sub = body[i]!;
+  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
+  const innerProducer = buildProducerBody(sub.body, path.slice(1), emit);
+  const newSub: RuleAtom = { ...sub, body: innerProducer };
+  return [...body.slice(0, i), newSub];
+}
+
+// Consumer rule body: same shape as the original, with the weighted-match
+// position replaced by [do-agg-match, agg-result-match]. Everything after
+// (within the same Sub level and at outer levels) is preserved.
+function buildConsumerBody(
+  body: RuleAtom[],
+  path: WMPath,
+  doAgg: RuleAtom,
+  aggResult: RuleAtom,
+): RuleAtom[] {
+  const i = path[0]!;
+  if (path.length === 1) {
+    return [...body.slice(0, i), doAgg, aggResult, ...body.slice(i + 1)];
+  }
+  const sub = body[i]!;
+  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
+  const innerConsumer = buildConsumerBody(sub.body, path.slice(1), doAgg, aggResult);
+  const newSub: RuleAtom = { ...sub, body: innerConsumer };
+  return [...body.slice(0, i), newSub, ...body.slice(i + 1)];
+}
+
+// Variables bound by the rule body at any position lexically *before* `path`,
+// including matches in surrounding sub-rule prefixes.
+function collectBoundVarsBeforePath(body: RuleAtom[], path: WMPath, out: Set<string>): void {
+  const i = path[0]!;
+  // Everything strictly before index i at this level contributes.
+  collectBoundVarsInBody(body.slice(0, i), out);
+  if (path.length === 1) return;
+  const sub = body[i]!;
+  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
+  collectBoundVarsBeforePath(sub.body, path.slice(1), out);
 }
 
 // Variables introduced anywhere in `body` (including nested sub-rules and
@@ -228,10 +290,3 @@ function collectBoundVarsInBody(body: RuleAtom[], out: Set<string>): void {
   }
 }
 
-function containsWeightedMatch(body: RuleAtom[]): boolean {
-  for (const a of body) {
-    if (a.tag === "Atom" && a.marker === "match" && a.weight !== undefined) return true;
-    if (a.tag === "Sub" && containsWeightedMatch(a.body)) return true;
-  }
-  return false;
-}

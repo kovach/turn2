@@ -39,6 +39,7 @@ interface DisplayModule {
 }
 
 const sourceEl = document.getElementById("source") as HTMLTextAreaElement;
+const sourceCursorLineEl = document.getElementById("source-cursor-line") as HTMLSpanElement;
 const displayEl = document.getElementById("display") as HTMLDivElement;
 const dbEl = document.getElementById("db") as HTMLDivElement;
 const infoEl = document.getElementById("info") as HTMLDivElement;
@@ -54,7 +55,7 @@ const tabBtnTimeline = document.getElementById("tab-timeline") as HTMLButtonElem
 const orientHEl = document.getElementById("timeline-orient-h") as HTMLButtonElement;
 const orientVEl = document.getElementById("timeline-orient-v") as HTMLButtonElement;
 
-const GAS = 50;
+const GAS = 100;
 const TUPLE_GAS = 3000;
 
 let currentDisplayName: string | null = null;
@@ -238,7 +239,7 @@ function renderDatabase(store: Store): void {
   const userKeys: string[] = [];
   const internalKeys: string[] = [];
   for (const k of groups.keys()) {
-    if (k.startsWith("_") || k === "choose" || k === "constrain" || k === "do-agg" || k === "agg-result") {
+    if (k.startsWith("_")) {
       internalKeys.push(k);
     } else {
       userKeys.push(k);
@@ -464,6 +465,22 @@ function scheduleRun(): void {
 sourceEl.addEventListener("input", () => {
   scheduleRun();
   schedulePut();
+  updateCursorLine();
+});
+
+function updateCursorLine(): void {
+  const pos = sourceEl.selectionStart;
+  const before = sourceEl.value.slice(0, pos);
+  const line = before.split("\n").length;
+  const col = pos - (before.lastIndexOf("\n") + 1) + 1;
+  sourceCursorLineEl.textContent = `L${line}:${col}`;
+}
+
+for (const ev of ["keyup", "click", "select", "focus"] as const) {
+  sourceEl.addEventListener(ev, updateCursorLine);
+}
+document.addEventListener("selectionchange", () => {
+  if (document.activeElement === sourceEl) updateCursorLine();
 });
 
 // --- Key handling ---
