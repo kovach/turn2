@@ -28,6 +28,7 @@ import {
   lessThan,
   type Store,
 } from "./store.js";
+import { getOrCreateHead } from "./stats.js";
 
 type Anchor = [Term, Term];
 
@@ -37,17 +38,30 @@ interface Ctx {
   trail: Trail;
   anchorStack: Anchor[];
   ruleName: string;
+  ruleIdx: number;
 }
 
-export function evaluateRule(rule: Rule, store: Store, schema: Map<string, string>): void {
+export function evaluateRule(
+  rule: Rule,
+  store: Store,
+  schema: Map<string, string>,
+  ruleIdx = -1,
+): void {
   const ctx: Ctx = {
     store,
     schema,
     trail: newTrail(),
     anchorStack: [[store.bot, store.top]],
     ruleName: rule.name,
+    ruleIdx,
   };
-  evalSeq(rule.body, 0, ctx, () => {});
+  const rs = ruleIdx >= 0 ? store.stats.rules[ruleIdx] : undefined;
+  if (rs !== undefined) rs.invocations++;
+  const tracking = store.stats.enabled && rs !== undefined;
+  const t0 = tracking ? performance.now() : 0;
+  const onFire = rs !== undefined ? () => { rs.firings++; } : () => {};
+  evalSeq(rule.body, 0, ctx, onFire);
+  if (tracking) rs!.wallMs += performance.now() - t0;
 }
 
 function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
@@ -113,9 +127,31 @@ function evalMatch(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => 
   const head = headSymOf(a.atom);
   if (head === null) return;
   const anchor = topAnchor(ctx);
+  const it = ctx.store.iteration;
+  const constraint = a.constraint ?? "any";
+  const rs = ctx.ruleIdx >= 0 ? ctx.store.stats.rules[ctx.ruleIdx] : undefined;
+  const hs = getOrCreateHead(ctx.store.stats, head);
+  hs.scanCount++;
   for (const idx of candidatesByHead(ctx.store, head)) {
+    if (rs !== undefined) rs.candScanned++;
+    const gen = ctx.store.gens[idx]!;
+    // Semi-naive bucket filter. `delta` is strict — exactly one round's
+    // insertions — so each new derivation is reached by exactly one
+    // variant per fixpoint iteration. `any` and `old` are loose: they
+    // include rows added in the current round, preserving v2's existing
+    // within-sweep cascade visibility (rule N+1 in a sweep can see what
+    // rule N just asserted). Without this looseness every cascade step
+    // costs an extra fixpoint round.
+    if (constraint === "delta") {
+      if (gen !== it - 1) continue;
+    } else if (constraint === "old") {
+      if (!(gen < it - 1)) continue;
+    }
+    // "any": no filter — everything in the store is fair game.
+    if (rs !== undefined) rs.candPassedGen++;
     const tup = ctx.store.tuples[idx]!;
     if (!intervalsOverlap(ctx.store, anchor[0], anchor[1], tup.l, tup.r)) continue;
+    if (rs !== undefined) rs.candPassedOverlap++;
     if (a.lLit !== undefined) {
       const lLit = intern(ctx.store, a.lLit);
       if (lLit !== tup.l) continue;
@@ -124,11 +160,13 @@ function evalMatch(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => 
       const rLit = intern(ctx.store, a.rLit);
       if (rLit !== tup.r) continue;
     }
+    if (rs !== undefined) rs.candPassedLiteral++;
     const mark = trailLength(ctx.trail);
     if (!unifyAtoms(a.atom, tup.atom, ctx.trail, ctx.store.hash)) {
       trailUnwind(ctx.trail, mark);
       continue;
     }
+    if (rs !== undefined) rs.candPassedUnify++;
     bindIdSlots(a, ctx, tup.l, tup.r);
     // Intersect anchor.
     const newL = maxMoment(ctx.store, anchor[0], tup.l);
@@ -174,7 +212,7 @@ function evalAssert(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () =>
     default: throw new Error("unreachable");
   }
 
-  addTuple(ctx.store, internedAtom, l, r, a.span);
+  addTuple(ctx.store, internedAtom, l, r, a.span, ctx.ruleIdx);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;
@@ -212,7 +250,7 @@ function evalAsk(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => vo
   const r = ctx.store.top;
   addOrder(ctx.store, anchor[0], l);
   addOrder(ctx.store, l, anchor[1]);
-  addTuple(ctx.store, internedAtom, l, r, a.span);
+  addTuple(ctx.store, internedAtom, l, r, a.span, ctx.ruleIdx);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;
@@ -239,7 +277,7 @@ function evalConstrain(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: ()
   const r = ctx.store.top;
   addOrder(ctx.store, anchor[0], l);
   addOrder(ctx.store, l, anchor[1]);
-  addTuple(ctx.store, internedAtom, l, r, a.span);
+  addTuple(ctx.store, internedAtom, l, r, a.span, ctx.ruleIdx);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;

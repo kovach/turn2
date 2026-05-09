@@ -21,7 +21,13 @@ const byId = new Map(p.nodes.map((n) => [n.id, n]));
 const parentOf = new Map();
 for (const n of p.nodes) for (const c of n.children ?? []) parentOf.set(c, n.id);
 
-const isTarget = (n) => n !== undefined && targets.has(n.callFrame?.functionName);
+const isTarget = (n) => {
+  if (n === undefined) return false;
+  const name = n.callFrame?.functionName;
+  if (targets.has(name)) return true;
+  if ((name === "" || name === undefined) && targets.has("(anonymous)")) return true;
+  return false;
+};
 
 // Nearest surviving ancestor for each target node.
 const redirectTo = new Map();

@@ -12,4 +12,4 @@ const p = parse(src);
 if ("message" in p) { console.error("parse error:", p); process.exit(1); }
 
 const r = runFixpoint(p, 20, 1000);
-console.log("status:", r.status.kind, "iters:", r.iterations, "tuples:", r.store.tuples.length);
+console.log("status:", r.status.kind, "iters:", r.iterations, "tuples:", r.store.tuples.length, "dupes:", r.store.tupleDupes);

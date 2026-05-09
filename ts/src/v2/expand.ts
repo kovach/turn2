@@ -14,15 +14,113 @@
 // consumer may itself contain a weighted match; recurse.
 
 import type { Atom, Term } from "../types.js";
-import type { Program, Rule, RuleAtom } from "./types.js";
+import type { MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 
 export function expand(program: Program): Program {
-  const rules: Rule[] = [];
+  const split: Rule[] = [];
   for (const rule of program.rules) {
-    rules.push(...splitRule(rule));
+    split.push(...splitRule(rule));
+  }
+  const rules: Rule[] = [];
+  for (const rule of split) {
+    rules.push(...generateDeltaVariants(rule));
   }
   for (const rule of rules) assignIds(rule);
   return { rules, schema: program.schema };
+}
+
+// Semi-naive delta variants. For a rule with N match atoms (including those
+// nested in Sub bodies), emit N copies; in variant j the j-th match (in
+// pre-order) is tagged "delta", earlier matches "old", later matches "any".
+// Rules with zero match atoms are returned as-is.
+//
+// Variants share the original rule `name` on purpose: `assignIds` derives
+// fresh-id chains from `name + lexPos`, so identical firings across
+// variants produce identical fresh-ids and `addTuple`'s dedup collapses
+// duplicate emissions. The MatchConstraint filter ensures that across one
+// inner-loop sweep each *new* derivation is reached by exactly one variant.
+export function generateDeltaVariants(rule: Rule): Rule[] {
+  const n = countMatches(rule.body);
+  if (n === 0) return [rule];
+  const out: Rule[] = [];
+  for (let j = 0; j < n; j++) {
+    const ctr = { i: 0 };
+    const body = tagBody(rule.body, j, ctr);
+    out.push({
+      ...rule,
+      body,
+      deltaHead: findDeltaHead(body),
+      deltaSafeSkip: !positiveBeforeDelta(body),
+    });
+  }
+  return out;
+}
+
+// True iff a positive-marker atom appears anywhere before the delta atom
+// in the body (descending into `Sub`s). Such an atom would emit tuples
+// that the short-circuit must not suppress.
+function positiveBeforeDelta(body: RuleAtom[]): boolean {
+  let sawPositive = false;
+  let foundDelta = false;
+  function walk(atoms: RuleAtom[]): void {
+    for (const a of atoms) {
+      if (foundDelta) return;
+      if (a.tag === "Sub") { walk(a.body); continue; }
+      if (a.tag === "Equal") continue;
+      if (a.marker === "match") {
+        if (a.constraint === "delta") { foundDelta = true; return; }
+        continue;
+      }
+      sawPositive = true;
+    }
+  }
+  walk(body);
+  return sawPositive;
+}
+
+// Returns the delta atom's head sym, `null` if its head is not a Symbol
+// (must run conservatively), or throws if the body has no delta atom (a
+// caller bug — generateDeltaVariants only calls this when matchCount > 0).
+function findDeltaHead(body: RuleAtom[]): string | null {
+  const found = findDeltaAtom(body);
+  if (found === undefined) throw new Error("internal: variant body lacks a delta atom");
+  const head = found.atom.terms[0];
+  return head !== undefined && head.tag === "Symbol" ? head.name : null;
+}
+
+function findDeltaAtom(body: RuleAtom[]): Extract<RuleAtom, { tag: "Atom" }> | undefined {
+  for (const a of body) {
+    if (a.tag === "Sub") {
+      const inner = findDeltaAtom(a.body);
+      if (inner !== undefined) return inner;
+      continue;
+    }
+    if (a.tag === "Atom" && a.marker === "match" && a.constraint === "delta") return a;
+  }
+  return undefined;
+}
+
+function countMatches(body: RuleAtom[]): number {
+  let n = 0;
+  for (const a of body) {
+    if (a.tag === "Sub") n += countMatches(a.body);
+    else if (a.tag === "Atom" && a.marker === "match") n++;
+  }
+  return n;
+}
+
+function tagBody(body: RuleAtom[], delta: number, ctr: { i: number }): RuleAtom[] {
+  return body.map((a) => {
+    if (a.tag === "Sub") {
+      return { ...a, body: tagBody(a.body, delta, ctr) };
+    }
+    if (a.tag === "Atom" && a.marker === "match") {
+      const i = ctr.i++;
+      const c: MatchConstraint = i < delta ? "old" : i === delta ? "delta" : "any";
+      return { ...a, constraint: c };
+    }
+    return a;
+  });
 }
 
 // Walk the rule body in pre-order, assigning each Atom a static `id` record:

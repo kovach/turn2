@@ -2,6 +2,13 @@
 // relation. All Term values pass through hashcons so identity comparison
 // is just integer equality on Ref ids.
 
+// Moment-order strategy. "old" preserves the lazy DFS + ltPos/ltNeg memo
+// path; eager bookkeeping is fully inert in this mode. "eager" maintains
+// the full forward closure `gt[a] = { b | a < b }` plus a thin back-edge
+// map `orderBwd` used only at insert time to enumerate ancestors.
+// `const` so V8 can dead-code-eliminate the unused branch.
+export const ORDER_STRATEGY: "old" | "eager" = "old";
+
 import type { Atom, Span, Term } from "../types.js";
 import type { Tuple } from "./types.js";
 import {
@@ -11,6 +18,7 @@ import {
   tokenOfId,
   type HashconsState,
 } from "../hashcons.js";
+import { createTracker, getOrCreateHead, type StatsTracker } from "./stats.js";
 
 export interface Store {
   hash: HashconsState;
@@ -39,12 +47,45 @@ export interface Store {
   // `addOrder` since a new edge can flip a previous `false` to `true`.
   ltPos: Map<number, Set<number>>;
   ltNeg: Map<number, Set<number>>;
+  // Eager-strategy state. Populated only when ORDER_STRATEGY === "eager".
+  // `gt[a]` is the full forward closure { b | a < b }; `orderBwd[b]` is
+  // the set of immediate predecessors of `b` (not closure), used to
+  // back-walk ancestors of the insertion point.
+  gt: Map<number, Set<number>>;
+  orderBwd: Map<number, Set<number>>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
   // Hard cap on inserted tuples. When exceeded, `addTuple` throws GasError;
   // `runFixpoint` catches it and surfaces a `gas` status. 0 disables the
   // check (initial value; runFixpoint sets a real budget).
   tupleGas: number;
+  // Semi-naive evaluation: monotone round counter, bumped by the fixpoint
+  // loop. Tuples carry the round they were inserted in (`gens`), so the
+  // match candidate filter can split candidates into old/delta/any buckets.
+  // Starts at 1 so that round-1 inserts get `gen === 1` and the inner-loop
+  // delta filter (`gen === iteration - 1`) becomes nontrivial only from
+  // round 2 onward — exactly the v1 contract.
+  iteration: number;
+  // Parallel to `tuples`: insertion-round of each tuple.
+  gens: number[];
+  // Diagnostic: number of `addTuple` calls rejected because the tuple was
+  // already in `tupleSet`. With strict semi-naive (gen-strict any/old)
+  // this would be 0; with our loose `any`, within-sweep cascades can
+  // produce a tuple via the "any" path in round K and again via the
+  // "delta" path in round K+1, so it's expected to be nonzero.
+  tupleDupes: number;
+  // Empty-delta short-circuit. `currHeads` accumulates head symbols of
+  // tuples inserted during the *current* round; `prevHeads` is the
+  // snapshot from the previous round. `innerLoop` swaps them when it
+  // bumps `iteration`. A variant whose delta atom's head is not in
+  // `prevHeads` can be skipped wholesale — there can be no delta-bucket
+  // candidate for it this round.
+  prevHeads: Set<string>;
+  currHeads: Set<string>;
+  // Diagnostic counters. Always present; counters are unconditional integer
+  // adds (cheap). Only `wallMs` and report formatting consult `enabled`.
+  // See plans/v2-stats-tracker.md.
+  stats: StatsTracker;
 }
 
 // Sentinel thrown by `addTuple` when `tupleGas` is exhausted. Caught by
@@ -70,8 +111,16 @@ export function createStore(): Store {
     edgeSet: new Set(),
     ltPos: new Map(),
     ltNeg: new Map(),
+    gt: new Map(),
+    orderBwd: new Map(),
     tupleSet: new Set(),
     tupleGas: 0,
+    iteration: 1,
+    gens: [],
+    tupleDupes: 0,
+    prevHeads: new Set(),
+    currHeads: new Set(),
+    stats: createTracker(false),
   };
 }
 
@@ -90,13 +139,27 @@ export function tokenOf(store: Store, term: Term): number {
 // Add a tuple. Returns true iff the tuple was new. Assumes endpoints are
 // already interned; the atom's `terms` may be a mix of Refs and atomic Terms
 // (Symbol/Variable/Wildcard) — we re-hashcons to obtain a stable id.
-export function addTuple(store: Store, atom: Atom, l: Term, r: Term, span?: Span): boolean {
+export function addTuple(
+  store: Store,
+  atom: Atom,
+  l: Term,
+  r: Term,
+  span?: Span,
+  sourceRuleIdx?: number,
+): boolean {
   const atomRef = hashconsTerm({ tag: "Atom", atom }, store.hash);
   const atomTok = tokenOfId(atomRef, store.hash);
   const lTok = tokenOf(store, l);
   const rTok = tokenOf(store, r);
   const key = `${atomTok},${lTok},${rTok}`;
-  if (store.tupleSet.has(key)) return false;
+  if (store.tupleSet.has(key)) {
+    store.tupleDupes++;
+    if (sourceRuleIdx !== undefined && sourceRuleIdx >= 0) {
+      const rs = store.stats.rules[sourceRuleIdx];
+      if (rs !== undefined) rs.tuplesDeduped++;
+    }
+    return false;
+  }
   if (store.tupleGas > 0 && store.tuples.length >= store.tupleGas) {
     throw new GasError();
   }
@@ -105,6 +168,7 @@ export function addTuple(store: Store, atom: Atom, l: Term, r: Term, span?: Span
   const idx = store.tuples.length;
   store.tuples.push(t);
   store.tupleSource.push(span);
+  store.gens.push(store.iteration);
   const head = atom.terms[0];
   if (head !== undefined && head.tag === "Symbol") {
     let bucket = store.byHead.get(head.name);
@@ -113,6 +177,14 @@ export function addTuple(store: Store, atom: Atom, l: Term, r: Term, span?: Span
       store.byHead.set(head.name, bucket);
     }
     bucket.push(idx);
+    store.currHeads.add(head.name);
+    const hs = getOrCreateHead(store.stats, head.name);
+    hs.bucketSize = bucket.length;
+    if (bucket.length > hs.peakBucketSize) hs.peakBucketSize = bucket.length;
+  }
+  if (sourceRuleIdx !== undefined && sourceRuleIdx >= 0) {
+    const rs = store.stats.rules[sourceRuleIdx];
+    if (rs !== undefined) rs.tuplesEmitted++;
   }
   return true;
 }
@@ -124,18 +196,64 @@ export function addOrder(store: Store, lt: Term, gt: Term): void {
   const gtTok = tokenOf(store, gt);
   if (ltTok === gtTok) return;
   if (ltTok === store.botTok || gtTok === store.topTok) return;
-  const key = `${ltTok},${gtTok}`;
-  if (store.edgeSet.has(key)) return;
-  store.edgeSet.add(key);
-  // A new edge can convert previously-false reachability into true; ltPos
-  // remains valid (monotone), but ltNeg must be discarded.
-  store.ltNeg.clear();
-  let succs = store.orderFwd.get(ltTok);
-  if (succs === undefined) {
-    succs = new Set();
-    store.orderFwd.set(ltTok, succs);
+  if (ORDER_STRATEGY === "old") {
+    const key = `${ltTok},${gtTok}`;
+    if (store.edgeSet.has(key)) return;
+    store.edgeSet.add(key);
+    // A new edge can convert previously-false reachability into true; ltPos
+    // remains valid (monotone), but ltNeg must be discarded.
+    store.ltNeg.clear();
+    let succs = store.orderFwd.get(ltTok);
+    if (succs === undefined) {
+      succs = new Set();
+      store.orderFwd.set(ltTok, succs);
+    }
+    succs.add(gtTok);
+    return;
   }
-  succs.add(gtTok);
+  // Eager: maintain `gt` as full forward closure.
+  // 1. Already implied → no-op.
+  const gtLt = store.gt.get(ltTok);
+  if (gtLt !== undefined && gtLt.has(gtTok)) return;
+  // 2. Reverse edge already implied → cycle.
+  const gtGt = store.gt.get(gtTok);
+  if (gtGt !== undefined && gtGt.has(ltTok)) {
+    throw new Error("v2: moment-order cycle");
+  }
+  // 3. Enumerate ancestors of ltTok (including ltTok itself) via back-DFS
+  //    over orderBwd. Each ancestor x gains the new descendants B = gt[gt] ∪ {gt}.
+  const ancestors = collectAncestors(store, ltTok);
+  const newDescendants: number[] = [gtTok];
+  if (gtGt !== undefined) for (const t of gtGt) newDescendants.push(t);
+  for (const x of ancestors) {
+    let row = store.gt.get(x);
+    if (row === undefined) { row = new Set(); store.gt.set(x, row); }
+    for (const d of newDescendants) row.add(d);
+  }
+  // 4. Record the immediate back-edge for future ancestor walks.
+  let preds = store.orderBwd.get(gtTok);
+  if (preds === undefined) { preds = new Set(); store.orderBwd.set(gtTok, preds); }
+  preds.add(ltTok);
+}
+
+// Back-DFS over `orderBwd` returning { node | node ≤ start } as token list.
+// Includes `start` itself. Eager strategy only.
+function collectAncestors(store: Store, start: number): number[] {
+  const out: number[] = [start];
+  const seen = new Set<number>([start]);
+  const stack = [start];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const preds = store.orderBwd.get(cur);
+    if (preds === undefined) continue;
+    for (const p of preds) {
+      if (seen.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+      stack.push(p);
+    }
+  }
+  return out;
 }
 
 // Strict less-than over the moment-order relation, with bot/top sentinels
@@ -152,33 +270,35 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
   if (bTok === store.botTok) return false;
   if (aTok === store.botTok) return true;
   if (bTok === store.topTok) return true;
+  if (ORDER_STRATEGY === "eager") {
+    return store.gt.get(aTok)?.has(bTok) ?? false;
+  }
   const pos = store.ltPos.get(aTok);
   if (pos !== undefined && pos.has(bTok)) return true;
   const neg = store.ltNeg.get(aTok);
   if (neg !== undefined && neg.has(bTok)) return false;
-  // BFS closure search.
+  // DFS closure search. Every node we reach from aTok satisfies aTok < node,
+  // so cache it as we go — even on early-return for the queried bTok the
+  // partial walk leaves useful positive facts behind for future queries.
+  let posCache = store.ltPos.get(aTok);
+  if (posCache === undefined) { posCache = new Set(); store.ltPos.set(aTok, posCache); }
   const stack = [aTok];
   const seen = new Set<number>([aTok]);
   while (stack.length > 0) {
     const cur = stack.pop()!;
     const succs = store.orderFwd.get(cur);
     if (succs === undefined) continue;
-    if (succs.has(bTok)) {
-      let cache = store.ltPos.get(aTok);
-      if (cache === undefined) { cache = new Set(); store.ltPos.set(aTok, cache); }
-      cache.add(bTok);
-      return true;
-    }
     for (const s of succs) {
-      if (!seen.has(s)) {
-        seen.add(s);
-        stack.push(s);
-      }
+      if (seen.has(s)) continue;
+      seen.add(s);
+      posCache.add(s);
+      if (s === bTok) return true;
+      stack.push(s);
     }
   }
-  let cache = store.ltNeg.get(aTok);
-  if (cache === undefined) { cache = new Set(); store.ltNeg.set(aTok, cache); }
-  cache.add(bTok);
+  let negCache = store.ltNeg.get(aTok);
+  if (negCache === undefined) { negCache = new Set(); store.ltNeg.set(aTok, negCache); }
+  negCache.add(bTok);
   return false;
 }
 

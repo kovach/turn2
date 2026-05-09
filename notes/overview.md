@@ -1,3 +1,52 @@
+# v2 explicit anchor manipulations in IR
+plan: plans/v2-explicit-anchor-ir.md
+
+- move anchor intersection / overlap / fresh-moment / addOrder out of
+  evaluator and into the program IR
+- new RuleAtom constructors: Match, Emit, Le, AssertLt, Max, Min
+- match no longer overlap-tests or intersects; assert no longer mints
+  moments — expand emits explicit `le / max / min / assert-lt` chains
+- e.g. `a, b` -> `[al,ar] a, [bl,br] b, le al br, le bl ar, max al bl xl, min ar br xr`
+- `+ b` -> `= bl <freshMom>, assert-lt al bl, assert-lt bl ar, emit [bl, top] b`
+
+# v2 consumer prefix elision (aggregate rules)
+plan: plans/v2-consumer-prefix-elision.md
+revisit after plans/v2-explicit-anchor-ir.md
+
+- aggregate consumer body re-runs the prefix join purely to put
+  prefix-bound vars back in scope; the producer's `aggId` already
+  encodes the same info (it's a freshIdTerm derived from the
+  prefix's chain)
+- replace consumer body with a single `_agg-result` match whose
+  `aggId` arg is a structured `Id` pattern: slot positions are
+  Wildcards, prefix user vars are Variables — unification binds
+  them from the matched aggId
+- drops the `_do-agg` match and all prefix matches; `_do-agg` ↔
+  `_agg-result` are 1:1 so no information is lost
+- top-level weighted matches first; sub-nested ones deferred
+
+# v2 stats tracker
+plan: plans/v2-stats-tracker.md
+
+- per-rule-variant counters: invocations, skipped, firings,
+  tuplesEmitted, tuplesDeduped, wallMs, candidate funnel
+  (scan → gen → overlap → literal → unify)
+- per-head: scanCount, bucketSize, peakBucketSize
+- per-iteration: tuplesAdded, dupes, rulesRan, rulesSkipped
+- opt-in flag on the store; off by default to keep the hot path clean
+
+# v2 prefix expansion
+plan: plans/v2-prefix-expansion.md
+waiting
+
+- port v1 expand step 3: emit one expanded rule per positive atom,
+  with earlier positives demoted to matches and the target as the
+  rule's only positive
+- removes within-sweep cascade dependence and producer/consumer
+  prefix-sharing; combined with strict semi-naive, makes
+  `addTuple` dedup ≈redundant
+- runs after `splitRule`, before `generateDeltaVariants`
+
 # v2 semi-naive evaluation
 plan: plans/v2-seminaive.md
 
@@ -9,6 +58,7 @@ plan: plans/v2-seminaive.md
 
 # nat syntax
 plan: plans/v2-nat-syntax.md
+waiting
 
 - parse numerals (0, 1, 2, ...) as unary encoded natural numbers (z, (s z), (s (s z)), ...)
 - also display them

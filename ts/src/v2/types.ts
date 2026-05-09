@@ -14,6 +14,15 @@ import type { Atom, Term, Span } from "../types.js";
 // `ask` and `constrain` desugar at eval time to compound `+`-style asserts
 // (a `choose` row carrying a fresh chooseId + wrapped atom; a `constrain`
 // row carrying the wrapped atom). They never appear in stored tuples.
+// Semi-naive evaluation tag on `match` atoms. Set by `expand`'s delta-variant
+// pass: each rule is cloned once per match position, and within one variant
+// exactly one match is `"delta"` (rows added in the previous round), positions
+// before it are `"old"` (rows from earlier rounds), positions after are
+// `"any"` (no gen filter). Strict `delta` ensures each new derivation is
+// reached by exactly one variant per round; loose `any`/`old` preserve v2's
+// within-sweep cascade visibility.
+export type MatchConstraint = "any" | "delta" | "old";
+
 export type Marker =
   | "match"      // -  default; matches tuples overlapping the anchor
   | "episode"    // ~  fresh (l', r') strictly inside anchor
@@ -60,6 +69,9 @@ export type RuleAtom =
       //          captures matched-tuple identity (via the l/r slot chain),
       //          not just user-variable bindings.
       id?: { l: Term; r: Term; chain: Term };
+      // Semi-naive bucket for `match` atoms. Defaults to `"any"` when absent
+      // (e.g. ad-hoc rule construction that bypasses `expand`).
+      constraint?: MatchConstraint;
       span: Span;
     }
   | {
@@ -82,6 +94,19 @@ export interface Rule {
   name: string;
   body: RuleAtom[];
   span: Span;
+  // Set by `generateDeltaVariants`: head symbol of the variant's `"delta"`
+  // match atom. Used by the inner loop to skip the entire variant when no
+  // tuple under that head was inserted in the previous round (empty-delta
+  // short-circuit). `null` means: head is not a Symbol (can't index — must
+  // run conservatively). `undefined` means: rule has no `"delta"` match
+  // (rules with zero matches; always run).
+  deltaHead?: string | null;
+  // True iff no positive (assert/episode/fact/anchor/ask/constrain) atom
+  // appears before the delta atom in the body. When false, the rule may
+  // emit tuples earlier in its body that the short-circuit would
+  // incorrectly suppress, so we must run it regardless of `prevHeads`.
+  // Once prefix expansion lands this is always true.
+  deltaSafeSkip?: boolean;
 }
 
 export interface SchemaDecl {
