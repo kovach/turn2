@@ -2,7 +2,7 @@
 // relation. All Term values pass through hashcons so identity comparison
 // is just integer equality on Ref ids.
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Span, Term } from "../types.js";
 import type { Tuple } from "./types.js";
 import {
   createHashcons,
@@ -15,6 +15,11 @@ import {
 export interface Store {
   hash: HashconsState;
   tuples: Tuple[];
+  // Parallel to `tuples`: span of the source RuleAtom that emitted each
+  // tuple. `undefined` for tuples whose origin has no span (e.g. test
+  // fixtures that call `addTuple` directly). Used by the editor for
+  // source ↔ output highlight linking.
+  tupleSource: (Span | undefined)[];
   // head-sym name -> tuple indices in `tuples` whose first term is that sym
   byHead: Map<string, number[]>;
   // Forward adjacency on the moment-order relation. Keyed and valued by
@@ -55,6 +60,7 @@ export function createStore(): Store {
   return {
     hash,
     tuples: [],
+    tupleSource: [],
     byHead: new Map(),
     orderFwd: new Map(),
     bot,
@@ -84,7 +90,7 @@ export function tokenOf(store: Store, term: Term): number {
 // Add a tuple. Returns true iff the tuple was new. Assumes endpoints are
 // already interned; the atom's `terms` may be a mix of Refs and atomic Terms
 // (Symbol/Variable/Wildcard) — we re-hashcons to obtain a stable id.
-export function addTuple(store: Store, atom: Atom, l: Term, r: Term): boolean {
+export function addTuple(store: Store, atom: Atom, l: Term, r: Term, span?: Span): boolean {
   const atomRef = hashconsTerm({ tag: "Atom", atom }, store.hash);
   const atomTok = tokenOfId(atomRef, store.hash);
   const lTok = tokenOf(store, l);
@@ -98,6 +104,7 @@ export function addTuple(store: Store, atom: Atom, l: Term, r: Term): boolean {
   const t: Tuple = { atom, l, r };
   const idx = store.tuples.length;
   store.tuples.push(t);
+  store.tupleSource.push(span);
   const head = atom.terms[0];
   if (head !== undefined && head.tag === "Symbol") {
     let bucket = store.byHead.get(head.name);

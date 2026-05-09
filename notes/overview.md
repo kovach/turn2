@@ -1,3 +1,23 @@
+# v2 semi-naive evaluation
+plan: plans/v2-seminaive.md
+
+- port the v1 three-bucket (any/delta/old) scheme to the v2 evaluator
+- gen-stamp tuples; emit one delta variant per match atom; filter
+  candidates in `evalMatch`'s candidate loop
+- correctness is already preserved by `addTuple` dedup; this is a
+  perf change to stop re-enumerating the full store every round
+
+# nat syntax
+plan: plans/v2-nat-syntax.md
+
+- parse numerals (0, 1, 2, ...) as unary encoded natural numbers (z, (s z), (s (s z)), ...)
+- also display them
+- make this a modular feature: it should be possible to define new objects in the future that define a specialized parser/pretty-printer for other term patterns
+  - that is, there should be an interface definition for what comprises a TermSugar; but this doesn't need to be handled dynamically; we can have all the actual instances written down in one place in the compiler to avoid boilerplate
+
+# v2 tuple/source links
+plan: plans/v2-source-output-linking.md
+
 # v2 design notes
 see notes/v2-design.md (living document for cross-file v2 invariants)
 

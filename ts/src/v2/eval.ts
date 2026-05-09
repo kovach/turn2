@@ -174,7 +174,7 @@ function evalAssert(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () =>
     default: throw new Error("unreachable");
   }
 
-  addTuple(ctx.store, internedAtom, l, r);
+  addTuple(ctx.store, internedAtom, l, r, a.span);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;
@@ -212,7 +212,7 @@ function evalAsk(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: () => vo
   const r = ctx.store.top;
   addOrder(ctx.store, anchor[0], l);
   addOrder(ctx.store, l, anchor[1]);
-  addTuple(ctx.store, internedAtom, l, r);
+  addTuple(ctx.store, internedAtom, l, r, a.span);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;
@@ -239,7 +239,7 @@ function evalConstrain(a: Extract<RuleAtom, { tag: "Atom" }>, ctx: Ctx, next: ()
   const r = ctx.store.top;
   addOrder(ctx.store, anchor[0], l);
   addOrder(ctx.store, l, anchor[1]);
-  addTuple(ctx.store, internedAtom, l, r);
+  addTuple(ctx.store, internedAtom, l, r, a.span);
   bindIdSlots(a, ctx, l, r);
 
   const stkIdx = ctx.anchorStack.length - 1;

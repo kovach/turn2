@@ -52,6 +52,21 @@
     .timeline-sidebar-heading { color: #888; font-size: 11px; padding: 8px 12px 4px; letter-spacing: 1px; text-transform: uppercase; }
     .timeline-sidebar-row { color: #c8c8c8; font-family: monospace; font-size: 12px; padding: 2px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .timeline-sidebar-row:hover { background: #2a2a2a; }
+    /* Source ↔ output linking */
+    .editors .pane { position: relative; }
+    #db .row { display: inline-block; line-height: inherit; }
+    #db .row[data-source-line] { cursor: pointer; }
+    #db .row.source-highlight { background-color: rgba(59, 130, 246, 0.30); }
+    #db .row.hover-highlight  { background-color: rgba(168, 85, 247, 0.30); }
+    .source-line-highlight {
+      position: absolute;
+      left: 0;
+      right: 0;
+      background-color: rgba(59, 130, 246, 0.25);
+      pointer-events: none;
+      z-index: 1;
+      display: none;
+    }
   </style>
 </head>
 <body>

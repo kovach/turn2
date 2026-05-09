@@ -10,7 +10,7 @@ import { refTagOf } from "./hashcons.js";
 import { renderTimeline } from "./v2/timeline.js";
 import type { Atom, Term } from "./types.js";
 import type { Store } from "./v2/store.js";
-import type { ComponentOptions } from "./v2/types.js";
+import type { ComponentOptions, Rule, RuleAtom } from "./v2/types.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
 // `activeTerms[i]` should bind to `optionTuple[i]`. `handleClick` reifies
@@ -260,7 +260,7 @@ function renderDatabase(store: Store): void {
     lines.push(`<span class="group-heading">${escapeHtml(key)} (${idxs.length})</span>`);
     // Render each tuple. Args after the head are pretty-printed; the first
     // term is highlighted as a predicate.
-    const rendered: { atom: string; interval: string }[] = [];
+    const rendered: { atom: string; interval: string; line: number | undefined }[] = [];
     let maxAtomLen = 0;
     for (const i of idxs) {
       const t = store.tuples[i]!;
@@ -274,13 +274,14 @@ function renderDatabase(store: Store): void {
       // Strip HTML for length calculation.
       const plain = atomStr.replace(/<[^>]+>/g, "");
       maxAtomLen = Math.max(maxAtomLen, plain.length);
-      rendered.push({ atom: atomStr, interval: intervalStr });
+      rendered.push({ atom: atomStr, interval: intervalStr, line: store.tupleSource[i]?.line });
     }
     const pad = Math.min(maxAtomLen, 48);
     for (const r of rendered) {
       const plainLen = r.atom.replace(/<[^>]+>/g, "").length;
       const gap = " ".repeat(Math.max(2, pad - plainLen + 2));
-      lines.push(`  ${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span>`);
+      const attr = r.line !== undefined ? ` data-source-line="${r.line}"` : "";
+      lines.push(`  <span class="row"${attr}>${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span></span>`);
     }
   }
   dbEl.innerHTML = lines.join("\n");
@@ -374,8 +375,11 @@ async function run(): Promise<void> {
     setStatus(`parse error line ${parsed.line}: ${parsed.message}`, true);
     displayEl.innerHTML = "";
     setInfo("");
+    positiveLines = new Set();
     return;
   }
+
+  positiveLines = collectPositiveLines(parsed.rules);
 
   const result = runFixpoint(parsed, GAS, TUPLE_GAS);
   const { store, status, iterations } = result;
@@ -383,6 +387,7 @@ async function run(): Promise<void> {
 
   renderDatabase(store);
   renderTimelineTab(store);
+  highlightDbFromSource();
 
   // Status line.
   switch (status.kind) {
@@ -474,6 +479,115 @@ function updateCursorLine(): void {
   const line = before.split("\n").length;
   const col = pos - (before.lastIndexOf("\n") + 1) + 1;
   sourceCursorLineEl.textContent = `L${line}:${col}`;
+  currentLine = line;
+  highlightDbFromSource();
+}
+
+// --- Source ↔ output linking ---
+//
+// Forward: when the textarea caret enters a line that has a positive (assert/
+// ask/constrain) atom, every db row emitted from that atom gets a highlight.
+// Reverse: hovering a db row highlights its source line (via overlay) and any
+// sibling rows from the same line. Clicking a db row focuses the textarea
+// with the caret at the end of that line.
+let currentLine: number | null = null;
+// Lines that contain at least one positive atom; rebuilt on every `run()`.
+let positiveLines: Set<number> = new Set();
+
+const sourceLineHighlightEl = document.createElement("div");
+sourceLineHighlightEl.className = "source-line-highlight";
+sourceEl.parentElement!.insertBefore(sourceLineHighlightEl, sourceEl);
+
+function getLineMetrics(): { lineHeight: number; paddingTop: number } {
+  const style = getComputedStyle(sourceEl);
+  return {
+    lineHeight: parseFloat(style.lineHeight),
+    paddingTop: parseFloat(style.paddingTop),
+  };
+}
+
+function highlightSourceLine(line: number): void {
+  const { lineHeight, paddingTop } = getLineMetrics();
+  const top = sourceEl.offsetTop + paddingTop + (line - 1) * lineHeight - sourceEl.scrollTop;
+  sourceLineHighlightEl.style.display = "block";
+  sourceLineHighlightEl.style.top = `${top}px`;
+  sourceLineHighlightEl.style.height = `${lineHeight}px`;
+}
+
+function clearSourceHighlight(): void {
+  sourceLineHighlightEl.style.display = "none";
+}
+
+// Walk every Atom in the rules; record the source line of any whose marker
+// emits a tuple (asserts: `~`/`+`/`^`, plus `?`/`!` which desugar to assert
+// rows at eval time). Pure matches (`-`) don't qualify.
+function collectPositiveLines(rules: Rule[]): Set<number> {
+  const out = new Set<number>();
+  function walk(body: RuleAtom[]): void {
+    for (const a of body) {
+      if (a.tag === "Sub") { walk(a.body); continue; }
+      if (a.tag !== "Atom") continue;
+      if (a.marker === "match") continue;
+      out.add(a.span.line);
+    }
+  }
+  for (const r of rules) walk(r.body);
+  return out;
+}
+
+function highlightDbFromSource(): void {
+  dbEl.querySelectorAll(".source-highlight").forEach((el) => el.classList.remove("source-highlight"));
+  if (currentLine === null || !positiveLines.has(currentLine)) return;
+  const matches = dbEl.querySelectorAll(`[data-source-line="${currentLine}"]`);
+  matches.forEach((el) => el.classList.add("source-highlight"));
+  const last = matches[matches.length - 1];
+  if (last) last.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+dbEl.addEventListener("mouseover", (e) => {
+  const target = (e.target as Element).closest("[data-source-line]");
+  if (!target) return;
+  const line = +target.getAttribute("data-source-line")!;
+  highlightSourceLine(line);
+  dbEl.querySelectorAll(`[data-source-line="${line}"]`).forEach((el) =>
+    el.classList.add("hover-highlight"),
+  );
+});
+
+dbEl.addEventListener("mouseout", (e) => {
+  const target = (e.target as Element).closest("[data-source-line]");
+  if (!target) return;
+  clearSourceHighlight();
+  dbEl.querySelectorAll(".hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
+});
+
+sourceEl.addEventListener("scroll", () => {
+  if (sourceLineHighlightEl.style.display !== "none") clearSourceHighlight();
+});
+
+dbEl.addEventListener("click", (e) => {
+  const target = (e.target as Element).closest("[data-source-line]");
+  if (!target) return;
+  const line = +target.getAttribute("data-source-line")!;
+  focusSourceLine(line);
+});
+
+function focusSourceLine(line: number): void {
+  const value = sourceEl.value;
+  const lines = value.split("\n");
+  const li = Math.min(Math.max(line, 1), lines.length) - 1;
+  let lineStart = 0;
+  for (let i = 0; i < li; i++) lineStart += lines[i]!.length + 1;
+  const lineEnd = lineStart + lines[li]!.length;
+  sourceEl.focus();
+  sourceEl.setSelectionRange(lineEnd, lineEnd);
+  // Center the line in the viewport, then re-show the overlay after the
+  // scroll listener clears it.
+  const { lineHeight, paddingTop } = getLineMetrics();
+  const lineTop = paddingTop + li * lineHeight;
+  sourceEl.scrollTop = lineTop - sourceEl.clientHeight / 2 + lineHeight / 2;
+  requestAnimationFrame(() => highlightSourceLine(line));
+  updateCursorLine();
 }
 
 for (const ev of ["keyup", "click", "select", "focus"] as const) {
@@ -487,8 +601,7 @@ document.addEventListener("selectionchange", () => {
 //
 // Tab / Shift-Tab indent or de-dent the current line (or selected lines) by
 // two spaces. Enter inserts a newline plus the current line's leading
-// whitespace; if the current line starts with `+ ` (after indent), the new
-// line also gets `+ ` so successive asserts auto-prefix.
+// whitespace.
 //
 // All edits go through `document.execCommand("insertText", …)` so the
 // existing input listener fires (debounced run + PUT) and the textarea's
@@ -587,11 +700,7 @@ sourceEl.addEventListener("keydown", (e) => {
     const lineToCursor = value.slice(start, pos);
     const indentMatch = lineToCursor.match(/^[ \t]*/);
     const indent = indentMatch ? indentMatch[0] : "";
-    // If the current line (up to cursor) is `<indent>+ <anything?>`, the
-    // new line auto-prefixes with `+ `.
-    const trimmed = lineToCursor.slice(indent.length);
-    const needsPlus = trimmed.startsWith("+ ") || trimmed === "+";
-    const inserted = "\n" + indent + (needsPlus ? "+ " : "");
+    const inserted = "\n" + indent;
     sourceEl.focus();
     document.execCommand("insertText", false, inserted);
     return;

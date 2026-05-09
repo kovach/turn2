@@ -296,7 +296,7 @@ function emitAggResultRow(
   const internedInner = hashconsTerm(inner, store.hash);
   const sym: Term = { tag: "Symbol", name: "_agg-result" };
   const atom: Atom = { terms: [sym, blocked.aggId, internedInner] };
-  const inserted = addTuple(store, atom, blocked.l, blocked.r);
+  const inserted = addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex]);
   if (inserted) {
     addOrder(store, blocked.l, blocked.r);
   }
