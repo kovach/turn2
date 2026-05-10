@@ -12,7 +12,9 @@ function ok(input: string) {
 }
 
 function renderAtom(store: Store, atom: Atom): string {
-  return atom.terms.map((t) => renderTerm(store, t)).join(" ");
+  // Drop the trailing universal id slot (every emitted tuple carries one).
+  const ts = atom.terms.length > 0 ? atom.terms.slice(0, -1) : atom.terms;
+  return ts.map((t) => renderTerm(store, t)).join(" ");
 }
 
 function renderTerm(store: Store, term: Term): string {

@@ -47,7 +47,9 @@ export function create(api) {
     for (const idx of cellRows) {
       const t = store.tuples[idx];
       const ts = t.atom.terms;
-      if (ts.length !== 3) continue;
+      // Stored tuples carry a trailing universal id slot; user terms occupy
+      // the leading positions. `cell R C` → 4 terms (head, R, C, id).
+      if (ts.length !== 4) continue;
       const r = peanoToInt(ts[1], store);
       const c = peanoToInt(ts[2], store);
       if (r === null || c === null) continue;
@@ -62,7 +64,8 @@ export function create(api) {
     for (const idx of filledRows) {
       const t = store.tuples[idx];
       const ts = t.atom.terms;
-      if (ts.length !== 3) continue;
+      // `filled Cell P` → 4 stored terms (head, Cell, P, id).
+      if (ts.length !== 4) continue;
       const cellTerm = ts[1];
       const inner = termsOf(cellTerm, store);
       if (!inner || inner.length !== 3) continue;

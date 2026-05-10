@@ -12,35 +12,36 @@ import type { Atom, Span, Term } from "../types.js";
 import type { MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 
 export function expand(program: Program): Program {
+  const decomposed = program.rules.map(decomposeRule);
   const split: Rule[] = [];
-  for (const rule of program.rules) {
-    split.push(...splitRule(rule));
-  }
+  for (const rule of decomposed) split.push(...splitRule(rule));
+  // Drop trailing slices with no observable effect (no Emit and no AssertLt).
+  // After universal splitting, every rule but the trailing tail of an
+  // emit-chain ends in an Emit; the trailing tail is pure guards/matches.
+  const kept = split.filter((r) =>
+    r.body.some((a) => a.tag === "Emit" || a.tag === "AssertLt"),
+  );
   const variants: Rule[] = [];
-  for (const rule of split) {
-    variants.push(...generateDeltaVariants(rule));
-  }
-  const rules: Rule[] = variants.map(decomposeRule);
-  return { rules, schema: program.schema };
+  for (const rule of kept) variants.push(...generateDeltaVariants(rule));
+  return { rules: variants, schema: program.schema };
 }
 
 // ----- Semi-naive delta variants -----
-
-// For a rule with N pre-expand match atoms (including those nested in Sub
-// bodies), emit N copies; in variant j the j-th match (in pre-order) is
-// tagged "delta", earlier matches "old", later matches "any". Rules with
-// zero match atoms are returned as-is.
+//
+// For a rule with N Match atoms in body order, emit N copies; in variant
+// j the j-th Match is tagged "delta", earlier Matches "old", later
+// Matches "any". Rules with zero Matches are returned as-is.
 //
 // Variants share the original rule `name` so identical firings across
 // variants produce identical fresh-ids and `addTuple`'s dedup collapses
 // duplicate emissions.
 export function generateDeltaVariants(rule: Rule): Rule[] {
-  const n = countMatches(rule.body);
+  let n = 0;
+  for (const a of rule.body) if (a.tag === "Match") n++;
   if (n === 0) return [rule];
   const out: Rule[] = [];
   for (let j = 0; j < n; j++) {
-    const ctr = { i: 0 };
-    const body = tagBody(rule.body, j, ctr);
+    const body = tagBody(rule.body, j);
     out.push({
       ...rule,
       body,
@@ -51,215 +52,57 @@ export function generateDeltaVariants(rule: Rule): Rule[] {
   return out;
 }
 
-function positiveBeforeDelta(body: RuleAtom[]): boolean {
-  let sawPositive = false;
-  let foundDelta = false;
-  function walk(atoms: RuleAtom[]): void {
-    for (const a of atoms) {
-      if (foundDelta) return;
-      if (a.tag === "Sub") { walk(a.body); continue; }
-      if (a.tag === "Equal") continue;
-      if (a.tag !== "Atom") continue;
-      if (a.marker === "match") {
-        if ((a as { constraint?: MatchConstraint }).constraint === "delta") { foundDelta = true; return; }
-        continue;
-      }
-      sawPositive = true;
-    }
-  }
-  walk(body);
-  return sawPositive;
-}
-
-function findDeltaHead(body: RuleAtom[]): string | null {
-  const found = findDeltaAtom(body);
-  if (found === undefined) throw new Error("internal: variant body lacks a delta atom");
-  const head = found.atom.terms[0];
-  return head !== undefined && head.tag === "Symbol" ? head.name : null;
-}
-
-function findDeltaAtom(body: RuleAtom[]): Extract<RuleAtom, { tag: "Atom" }> | undefined {
-  for (const a of body) {
-    if (a.tag === "Sub") {
-      const inner = findDeltaAtom(a.body);
-      if (inner !== undefined) return inner;
-      continue;
-    }
-    if (a.tag === "Atom" && a.marker === "match"
-        && (a as { constraint?: MatchConstraint }).constraint === "delta") return a;
-  }
-  return undefined;
-}
-
-function countMatches(body: RuleAtom[]): number {
-  let n = 0;
-  for (const a of body) {
-    if (a.tag === "Sub") n += countMatches(a.body);
-    else if (a.tag === "Atom" && a.marker === "match") n++;
-  }
-  return n;
-}
-
-function tagBody(body: RuleAtom[], delta: number, ctr: { i: number }): RuleAtom[] {
+function tagBody(body: RuleAtom[], delta: number): RuleAtom[] {
+  let i = 0;
   return body.map((a) => {
-    if (a.tag === "Sub") {
-      return { ...a, body: tagBody(a.body, delta, ctr) };
-    }
-    if (a.tag === "Atom" && a.marker === "match") {
-      const i = ctr.i++;
-      const c: MatchConstraint = i < delta ? "old" : i === delta ? "delta" : "any";
-      return { ...a, constraint: c } as RuleAtom;
-    }
-    return a;
+    if (a.tag !== "Match") return a;
+    const idx = i++;
+    const c: MatchConstraint = idx < delta ? "old" : idx === delta ? "delta" : "any";
+    return { ...a, constraint: c };
   });
 }
 
-// ----- Rule splitting at weighted matches (unchanged from prior) -----
+function findDeltaHead(body: RuleAtom[]): string | null {
+  for (const a of body) {
+    if (a.tag === "Match" && a.constraint === "delta") {
+      const head = a.atom.terms[0];
+      return head !== undefined && head.tag === "Symbol" ? head.name : null;
+    }
+  }
+  throw new Error("internal: variant body lacks a delta Match");
+}
+
+// True iff some Emit appears before the delta Match. Le/AssertLt/Max/Min/
+// Equal are guards/scaffolding and don't count as "positive."
+function positiveBeforeDelta(body: RuleAtom[]): boolean {
+  for (const a of body) {
+    if (a.tag === "Match" && a.constraint === "delta") return false;
+    if (a.tag === "Emit") return true;
+  }
+  return false;
+}
+
+// ----- Rule splitting (universal slice on every Emit) -----
+//
+// Decompose lowers every Emit to a paired (Emit, Match) where the Match
+// shares the same atom shape (including the trailing universal id slot).
+// splitRule slices the body at every Emit: producer = body up to and
+// including the Emit; consumer = everything after (starting with the
+// paired Match). Recursion handles multiple Emits per rule.
+//
+// Aggregate is the one exception to the paired-Match construction: its
+// `_do-agg` Emit gets the trailing id slot for store-schema uniformity but
+// the existing `_agg-result` Match takes the role of the chain-recovery
+// Match. splitRule still slices on `_do-agg` since that's just an Emit.
 
 function splitRule(rule: Rule): Rule[] {
-  const path = findFirstWeightedMatch(rule.body);
-  if (path === null) return [rule];
-  const wm = atPath(rule.body, path);
-  if (wm.tag !== "Atom") throw new Error("unreachable");
-  if (wm.weight === undefined) throw new Error("unreachable");
-
-  const aggVarName = `_aggId_${path.join("_")}`;
-  const aggIdVar: Term = { tag: "Variable", name: aggVarName };
-
-  const boundByPrefix = new Set<string>();
-  collectBoundVarsBeforePath(rule.body, path, boundByPrefix);
-  const freeSym: Term = { tag: "Symbol", name: "_free" };
-  const freeify = (t: Term): Term => {
-    if (t.tag === "Variable") {
-      if (t.name !== "_" && boundByPrefix.has(t.name)) return t;
-      return freeSym;
-    }
-    if (t.tag === "Wildcard") return freeSym;
-    if (t.tag === "Atom" || t.tag === "Id") {
-      return { tag: t.tag, atom: { terms: t.atom.terms.map(freeify) } };
-    }
-    return t;
-  };
-  const wrappedFreeTerms: Term[] = [...wm.atom.terms.map(freeify), freeSym];
-  const wrappedFreeAtom: Term = { tag: "Atom", atom: { terms: wrappedFreeTerms } };
-  const originalPatternAtom: Term = {
-    tag: "Atom",
-    atom: { terms: [...wm.atom.terms, wm.weight] },
-  };
-
-  const symDoAgg: Term = { tag: "Symbol", name: "_do-agg" };
-  const symAggResult: Term = { tag: "Symbol", name: "_agg-result" };
-
-  const producerEmit: RuleAtom = {
-    tag: "Atom",
-    marker: "anchor",
-    atom: { terms: [symDoAgg, aggIdVar, wrappedFreeAtom] },
-    span: wm.span,
-  };
-
-  const consumerDoAgg: RuleAtom = {
-    tag: "Atom",
-    marker: "match",
-    atom: { terms: [symDoAgg, aggIdVar, wrappedFreeAtom] },
-    span: wm.span,
-  };
-
-  const consumerAggResult: RuleAtom = {
-    tag: "Atom",
-    marker: "match",
-    atom: { terms: [symAggResult, aggIdVar, originalPatternAtom] },
-    span: wm.span,
-  };
-
-  const producerBody = buildProducerBody(rule.body, path, producerEmit);
-  const consumerBody = buildConsumerBody(rule.body, path, consumerDoAgg, consumerAggResult);
-
-  const producerRule: Rule = {
-    name: rule.name,
-    body: producerBody,
-    span: rule.span,
-  };
-  const consumerRule: Rule = {
-    name: rule.name,
-    body: consumerBody,
-    span: rule.span,
-  };
-
-  return [producerRule, ...splitRule(consumerRule)];
+  const eIdx = rule.body.findIndex((a) => a.tag === "Emit");
+  if (eIdx < 0) return [rule];
+  const producer: Rule = { ...rule, body: rule.body.slice(0, eIdx + 1) };
+  const consumer: Rule = { ...rule, body: rule.body.slice(eIdx + 1) };
+  return [producer, ...splitRule(consumer)];
 }
 
-type WMPath = number[];
-
-function findFirstWeightedMatch(body: RuleAtom[]): WMPath | null {
-  for (let i = 0; i < body.length; i++) {
-    const a = body[i]!;
-    if (a.tag === "Atom" && a.marker === "match" && a.weight !== undefined) return [i];
-    if (a.tag === "Sub") {
-      const inner = findFirstWeightedMatch(a.body);
-      if (inner !== null) return [i, ...inner];
-    }
-  }
-  return null;
-}
-
-function atPath(body: RuleAtom[], path: WMPath): RuleAtom {
-  const head = body[path[0]!]!;
-  if (path.length === 1) return head;
-  if (head.tag !== "Sub") throw new Error("unreachable: path expected Sub");
-  return atPath(head.body, path.slice(1));
-}
-
-function buildProducerBody(body: RuleAtom[], path: WMPath, emit: RuleAtom): RuleAtom[] {
-  const i = path[0]!;
-  if (path.length === 1) return [...body.slice(0, i), emit];
-  const sub = body[i]!;
-  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
-  const innerProducer = buildProducerBody(sub.body, path.slice(1), emit);
-  const newSub: RuleAtom = { ...sub, body: innerProducer };
-  return [...body.slice(0, i), newSub];
-}
-
-function buildConsumerBody(
-  body: RuleAtom[],
-  path: WMPath,
-  doAgg: RuleAtom,
-  aggResult: RuleAtom,
-): RuleAtom[] {
-  const i = path[0]!;
-  if (path.length === 1) {
-    return [...body.slice(0, i), doAgg, aggResult, ...body.slice(i + 1)];
-  }
-  const sub = body[i]!;
-  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
-  const innerConsumer = buildConsumerBody(sub.body, path.slice(1), doAgg, aggResult);
-  const newSub: RuleAtom = { ...sub, body: innerConsumer };
-  return [...body.slice(0, i), newSub, ...body.slice(i + 1)];
-}
-
-function collectBoundVarsBeforePath(body: RuleAtom[], path: WMPath, out: Set<string>): void {
-  const i = path[0]!;
-  collectBoundVarsInBody(body.slice(0, i), out);
-  if (path.length === 1) return;
-  const sub = body[i]!;
-  if (sub.tag !== "Sub") throw new Error("unreachable: path expected Sub");
-  collectBoundVarsBeforePath(sub.body, path.slice(1), out);
-}
-
-function collectBoundVarsInBody(body: RuleAtom[], out: Set<string>): void {
-  function visitTerm(t: Term): void {
-    if (t.tag === "Variable") { if (t.name !== "_") out.add(t.name); return; }
-    if (t.tag === "Atom" || t.tag === "Id") for (const x of t.atom.terms) visitTerm(x);
-  }
-  for (const a of body) {
-    if (a.tag === "Sub") { collectBoundVarsInBody(a.body, out); continue; }
-    if (a.tag === "Equal") { visitTerm(a.lhs); visitTerm(a.rhs); continue; }
-    if (a.tag !== "Atom") continue;
-    for (const t of a.atom.terms) visitTerm(t);
-    if (a.weight !== undefined) visitTerm(a.weight);
-    if (a.lLit !== undefined) visitTerm(a.lLit);
-    if (a.rLit !== undefined) visitTerm(a.rLit);
-  }
-}
 
 // ----- Anchor decomposition pass -----
 //
@@ -291,6 +134,9 @@ const SYM_MOM: Term = { tag: "Symbol", name: "*mom" };
 const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
+const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
+const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
+const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
@@ -309,7 +155,14 @@ function decomposeRule(rule: Rule): Rule {
 
 function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
   const k = state.anchorCounter++;
-  return { tag: "Variable", name: `_${kind}_${k}` };
+  const name = `_${kind}_${k}`;
+  const v: Term = { tag: "Variable", name };
+  // Push onto chain so atoms in a downstream consumer split-rule
+  // (e.g. Sub-closing `Max XL_pre-sub …`) can recover this anchor SSA
+  // from the matched row's trailing idTpl via structural unification.
+  state.seen.add(name);
+  state.chain.push(v);
+  return v;
 }
 
 // Snapshot of `[head, ruleName, lexPos, ...state.chain, trailing?]` wrapped
@@ -428,6 +281,10 @@ function decomposeBody(
         const next = decomposeMatch(a, state, XL, XR);
         XL = next.XL;
         XR = next.XR;
+      } else if (a.marker === "aggregate") {
+        const next = decomposeAggregate(a, state, XL, XR);
+        XL = next.XL;
+        XR = next.XR;
       } else {
         const next = decomposeEmit(a, state, XL, XR);
         XL = next.XL;
@@ -458,11 +315,15 @@ function decomposeMatch(
   state.seen.add(rName);
   state.chain.push(rVar);
 
+  // Append a trailing Wildcard so the Match unifies against stored tuples
+  // that carry the universal id slot (every Emit appends one).
+  const userMatchAtom: Atom = { terms: [...a.atom.terms, { tag: "Wildcard" }] };
+
   // Emit the Match itself.
   const constraint = (a as { constraint?: MatchConstraint }).constraint;
   const matchAtom: RuleAtom = constraint === undefined
-    ? { tag: "Match", atom: a.atom, l: lVar, r: rVar, span: a.span }
-    : { tag: "Match", atom: a.atom, l: lVar, r: rVar, constraint, span: a.span };
+    ? { tag: "Match", atom: userMatchAtom, l: lVar, r: rVar, span: a.span }
+    : { tag: "Match", atom: userMatchAtom, l: lVar, r: rVar, constraint, span: a.span };
   state.out.push(matchAtom);
 
   // lLit/rLit: constrain endpoints to the literal.
@@ -487,6 +348,108 @@ function decomposeMatch(
   for (const t of a.atom.terms) collectVarsTerm(t, state);
 
   return { XL: XLnext, XR: XRnext };
+}
+
+// Aggregate: lowers `pat -> weight` into a paired producer `Emit (_do-agg
+// wrappedFreePattern idTpl) at (XL, XR)` and consumer `Match (_agg-result
+// originalPatternWithWeight idTpl) at (_l_K, _r_K)`. Both sides inline the
+// *same* `freshIdTemplate(state, K, "_emitId")` term in the universal
+// trailing id slot — substituting it in either context produces the same
+// ground value, so closeDoAgg's copied id matches the consumer template
+// under structural unification, binding chain Variables in the consumer's
+// trail.
+//
+// No Le/Max/Min scaffolding around the consumer Match: by the closeDoAgg
+// invariant the matched `_agg-result.l/r == _do-agg.l/r == (XL, XR)`, so
+// those atoms would be no-ops. The new running anchor for the suffix is
+// just `(_l_K, _r_K)`.
+//
+// `splitRule` slices on every Emit; the producer `_do-agg` Emit is just
+// one of them.
+function decomposeAggregate(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  if (a.weight === undefined) {
+    throw new Error("internal: aggregate atom without weight");
+  }
+  const k = state.lexPos;
+
+  // Snapshot the prefix's seen-set for the freeify decision below: a
+  // Variable mentioned in the user pattern is "bound by prefix" iff it's
+  // in this snapshot.
+  const prefixSeen = new Set(state.seen);
+
+  // Single inline idTpl, shared by producer Emit and consumer Match. Sits
+  // in the universal trailing id slot of both rows; serves as the
+  // _do-agg ↔ _agg-result correlation key for closeDoAgg AND as the
+  // chain-recovery anchor for the consumer Match's structural unification.
+  const idTpl = freshIdTemplate(state, k, "_emitId");
+
+  // Producer: Emit (_do-agg wrappedFreePattern idTpl) at (XL, XR).
+  // Variables not bound by the prefix and Wildcards become `_free`;
+  // closeDoAgg matches stored candidates against this pattern and
+  // substitutes the aggregated value into the trailing `_free` slot.
+  const freeify = (t: Term): Term => {
+    if (t.tag === "Variable") {
+      if (t.name !== "_" && prefixSeen.has(t.name)) return t;
+      return SYM_FREE;
+    }
+    if (t.tag === "Wildcard") return SYM_FREE;
+    if (t.tag === "Atom" || t.tag === "Id") {
+      return { tag: t.tag, atom: { terms: t.atom.terms.map(freeify) } };
+    }
+    return t;
+  };
+  const wrappedFreeAtom: Term = {
+    tag: "Atom",
+    atom: { terms: [...a.atom.terms.map(freeify), SYM_FREE] },
+  };
+  // Producer Emit. Aggregate is exempt from the universal paired Match —
+  // chain recovery is supplied by the `_agg-result` Match below, which
+  // shares the trailing idTpl.
+  const producerRow: Atom = { terms: [SYM_DO_AGG, wrappedFreeAtom, idTpl] };
+  state.out.push({ tag: "Emit", atom: producerRow, l: XL, r: XR, span: a.span });
+
+  // Mint slots for the consumer Match. Push to chain so the suffix sees
+  // them as bound (the Match binds them via unification with the stored
+  // _agg-result row's endpoints).
+  const lName = `_l_${k}`;
+  const rName = `_r_${k}`;
+  const lVar: Term = { tag: "Variable", name: lName };
+  const rVar: Term = { tag: "Variable", name: rName };
+  state.seen.add(lName);
+  state.chain.push(lVar);
+  state.seen.add(rName);
+  state.chain.push(rVar);
+
+  // Consumer: Match (_agg-result originalPatternWithWeight idTpl) at
+  // (_l_K, _r_K). No scaffolding (see header).
+  const originalPatternWithWeight: Term = {
+    tag: "Atom",
+    atom: { terms: [...a.atom.terms, a.weight] },
+  };
+  // Consumer Match: shares the trailing idTpl with the producer Emit.
+  // Structural unification on idTpl against the stored _agg-result row's
+  // copied id binds chain Variables in the consumer's trail.
+  const consumerRow: Atom = { terms: [SYM_AGG_RESULT, originalPatternWithWeight, idTpl] };
+  const constraint = (a as { constraint?: MatchConstraint }).constraint;
+  const matchAtom: RuleAtom = constraint === undefined
+    ? { tag: "Match", atom: consumerRow, l: lVar, r: rVar, span: a.span }
+    : { tag: "Match", atom: consumerRow, l: lVar, r: rVar, constraint, span: a.span };
+  state.out.push(matchAtom);
+
+  // Add user vars from the matched pattern (and weight) to the chain —
+  // the consumer Match binds them via main-atom unification, same as
+  // decomposeMatch does for ordinary matches.
+  for (const t of a.atom.terms) collectVarsTerm(t, state);
+  collectVarsTerm(a.weight, state);
+
+  // New running anchor: the matched _agg-result row's interval. Equals
+  // the producer's prefix anchor (XL, XR) by closeDoAgg invariant.
+  return { XL: lVar, XR: rVar };
 }
 
 function decomposeEmit(
@@ -580,7 +543,16 @@ function decomposeEmit(
     rowAtom = userAtom;
   }
 
-  state.out.push({ tag: "Emit", atom: rowAtom, l: emitL, r: emitR, span: a.span });
+  // Universal id slot + paired Match. The id slot tags every emitted tuple
+  // with a per-firing-unique fingerprint so the consumer split-rule's
+  // structural unification on idTpl recovers chain Variables. The paired
+  // Match shares the same wrappedAtom (so endpoints, user vars, and
+  // chain-Vars-via-idTpl all bind in the consumer's trail). In the producer
+  // it's a no-op verification of the just-emitted tuple.
+  const emitIdTpl = freshIdTemplate(state, k, "_emitId");
+  const wrappedRow: Atom = { terms: [...rowAtom.terms, emitIdTpl] };
+  state.out.push({ tag: "Emit", atom: wrappedRow, l: emitL, r: emitR, span: a.span });
+  state.out.push({ tag: "Match", atom: wrappedRow, l: lVar, r: rVar, span: a.span });
 
   // Now contribute lVar/rVar to chain for subsequent atoms.
   state.seen.add(lName);

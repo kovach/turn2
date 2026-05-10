@@ -215,7 +215,10 @@ function runComponent(
     const arity = row.wrapped.terms.length;
     for (const cidx of candidatesByHead(store, headTerm.name)) {
       const cand = store.tuples[cidx]!;
-      if (cand.atom.terms.length !== arity) continue;
+      // Stored candidates carry the universal trailing id slot; the wrapped
+      // pattern (extracted from the _constrain row) doesn't. Match the
+      // user-facing prefix and ignore the trailing id.
+      if (cand.atom.terms.length !== arity + 1) continue;
       if (!intervalsOverlap(store, row.l, row.r, cand.l, cand.r)) continue;
       const trial = new Map(sub);
       let ok = true;

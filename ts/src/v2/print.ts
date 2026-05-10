@@ -45,7 +45,18 @@ export function renderTerm(store: Store, term: Term): string {
 }
 
 export function renderAtom(store: Store, atom: Atom): string {
-  return atom.terms.map((t) => renderTerm(store, t)).join(" ");
+  // Drop the trailing universal id slot (every emitted tuple's atom carries
+  // one). Rendered separately by tuple printers when needed; users see only
+  // the user-facing terms.
+  return userTerms(atom).map((t) => renderTerm(store, t)).join(" ");
+}
+
+// Strip the trailing universal id slot from a stored atom's terms. The id
+// slot is the last term of every emitted tuple's atom (added by wrapEmit
+// in expand.ts). Returns the user-facing prefix.
+export function userTerms(atom: Atom): readonly Term[] {
+  if (atom.terms.length === 0) return atom.terms;
+  return atom.terms.slice(0, atom.terms.length - 1);
 }
 
 // Shallow variant of `renderTerm`: stops at any `Ref` boundary, printing it
@@ -65,7 +76,7 @@ export function renderTermShallow(store: Store, term: Term): string {
 }
 
 export function renderAtomShallow(store: Store, atom: Atom): string {
-  return atom.terms.map((t) => renderTermShallow(store, t)).join(" ");
+  return userTerms(atom).map((t) => renderTermShallow(store, t)).join(" ");
 }
 
 // Share-aware reification of a set of root terms into a list of source-form

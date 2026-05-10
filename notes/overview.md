@@ -1,3 +1,11 @@
+# 26/05/10
+
+# move decompose first, fix lingering rule expansion issues
+plan: plans/v2-decompose-first-pipeline.md
+supersedes
+  plans/v2-consumer-prefix-elision.md
+  plans/v2-prefix-expansion.md
+
 # 26/05/9
 
 # v2 explicit anchor manipulations in IR

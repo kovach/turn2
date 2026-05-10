@@ -22,19 +22,24 @@ import type { Atom, Term, Span } from "../types.js";
 export type MatchConstraint = "any" | "delta" | "old";
 
 // Pre-expand source-side marker. Drives the desugaring rules in expand:
-//   match    -> Match + Le/Le/Max/Min (overlap with running anchor)
-//   episode  -> Equal/Equal + AssertLt*3 + Emit + Max/Min
-//   fact     -> Equal + AssertLt*2 + Emit at (l, top) + Max/Min
-//   anchor   -> Emit at (XL, XR) (no fresh moments, no anchor update)
-//   ask      -> like fact, with wrapped (_choose chooseId atom) row
-//   constrain-> like fact, with wrapped (_constrain atom) row
+//   match     -> Match + Le/Le/Max/Min (overlap with running anchor)
+//   episode   -> Equal/Equal + AssertLt*3 + Emit + Max/Min
+//   fact      -> Equal + AssertLt*2 + Emit at (l, top) + Max/Min
+//   anchor    -> Emit at (XL, XR) (no fresh moments, no anchor update)
+//   ask       -> like fact, with wrapped (_choose chooseId atom) row
+//   constrain -> like fact, with wrapped (_constrain atom) row
+//   aggregate -> paired Emit (_do-agg ...) + Match (_agg-result ...). Set
+//                by the parser when a default-marker atom carries a
+//                trailing `-> weight`. splitRule slices the body at the
+//                producer Emit's position.
 export type Marker =
   | "match"
   | "episode"
   | "fact"
   | "anchor"
   | "ask"
-  | "constrain";
+  | "constrain"
+  | "aggregate";
 
 export type RuleAtom =
   // ----- Pre-expand only -----

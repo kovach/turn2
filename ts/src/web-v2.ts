@@ -268,7 +268,8 @@ function renderDatabase(store: Store): void {
       const headStr = head !== undefined && head.tag === "Symbol"
         ? `<span class="pred">${escapeHtml(head.name)}</span>`
         : renderTermDb(store, head!);
-      const args = t.atom.terms.slice(1).map((x) => renderTermDb(store, x)).join(" ");
+      // slice(1, -1): skip the head AND the trailing universal id slot.
+      const args = t.atom.terms.slice(1, -1).map((x) => renderTermDb(store, x)).join(" ");
       const atomStr = args === "" ? headStr : `${headStr} ${args}`;
       const intervalStr = `[${renderEndpoint(store, t.l)}, ${renderEndpoint(store, t.r)}]`;
       // Strip HTML for length calculation.

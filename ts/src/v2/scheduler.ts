@@ -23,9 +23,11 @@ import type { BlockedChoose } from "./types.js";
 // A do-agg row whose matching agg-result row does not yet exist.
 interface BlockedDoAgg {
   rowIndex: number;
-  aggId: Term;
-  aggIdTok: number;
-  wrappedAtom: Atom;          // unwrapped from the third row term
+  // Universal trailing id slot — also serves as the do-agg ↔ agg-result
+  // correlation key (one identifier suffices).
+  id: Term;
+  idTok: number;
+  wrappedAtom: Atom;          // unwrapped from terms[1]
   l: Term;
   r: Term;
 }
@@ -34,26 +36,27 @@ type Blocked =
   | { kind: "agg"; row: BlockedDoAgg }
   | { kind: "choose"; row: BlockedChoose };
 
-// Scan store for do-agg rows lacking matching agg-result rows.
+// Scan store for do-agg rows lacking matching agg-result rows. The id at
+// the trailing slot of each row is the correlation key.
 export function collectBlockedDoAggs(store: Store): BlockedDoAgg[] {
   const resolved = new Set<number>();
   for (const idx of candidatesByHead(store, "_agg-result")) {
     const t = store.tuples[idx]!;
-    const idTerm = t.atom.terms[1];
+    const idTerm = t.atom.terms[t.atom.terms.length - 1];
     if (idTerm === undefined) continue;
     resolved.add(tokenOf(store, idTerm));
   }
   const out: BlockedDoAgg[] = [];
   for (const idx of candidatesByHead(store, "_do-agg")) {
     const t = store.tuples[idx]!;
-    const idTerm = t.atom.terms[1];
-    const wrappedTerm = t.atom.terms[2];
-    if (idTerm === undefined || wrappedTerm === undefined) continue;
+    const wrappedTerm = t.atom.terms[1];
+    const idTerm = t.atom.terms[2];
+    if (wrappedTerm === undefined || idTerm === undefined) continue;
     const idTok = tokenOf(store, idTerm);
     if (resolved.has(idTok)) continue;
     const wrappedAtom = unwrapAtom(wrappedTerm, store);
     if (wrappedAtom === null) continue;
-    out.push({ rowIndex: idx, aggId: idTerm, aggIdTok: idTok, wrappedAtom, l: t.l, r: t.r });
+    out.push({ rowIndex: idx, id: idTerm, idTok, wrappedAtom, l: t.l, r: t.r });
   }
   return out;
 }
@@ -195,7 +198,10 @@ export function closeDoAgg(
   const candidates: Cand[] = [];
   for (const idx of candidatesByHead(store, headTerm.name)) {
     const t = store.tuples[idx]!;
-    if (t.atom.terms.length !== arity) continue;
+    // Stored candidates carry the universal trailing id slot; the wrapped
+    // pattern doesn't (it's user-pattern + weight). Skip the id when
+    // checking arity / matching positions.
+    if (t.atom.terms.length !== arity + 1) continue;
     if (!intervalContains(store, t.l, t.r, blocked.l, blocked.r)) continue;
     let ok = true;
     for (let i = 0; i < arity; i++) {
@@ -295,7 +301,9 @@ function emitAggResultRow(
   const inner: Term = { tag: "Atom", atom: { terms: filledTerms.map((t) => hashconsTerm(t, store.hash)) } };
   const internedInner = hashconsTerm(inner, store.hash);
   const sym: Term = { tag: "Symbol", name: "_agg-result" };
-  const atom: Atom = { terms: [sym, blocked.aggId, internedInner] };
+  // Copy the source _do-agg's trailing id over so the consumer Match's
+  // structural unification on idTpl finds this row.
+  const atom: Atom = { terms: [sym, internedInner, blocked.id] };
   const inserted = addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex]);
   if (inserted) {
     addOrder(store, blocked.l, blocked.r);

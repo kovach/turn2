@@ -278,7 +278,11 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   if (headTerm !== undefined && headTerm.tag === "Symbol" && headTerm.name.startsWith("*")) {
     return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
   }
-  const out: RuleAtom = { tag: "Atom", marker, atom, span: { line } };
+  // A default-marker (`match`) atom that carries a trailing `-> weight`
+  // is an aggregate, not a match.
+  let outMarker: Marker = marker;
+  if (marker === "match" && weight !== undefined) outMarker = "aggregate";
+  const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line } };
   if (weight !== undefined) out.weight = weight;
   return out;
 }

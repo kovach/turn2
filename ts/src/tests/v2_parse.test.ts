@@ -91,11 +91,11 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
   console.log("PASS: weighted assert (+)");
 }
 
-// 7) weighted match
+// 7) weighted match (now an aggregate marker)
 {
   const p = ok("points -> N\n");
   const a = atom(p.rules[0]!.body[0]!);
-  assert.equal(a.marker, "match");
+  assert.equal(a.marker, "aggregate");
   assert.deepEqual(a.weight, { tag: "Variable", name: "N" });
   console.log("PASS: weighted match");
 }
