@@ -1,92 +1,137 @@
-// v2 IR. See plans/new-semantics.md.
+// v2 IR. See plans/new-semantics.md and plans/v2-explicit-anchor-ir.md.
 //
-// Pipeline: parse -> Program (rules + schema) -> expand (rule splitting) ->
-// fixpoint(eval(rule, store)) -> Store. Reuses the hashconsed Term/Atom
-// algebra from ../types.ts; v2 adds intervals on tuples and a moment-order
-// relation in the Store.
+// Pipeline: parse -> Program (rules + schema) -> expand (rule splitting +
+// anchor decomposition) -> fixpoint(eval(rule, store)) -> Store. Reuses the
+// hashconsed Term/Atom algebra from ../types.ts; v2 adds intervals on
+// tuples and a moment-order relation in the Store.
+//
+// Two phases of RuleAtom:
+//   - Pre-expand (parser output): `Atom` (with marker/weight/lLit/rLit),
+//     `Sub`, `Equal`. The marker enum drives anchor decomposition.
+//   - Post-expand (evaluator input): `Match`, `Emit`, `Le`, `AssertLt`,
+//     `Max`, `Min`, `Equal`. Anchor manipulation is now explicit IR; the
+//     evaluator is a flat dispatch over these primitives.
 
 import type { Atom, Term, Span } from "../types.js";
 
-// Atom prefix markers. `match` is the default (no prefix); the other markers
-// produce tuples with different interval-construction rules. Weighted
-// versions of each are represented by setting `.weight` on the Atom.
-//
-// `ask` and `constrain` desugar at eval time to compound `+`-style asserts
-// (a `choose` row carrying a fresh chooseId + wrapped atom; a `constrain`
-// row carrying the wrapped atom). They never appear in stored tuples.
-// Semi-naive evaluation tag on `match` atoms. Set by `expand`'s delta-variant
-// pass: each rule is cloned once per match position, and within one variant
-// exactly one match is `"delta"` (rows added in the previous round), positions
-// before it are `"old"` (rows from earlier rounds), positions after are
-// `"any"` (no gen filter). Strict `delta` ensures each new derivation is
-// reached by exactly one variant per round; loose `any`/`old` preserve v2's
-// within-sweep cascade visibility.
+// Semi-naive evaluation tag on `Match` atoms. Set by the delta-variant pass:
+// each rule is cloned once per match position, and within one variant
+// exactly one match is `"delta"` (rows added in the previous round),
+// positions before it are `"old"` (rows from earlier rounds), positions
+// after are `"any"` (no gen filter).
 export type MatchConstraint = "any" | "delta" | "old";
 
+// Pre-expand source-side marker. Drives the desugaring rules in expand:
+//   match    -> Match + Le/Le/Max/Min (overlap with running anchor)
+//   episode  -> Equal/Equal + AssertLt*3 + Emit + Max/Min
+//   fact     -> Equal + AssertLt*2 + Emit at (l, top) + Max/Min
+//   anchor   -> Emit at (XL, XR) (no fresh moments, no anchor update)
+//   ask      -> like fact, with wrapped (_choose chooseId atom) row
+//   constrain-> like fact, with wrapped (_constrain atom) row
 export type Marker =
-  | "match"      // -  default; matches tuples overlapping the anchor
-  | "episode"    // ~  fresh (l', r') strictly inside anchor
-  | "fact"       // +  fresh l' inside anchor; r' = top
-  | "anchor"     // ^  interval == current anchor
-  | "ask"        // ?  introduces a choice; desugars to (choose <id> (<atom>))
-  | "constrain"; // !  fringe for choice resolution; desugars to (constrain (<atom>))
+  | "match"
+  | "episode"
+  | "fact"
+  | "anchor"
+  | "ask"
+  | "constrain";
 
-// One entry in a rule body. `Atom` covers all the marker cases (matches and
-// asserts, weighted or not, optionally with literal moment-term bindings on
-// the match side as produced by rule splitting). `Sub` is a parenthesised
-// sub-rule, with `sequence` set when the closer was `);` rather than `)`.
 export type RuleAtom =
+  // ----- Pre-expand only -----
+  //
+  // Source-form atom emitted by the parser. Carries a marker plus optional
+  // weight/lLit/rLit. Consumed by `expand` (splitRule + anchor decomposition);
+  // never reaches the evaluator.
   | {
       tag: "Atom";
       marker: Marker;
       atom: Atom;
-      // Trailing `-> term` slot. When set on a match, the atom is a weighted
-      // *query* that aggregates; on an assert, it's just stored in a trailing
-      // slot.
+      // Trailing `-> term` slot. On a match, the atom is a weighted *query*
+      // that aggregates; consumed by `splitRule`. On an assert it's stored
+      // in a trailing slot.
       weight?: Term;
-      // Literal moment terms threaded by `expand` into a consumer-side match
-      // so the consumer rule sees only the producer's tuple.
+      // Literal moment terms threaded by `splitRule`'s prefix-elision into
+      // a consumer-side match so it sees only the producer's tuple. The
+      // anchor decomposition pass turns these into `Equal` atoms.
       lLit?: Term;
       rLit?: Term;
-      // Static identity record assigned by `expand`'s `assignIds` pass.
-      //
-      //   l, r : `Variable` Terms naming the slots in `subst` that this
-      //          atom's left / right moment values are bound to (matches
-      //          bind from the matched tuple's endpoints; asserts bind from
-      //          the constructed l, r they emit). Synthesized names of the
-      //          form `_l_<lexPos>` / `_r_<lexPos>`.
-      //   chain: A `(*id <ruleName> <lexPos> V1 V2 ... Vk)` Id-tag Term
-      //          where V1..Vk are `Variable` references to every slot in
-      //          scope *before* this atom — the l/r slots of earlier atoms
-      //          plus user-named vars bound earlier. Used by the evaluator's
-      //          fresh-term constructors:
-      //            freshIdTerm(varName) = instantiate(chain) ++ [Sym varName]
-      //            freshChooseId()      = instantiate(chain) with head *choose
-      //            freshMoment(side)    = instantiate(chain) with head *mom,
-      //                                   ++ [Sym side]
-      //          By baking the prefix at expand time we get a canonical,
-      //          deterministic fingerprint of the rule firing's history that
-      //          captures matched-tuple identity (via the l/r slot chain),
-      //          not just user-variable bindings.
-      id?: { l: Term; r: Term; chain: Term };
-      // Semi-naive bucket for `match` atoms. Defaults to `"any"` when absent
-      // (e.g. ad-hoc rule construction that bypasses `expand`).
-      constraint?: MatchConstraint;
       span: Span;
     }
+  // Parenthesised sub-rule. `sequence` is true when the closer was `);`.
+  // Anchor decomposition flattens Subs entirely — no Sub survives into
+  // the post-expand IR.
   | {
       tag: "Sub";
       body: RuleAtom[];
       sequence: boolean;
       span: Span;
     }
+  // ----- Both phases -----
+  //
   // Equality / unification atom: `= <lhs> <rhs>`. Unifies two terms against
-  // the current substitution. Carries no marker, no id, no l/r — it doesn't
-  // match a stored tuple, emit one, or modify the anchor.
+  // the current substitution. Carries no marker, no anchor effect.
   | {
       tag: "Equal";
       lhs: Term;
       rhs: Term;
+      span: Span;
+    }
+  // ----- Post-expand only -----
+  //
+  // Stored-tuple lookup. The matched tuple's atom unifies against `atom`,
+  // and its endpoints unify with `l` / `r` (typically fresh `_l_<k>` /
+  // `_r_<k>` Variables that downstream atoms reference).
+  | {
+      tag: "Match";
+      atom: Atom;
+      l: Term;
+      r: Term;
+      constraint?: MatchConstraint;
+      span: Span;
+    }
+  // Emit a stored tuple with the supplied (already ground) endpoints. No
+  // marker variants — fact/episode/anchor/ask/constrain distinctions are
+  // decomposed by expand into the right combination of Equal / AssertLt /
+  // Max / Min around the Emit.
+  | {
+      tag: "Emit";
+      atom: Atom;
+      l: Term;
+      r: Term;
+      span: Span;
+    }
+  // Moment-order *check*. Succeeds iff `a ≤ b` in the current closure.
+  // Both ground.
+  | {
+      tag: "Le";
+      a: Term;
+      b: Term;
+      span: Span;
+    }
+  // Moment-order *insert*. Records the edge `a < b` (calls `addOrder`).
+  // Both ground.
+  | {
+      tag: "AssertLt";
+      a: Term;
+      b: Term;
+      span: Span;
+    }
+  // Bind `out` to the larger / smaller of `a` and `b` under the current
+  // moment order. `a`, `b` ground; `out` an unbound `Variable` (or `_`).
+  // Incomparable args fail relationally — the evaluator backtracks past
+  // the atom. Never throws.
+  | {
+      tag: "Max";
+      a: Term;
+      b: Term;
+      out: Term;
+      span: Span;
+    }
+  | {
+      tag: "Min";
+      a: Term;
+      b: Term;
+      out: Term;
       span: Span;
     };
 
@@ -101,11 +146,9 @@ export interface Rule {
   // run conservatively). `undefined` means: rule has no `"delta"` match
   // (rules with zero matches; always run).
   deltaHead?: string | null;
-  // True iff no positive (assert/episode/fact/anchor/ask/constrain) atom
-  // appears before the delta atom in the body. When false, the rule may
-  // emit tuples earlier in its body that the short-circuit would
-  // incorrectly suppress, so we must run it regardless of `prevHeads`.
-  // Once prefix expansion lands this is always true.
+  // True iff no positive-emitting atom appears before the delta atom in
+  // the body. When false, the rule may emit tuples earlier in its body
+  // that the short-circuit would incorrectly suppress.
   deltaSafeSkip?: boolean;
 }
 
@@ -149,8 +192,6 @@ export type FixpointStatus =
     }
   | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term };
 
-// Re-exported here so ts/src/v2/constraint-query.ts and consumers share the
-// same struct definition through a single import path.
 export interface ComponentOptions {
   activeTerms: Term[];
   options: Term[][];

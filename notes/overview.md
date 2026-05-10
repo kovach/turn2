@@ -1,3 +1,5 @@
+# 26/05/9
+
 # v2 explicit anchor manipulations in IR
 plan: plans/v2-explicit-anchor-ir.md
 
@@ -67,6 +69,9 @@ waiting
 
 # v2 tuple/source links
 plan: plans/v2-source-output-linking.md
+
+# 26/05/8
+^ let's start recording the date in-file
 
 # v2 design notes
 see notes/v2-design.md (living document for cross-file v2 invariants)

@@ -1,19 +1,14 @@
-// Rule splitting at weighted matches.
+// Expand: rule splitting at weighted matches, semi-naive delta variants,
+// then anchor decomposition into the post-expand IR.
 //
-// A rule containing a weighted match `foo X -> N` splits into:
-//   - producer: prefix + `^ _do-agg <aggIdVar> (foo X)`
-//   - consumer: prefix + `_do-agg <aggIdVar> (foo X)` + `_agg-result <aggIdVar> N` + suffix
+// Pre-expand IR (from parse): each rule body is a list of `Atom`s (with a
+// marker), `Sub`s, and `Equal`s.
 //
-// `aggIdVar` is a synthesized Variable; both rules carry the *original* rule
-// name so their prefix runs produce identical fresh-ids (mom/id) and dedupe.
-// The producer emits the row with marker "anchor" so its interval equals the
-// firing's anchor at the split point — that interval is what the scheduler
-// uses for ordering and for the aggregate's contribution-set query.
-//
-// Multiple weighted matches: split is iterative — after the first split the
-// consumer may itself contain a weighted match; recurse.
+// Post-expand IR (consumed by eval): a flat list of `Match`, `Emit`, `Le`,
+// `AssertLt`, `Max`, `Min`, `Equal`. Anchor manipulation that the evaluator
+// used to do implicitly is now explicit IR.
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Span, Term } from "../types.js";
 import type { MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 
 export function expand(program: Program): Program {
@@ -21,24 +16,24 @@ export function expand(program: Program): Program {
   for (const rule of program.rules) {
     split.push(...splitRule(rule));
   }
-  const rules: Rule[] = [];
+  const variants: Rule[] = [];
   for (const rule of split) {
-    rules.push(...generateDeltaVariants(rule));
+    variants.push(...generateDeltaVariants(rule));
   }
-  for (const rule of rules) assignIds(rule);
+  const rules: Rule[] = variants.map(decomposeRule);
   return { rules, schema: program.schema };
 }
 
-// Semi-naive delta variants. For a rule with N match atoms (including those
-// nested in Sub bodies), emit N copies; in variant j the j-th match (in
-// pre-order) is tagged "delta", earlier matches "old", later matches "any".
-// Rules with zero match atoms are returned as-is.
+// ----- Semi-naive delta variants -----
+
+// For a rule with N pre-expand match atoms (including those nested in Sub
+// bodies), emit N copies; in variant j the j-th match (in pre-order) is
+// tagged "delta", earlier matches "old", later matches "any". Rules with
+// zero match atoms are returned as-is.
 //
-// Variants share the original rule `name` on purpose: `assignIds` derives
-// fresh-id chains from `name + lexPos`, so identical firings across
+// Variants share the original rule `name` so identical firings across
 // variants produce identical fresh-ids and `addTuple`'s dedup collapses
-// duplicate emissions. The MatchConstraint filter ensures that across one
-// inner-loop sweep each *new* derivation is reached by exactly one variant.
+// duplicate emissions.
 export function generateDeltaVariants(rule: Rule): Rule[] {
   const n = countMatches(rule.body);
   if (n === 0) return [rule];
@@ -56,9 +51,6 @@ export function generateDeltaVariants(rule: Rule): Rule[] {
   return out;
 }
 
-// True iff a positive-marker atom appears anywhere before the delta atom
-// in the body (descending into `Sub`s). Such an atom would emit tuples
-// that the short-circuit must not suppress.
 function positiveBeforeDelta(body: RuleAtom[]): boolean {
   let sawPositive = false;
   let foundDelta = false;
@@ -67,8 +59,9 @@ function positiveBeforeDelta(body: RuleAtom[]): boolean {
       if (foundDelta) return;
       if (a.tag === "Sub") { walk(a.body); continue; }
       if (a.tag === "Equal") continue;
+      if (a.tag !== "Atom") continue;
       if (a.marker === "match") {
-        if (a.constraint === "delta") { foundDelta = true; return; }
+        if ((a as { constraint?: MatchConstraint }).constraint === "delta") { foundDelta = true; return; }
         continue;
       }
       sawPositive = true;
@@ -78,9 +71,6 @@ function positiveBeforeDelta(body: RuleAtom[]): boolean {
   return sawPositive;
 }
 
-// Returns the delta atom's head sym, `null` if its head is not a Symbol
-// (must run conservatively), or throws if the body has no delta atom (a
-// caller bug — generateDeltaVariants only calls this when matchCount > 0).
 function findDeltaHead(body: RuleAtom[]): string | null {
   const found = findDeltaAtom(body);
   if (found === undefined) throw new Error("internal: variant body lacks a delta atom");
@@ -95,7 +85,8 @@ function findDeltaAtom(body: RuleAtom[]): Extract<RuleAtom, { tag: "Atom" }> | u
       if (inner !== undefined) return inner;
       continue;
     }
-    if (a.tag === "Atom" && a.marker === "match" && a.constraint === "delta") return a;
+    if (a.tag === "Atom" && a.marker === "match"
+        && (a as { constraint?: MatchConstraint }).constraint === "delta") return a;
   }
   return undefined;
 }
@@ -117,104 +108,13 @@ function tagBody(body: RuleAtom[], delta: number, ctr: { i: number }): RuleAtom[
     if (a.tag === "Atom" && a.marker === "match") {
       const i = ctr.i++;
       const c: MatchConstraint = i < delta ? "old" : i === delta ? "delta" : "any";
-      return { ...a, constraint: c };
+      return { ...a, constraint: c } as RuleAtom;
     }
     return a;
   });
 }
 
-// Walk the rule body in pre-order, assigning each Atom a static `id` record:
-//
-//   id.l, id.r : Variable("_l_<lexPos>"), Variable("_r_<lexPos>") — slots
-//                that the evaluator binds in `subst`. For matches, bound to
-//                the matched tuple's endpoints; for asserts/asks/constrains,
-//                bound to the constructed l, r the atom emits.
-//   id.chain   : `(*id <ruleName> <lexPos> V1 V2 ... Vk)` template, where
-//                V1..Vk are Variable references to every slot in scope
-//                *before* this atom: the l/r slots of earlier atoms, plus
-//                user-named variables introduced by earlier atoms.
-//                `instantiate(id.chain, ctx)` at eval time grounds the
-//                template into a per-firing fingerprint.
-//
-// `lexPos` is a 1-based counter incremented per Atom in pre-order. Subs do
-// not occupy their own lexPos but their inner atoms continue the count.
-// Walking the *expanded* rule list ensures synthesized atoms (`^ do-agg`,
-// `do-agg` match, `agg-result` match) get stable lexPos values too.
-//
-// Because matches contribute their `_l_k` / `_r_k` slots to the chain, every
-// subsequent atom's freshIdTerm / freshChooseId / freshMoment depends on
-// the exact tuples this rule firing matched — not just on user-named
-// variable bindings. That's what stops chooseIds from collapsing across
-// distinct turns when the only thing distinguishing the firings is which
-// `turn` row was matched.
-function assignIds(rule: Rule): void {
-  const ruleName = rule.name;
-  let lexPos = 0;
-  const chain: Term[] = [];
-  const seen = new Set<string>();
-
-  function pushVar(name: string): void {
-    if (name === "_") return;
-    if (seen.has(name)) return;
-    seen.add(name);
-    chain.push({ tag: "Variable", name });
-  }
-
-  function collectVars(t: Term): void {
-    if (t.tag === "Variable") { pushVar(t.name); return; }
-    if (t.tag === "Atom" || t.tag === "Id") {
-      for (const x of t.atom.terms) collectVars(x);
-    }
-  }
-
-  function walk(body: RuleAtom[]): void {
-    for (const a of body) {
-      if (a.tag === "Sub") {
-        walk(a.body);
-        continue;
-      }
-      if (a.tag === "Equal") {
-        // No lexPos / id slot for Equal — but its lhs/rhs may introduce
-        // user variables that subsequent atoms' id.chain templates need to
-        // see. Collect them into the running chain so downstream *id /
-        // *choose / *mom fingerprints depend on those bindings.
-        collectVars(a.lhs);
-        collectVars(a.rhs);
-        continue;
-      }
-      lexPos++;
-      const lName = "_l_" + String(lexPos);
-      const rName = "_r_" + String(lexPos);
-      const lVar: Term = { tag: "Variable", name: lName };
-      const rVar: Term = { tag: "Variable", name: rName };
-      // Snapshot chain *before* this atom contributes its own slots/vars.
-      const chainTerms: Term[] = [
-        { tag: "Symbol", name: "*id" },
-        { tag: "Symbol", name: ruleName },
-        { tag: "Symbol", name: String(lexPos) },
-        ...chain,
-      ];
-      a.id = {
-        l: lVar,
-        r: rVar,
-        // Id-tagged: the chain template names a fresh per-firing identity,
-        // not data. See notes/v2-design.md (id-opacity invariant).
-        chain: { tag: "Id", atom: { terms: chainTerms } },
-      };
-      // Atom contributes its l, r slots first, then any user vars.
-      seen.add(lName);
-      chain.push(lVar);
-      seen.add(rName);
-      chain.push(rVar);
-      for (const t of a.atom.terms) collectVars(t);
-      if (a.weight !== undefined) collectVars(a.weight);
-      if (a.lLit !== undefined) collectVars(a.lLit);
-      if (a.rLit !== undefined) collectVars(a.rLit);
-    }
-  }
-
-  walk(rule.body);
-}
+// ----- Rule splitting at weighted matches (unchanged from prior) -----
 
 function splitRule(rule: Rule): Rule[] {
   const path = findFirstWeightedMatch(rule.body);
@@ -226,12 +126,6 @@ function splitRule(rule: Rule): Rule[] {
   const aggVarName = `_aggId_${path.join("_")}`;
   const aggIdVar: Term = { tag: "Variable", name: aggVarName };
 
-  // The wrapped pattern includes the weight position. Variables that the
-  // prefix (everything lexically before the weighted match — including
-  // surrounding sub-rule prefixes) doesn't bind become aggregation free
-  // variables and are replaced by the reserved `_free` Symbol; the scheduler
-  // treats those positions as wildcards and groups contributions by their
-  // distinct values.
   const boundByPrefix = new Set<string>();
   collectBoundVarsBeforePath(rule.body, path, boundByPrefix);
   const freeSym: Term = { tag: "Symbol", name: "_free" };
@@ -246,14 +140,8 @@ function splitRule(rule: Rule): Rule[] {
     }
     return t;
   };
-  // Weight position is the *output* of aggregation, not a filter on
-  // contributions. Always leave it free in the do-agg pattern; the consumer's
-  // agg-result match (originalPatternAtom) enforces equality against any
-  // user-written literal weight.
   const wrappedFreeTerms: Term[] = [...wm.atom.terms.map(freeify), freeSym];
   const wrappedFreeAtom: Term = { tag: "Atom", atom: { terms: wrappedFreeTerms } };
-  // Consumer's agg-result match keeps the original variable names so they
-  // bind from each emitted agg-result row.
   const originalPatternAtom: Term = {
     tag: "Atom",
     atom: { terms: [...wm.atom.terms, wm.weight] },
@@ -291,7 +179,6 @@ function splitRule(rule: Rule): Rule[] {
     body: producerBody,
     span: rule.span,
   };
-
   const consumerRule: Rule = {
     name: rule.name,
     body: consumerBody,
@@ -301,9 +188,6 @@ function splitRule(rule: Rule): Rule[] {
   return [producerRule, ...splitRule(consumerRule)];
 }
 
-// Path of indices into nested Sub bodies locating the first weighted match,
-// or null if none. `[i]` is a top-level position; `[i, j, ...]` walks into
-// `body[i]` (a Sub), then its body[j], etc.
 type WMPath = number[];
 
 function findFirstWeightedMatch(body: RuleAtom[]): WMPath | null {
@@ -325,9 +209,6 @@ function atPath(body: RuleAtom[], path: WMPath): RuleAtom {
   return atPath(head.body, path.slice(1));
 }
 
-// Producer rule body: everything lexically before the weighted match, plus
-// the producer-emit at the weighted match's position. Anything after is
-// dropped — the producer's job is just to emit the do-agg row.
 function buildProducerBody(body: RuleAtom[], path: WMPath, emit: RuleAtom): RuleAtom[] {
   const i = path[0]!;
   if (path.length === 1) return [...body.slice(0, i), emit];
@@ -338,9 +219,6 @@ function buildProducerBody(body: RuleAtom[], path: WMPath, emit: RuleAtom): Rule
   return [...body.slice(0, i), newSub];
 }
 
-// Consumer rule body: same shape as the original, with the weighted-match
-// position replaced by [do-agg-match, agg-result-match]. Everything after
-// (within the same Sub level and at outer levels) is preserved.
 function buildConsumerBody(
   body: RuleAtom[],
   path: WMPath,
@@ -358,11 +236,8 @@ function buildConsumerBody(
   return [...body.slice(0, i), newSub, ...body.slice(i + 1)];
 }
 
-// Variables bound by the rule body at any position lexically *before* `path`,
-// including matches in surrounding sub-rule prefixes.
 function collectBoundVarsBeforePath(body: RuleAtom[], path: WMPath, out: Set<string>): void {
   const i = path[0]!;
-  // Everything strictly before index i at this level contributes.
   collectBoundVarsInBody(body.slice(0, i), out);
   if (path.length === 1) return;
   const sub = body[i]!;
@@ -370,9 +245,6 @@ function collectBoundVarsBeforePath(body: RuleAtom[], path: WMPath, out: Set<str
   collectBoundVarsBeforePath(sub.body, path.slice(1), out);
 }
 
-// Variables introduced anywhere in `body` (including nested sub-rules and
-// equality atoms). Used by splitRule to decide which positions in a weighted
-// match's pattern are the aggregation's free variables.
 function collectBoundVarsInBody(body: RuleAtom[], out: Set<string>): void {
   function visitTerm(t: Term): void {
     if (t.tag === "Variable") { if (t.name !== "_") out.add(t.name); return; }
@@ -381,6 +253,7 @@ function collectBoundVarsInBody(body: RuleAtom[], out: Set<string>): void {
   for (const a of body) {
     if (a.tag === "Sub") { collectBoundVarsInBody(a.body, out); continue; }
     if (a.tag === "Equal") { visitTerm(a.lhs); visitTerm(a.rhs); continue; }
+    if (a.tag !== "Atom") continue;
     for (const t of a.atom.terms) visitTerm(t);
     if (a.weight !== undefined) visitTerm(a.weight);
     if (a.lLit !== undefined) visitTerm(a.lLit);
@@ -388,3 +261,340 @@ function collectBoundVarsInBody(body: RuleAtom[], out: Set<string>): void {
   }
 }
 
+// ----- Anchor decomposition pass -----
+//
+// Walks a rule body, threading SSA running-anchor variables and a chain of
+// in-scope Variables. Emits the post-expand IR: Match/Emit/Le/AssertLt/
+// Max/Min/Equal. Subs are flattened — they don't survive into the output.
+
+interface DecState {
+  ruleName: string;
+  out: RuleAtom[];
+  // Running counter for `_l_<k>` / `_r_<k>` slot names. One pair per
+  // Match/Emit (every kind of emit, including anchor). Drives the
+  // template lexPos for fresh-* templates too.
+  lexPos: number;
+  // Running counter for synthetic anchor SSA variables (`_xl_<k>` /
+  // `_xr_<k>`). Independent of lexPos.
+  anchorCounter: number;
+  // Variables currently in scope (in chain order). Used to materialize
+  // fresh-* templates for unbound user vars in Emits.
+  chain: Term[];
+  // Names already in `chain`, for O(1) dedup.
+  seen: Set<string>;
+}
+
+const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
+const SYM_TOP: Term = { tag: "Symbol", name: "top" };
+const SYM_ID: Term = { tag: "Symbol", name: "*id" };
+const SYM_MOM: Term = { tag: "Symbol", name: "*mom" };
+const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
+const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
+const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
+const SYM_L: Term = { tag: "Symbol", name: "l" };
+const SYM_R: Term = { tag: "Symbol", name: "r" };
+
+function decomposeRule(rule: Rule): Rule {
+  const state: DecState = {
+    ruleName: rule.name,
+    out: [],
+    lexPos: 0,
+    anchorCounter: 0,
+    chain: [],
+    seen: new Set(),
+  };
+  decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
+  return { ...rule, body: state.out };
+}
+
+function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
+  const k = state.anchorCounter++;
+  return { tag: "Variable", name: `_${kind}_${k}` };
+}
+
+// Snapshot of `[head, ruleName, lexPos, ...state.chain, trailing?]` wrapped
+// as an `Id` term. Mirrors `assignIds` + `instantiated{Id,Mom,Choose}Terms`
+// from the legacy evaluator: every fresh-* template snapshots the chain
+// *before* the current atom contributes its own slots, so the template
+// is a deterministic per-firing fingerprint of all earlier bindings.
+// Templates are `Id`-tagged so unification stays opaque on them per
+// notes/v2-design.md.
+function chainTemplateWithHead(state: DecState, lexPos: number, head: Term, trailing?: Term): Term {
+  const terms: Term[] = [
+    head,
+    { tag: "Symbol", name: state.ruleName },
+    { tag: "Symbol", name: String(lexPos) },
+    ...state.chain,
+  ];
+  if (trailing !== undefined) terms.push(trailing);
+  return { tag: "Id", atom: { terms } };
+}
+
+// `freshIdTerm(varName)` template: `(*id rule lexPos ...chain <varName>)`
+function freshIdTemplate(state: DecState, lexPos: number, varName: string): Term {
+  return chainTemplateWithHead(state, lexPos, SYM_ID, { tag: "Symbol", name: varName.toLowerCase() });
+}
+
+// `freshChooseId` template: `(*choose rule lexPos ...chain)`
+function freshChooseTemplate(state: DecState, lexPos: number): Term {
+  return chainTemplateWithHead(state, lexPos, SYM_CHOOSE);
+}
+
+// `freshMoment(side)` template: `(*mom rule lexPos ...chain <side>)`
+function freshMomTemplate(state: DecState, lexPos: number, side: "l" | "r"): Term {
+  return chainTemplateWithHead(state, lexPos, SYM_MOM, side === "l" ? SYM_L : SYM_R);
+}
+
+function noteVar(state: DecState, name: string): void {
+  if (name === "_") return;
+  if (state.seen.has(name)) return;
+  state.seen.add(name);
+  state.chain.push({ tag: "Variable", name });
+}
+
+function collectVarsTerm(t: Term, state: DecState): void {
+  if (t.tag === "Variable") { noteVar(state, t.name); return; }
+  if (t.tag === "Atom" || t.tag === "Id") {
+    for (const x of t.atom.terms) collectVarsTerm(x, state);
+  }
+}
+
+// Walk `t` and rewrite it so every unbound user Variable / Wildcard is
+// replaced by a fresh-id template (so the resulting term is fully ground
+// modulo trail-bound chain Variables in the templates). For each Variable
+// not yet in scope, also emit an `Equal V <freshIdTemplate(... varName)>`
+// before this atom so that V is bound on the trail and downstream atoms
+// see the same value. Wildcards become anonymous fresh-id templates with
+// no Equal (no name to bind).
+//
+// Mirrors today's runtime `bindUnbound` in eval.ts. We don't actually walk
+// children of Atom/Id containers via term substitution here — instead we
+// emit Equals up-front for unbound Variables and let the term keep its
+// Variable references; the evaluator will substitute them via the trail
+// when it interns the Emit's atom. The exception is Wildcards: they have
+// no name, so we substitute them inline.
+function emitBindingsAndRewrite(term: Term, state: DecState, lexPos: number, span: Span): Term {
+  if (term.tag === "Variable") {
+    if (term.name === "_") {
+      // Anonymous: substitute inline with an anonymous fresh-id template.
+      return freshIdTemplate(state, lexPos, "_");
+    }
+    if (!state.seen.has(term.name)) {
+      // Bind via Equal; subsequent atoms in this rule see the same value.
+      const fresh = freshIdTemplate(state, lexPos, term.name);
+      state.out.push({ tag: "Equal", lhs: term, rhs: fresh, span });
+      state.seen.add(term.name);
+      state.chain.push(term);
+    }
+    return term;
+  }
+  if (term.tag === "Wildcard") {
+    return freshIdTemplate(state, lexPos, "_");
+  }
+  if (term.tag === "Atom" || term.tag === "Id") {
+    const inner = term.atom.terms.map((x) => emitBindingsAndRewrite(x, state, lexPos, span));
+    return { tag: term.tag, atom: { terms: inner } };
+  }
+  return term;
+}
+
+function decomposeBody(
+  body: RuleAtom[],
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  for (const a of body) {
+    if (a.tag === "Equal") {
+      collectVarsTerm(a.lhs, state);
+      collectVarsTerm(a.rhs, state);
+      state.out.push(a);
+      continue;
+    }
+    if (a.tag === "Sub") {
+      const inner = decomposeBody(a.body, state, XL, XR);
+      if (a.sequence) {
+        const XLseq = freshAnchorVar(state, "xl");
+        state.out.push({ tag: "Max", a: XL, b: inner.XR, out: XLseq, span: a.span });
+        XL = XLseq;
+      }
+      // Non-sequence: outer XL/XR unchanged. The inner's atoms produced
+      // their own SSA running-anchor vars internally; nothing leaks.
+      continue;
+    }
+    if (a.tag === "Atom") {
+      state.lexPos++;
+      if (a.marker === "match") {
+        const next = decomposeMatch(a, state, XL, XR);
+        XL = next.XL;
+        XR = next.XR;
+      } else {
+        const next = decomposeEmit(a, state, XL, XR);
+        XL = next.XL;
+        XR = next.XR;
+      }
+      continue;
+    }
+    // Post-expand cases shouldn't occur at this stage, but pass through.
+    state.out.push(a);
+  }
+  return { XL, XR };
+}
+
+function decomposeMatch(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  const k = state.lexPos;
+  const lName = `_l_${k}`;
+  const rName = `_r_${k}`;
+  const lVar: Term = { tag: "Variable", name: lName };
+  const rVar: Term = { tag: "Variable", name: rName };
+  // Add slots to chain *before* user vars (matches today's assignIds order).
+  state.seen.add(lName);
+  state.chain.push(lVar);
+  state.seen.add(rName);
+  state.chain.push(rVar);
+
+  // Emit the Match itself.
+  const constraint = (a as { constraint?: MatchConstraint }).constraint;
+  const matchAtom: RuleAtom = constraint === undefined
+    ? { tag: "Match", atom: a.atom, l: lVar, r: rVar, span: a.span }
+    : { tag: "Match", atom: a.atom, l: lVar, r: rVar, constraint, span: a.span };
+  state.out.push(matchAtom);
+
+  // lLit/rLit: constrain endpoints to the literal.
+  if (a.lLit !== undefined) {
+    state.out.push({ tag: "Equal", lhs: lVar, rhs: a.lLit, span: a.span });
+    collectVarsTerm(a.lLit, state);
+  }
+  if (a.rLit !== undefined) {
+    state.out.push({ tag: "Equal", lhs: rVar, rhs: a.rLit, span: a.span });
+    collectVarsTerm(a.rLit, state);
+  }
+
+  // Overlap check + anchor intersection.
+  state.out.push({ tag: "Le", a: XL, b: rVar, span: a.span });
+  state.out.push({ tag: "Le", a: lVar, b: XR, span: a.span });
+  const XLnext = freshAnchorVar(state, "xl");
+  const XRnext = freshAnchorVar(state, "xr");
+  state.out.push({ tag: "Max", a: XL, b: lVar, out: XLnext, span: a.span });
+  state.out.push({ tag: "Min", a: XR, b: rVar, out: XRnext, span: a.span });
+
+  // Add user vars in the matched atom to chain.
+  for (const t of a.atom.terms) collectVarsTerm(t, state);
+
+  return { XL: XLnext, XR: XRnext };
+}
+
+function decomposeEmit(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  const k = state.lexPos;
+  const lName = `_l_${k}`;
+  const rName = `_r_${k}`;
+  const lVar: Term = { tag: "Variable", name: lName };
+  const rVar: Term = { tag: "Variable", name: rName };
+
+  // Determine the actual emitted endpoints + emit the supporting atoms.
+  // NOTE: lVar/rVar are NOT yet in the chain — fresh-* templates produced
+  // here (and below for the user atom) snapshot the chain *before* this
+  // emit contributes its own slots, matching today's assignIds order.
+  // We push lVar/rVar onto the chain at the end of this function.
+  let emitL: Term, emitR: Term;
+  let updateAnchor = true;
+  switch (a.marker) {
+    case "fact":
+    case "ask":
+    case "constrain": {
+      // l = fresh moment, r = top.
+      const momL = freshMomTemplate(state, k, "l");
+      state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
+      state.out.push({ tag: "Equal", lhs: rVar, rhs: SYM_TOP, span: a.span });
+      state.out.push({ tag: "AssertLt", a: XL, b: lVar, span: a.span });
+      state.out.push({ tag: "AssertLt", a: lVar, b: XR, span: a.span });
+      emitL = lVar;
+      emitR = SYM_TOP;
+      break;
+    }
+    case "episode": {
+      const momL = freshMomTemplate(state, k, "l");
+      const momR = freshMomTemplate(state, k, "r");
+      state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
+      state.out.push({ tag: "Equal", lhs: rVar, rhs: momR, span: a.span });
+      state.out.push({ tag: "AssertLt", a: XL, b: lVar, span: a.span });
+      state.out.push({ tag: "AssertLt", a: lVar, b: rVar, span: a.span });
+      state.out.push({ tag: "AssertLt", a: rVar, b: XR, span: a.span });
+      emitL = lVar;
+      emitR = rVar;
+      break;
+    }
+    case "anchor": {
+      // Bind slot vars to current anchor for chain consistency.
+      state.out.push({ tag: "Equal", lhs: lVar, rhs: XL, span: a.span });
+      state.out.push({ tag: "Equal", lhs: rVar, rhs: XR, span: a.span });
+      emitL = XL;
+      emitR = XR;
+      // Anchor unchanged after `^` — Max/Min would be no-ops.
+      updateAnchor = false;
+      break;
+    }
+    default:
+      throw new Error(`internal: unexpected marker ${(a as { marker: string }).marker}`);
+  }
+
+  // Now build the atom to emit. Variables in the user atom that aren't yet
+  // bound get pre-bound via Equals to fresh-id templates; Wildcards are
+  // substituted inline.
+  let userAtomTerms: Term[] = [];
+  for (const t of a.atom.terms) {
+    userAtomTerms.push(emitBindingsAndRewrite(t, state, k, a.span));
+  }
+  let weight = a.weight;
+  if (weight !== undefined) {
+    weight = emitBindingsAndRewrite(weight, state, k, a.span);
+  }
+  const userAtom: Atom = { terms: weight !== undefined ? [...userAtomTerms, weight] : userAtomTerms };
+
+  let rowAtom: Atom;
+  if (a.marker === "ask") {
+    // (_choose chooseId (userAtom))
+    const chooseTpl = freshChooseTemplate(state, k);
+    const cidName = `_cid_${k}`;
+    const chooseVar: Term = { tag: "Variable", name: cidName };
+    state.out.push({ tag: "Equal", lhs: chooseVar, rhs: chooseTpl, span: a.span });
+    state.seen.add(cidName);
+    // Note: chooseVar is synthetic; we don't add it to chain (it's not a
+    // user var, and downstream chain templates don't need it).
+    const wrapped: Term = { tag: "Atom", atom: userAtom };
+    rowAtom = { terms: [SYM_CHOOSE_ROW, chooseVar, wrapped] };
+  } else if (a.marker === "constrain") {
+    const wrapped: Term = { tag: "Atom", atom: userAtom };
+    rowAtom = { terms: [SYM_CONSTRAIN_ROW, wrapped] };
+  } else {
+    rowAtom = userAtom;
+  }
+
+  state.out.push({ tag: "Emit", atom: rowAtom, l: emitL, r: emitR, span: a.span });
+
+  // Now contribute lVar/rVar to chain for subsequent atoms.
+  state.seen.add(lName);
+  state.chain.push(lVar);
+  state.seen.add(rName);
+  state.chain.push(rVar);
+
+  // Anchor update.
+  if (updateAnchor) {
+    const XLnext = freshAnchorVar(state, "xl");
+    const XRnext = freshAnchorVar(state, "xr");
+    state.out.push({ tag: "Max", a: XL, b: emitL, out: XLnext, span: a.span });
+    state.out.push({ tag: "Min", a: XR, b: emitR, out: XRnext, span: a.span });
+    return { XL: XLnext, XR: XRnext };
+  }
+  return { XL, XR };
+}
