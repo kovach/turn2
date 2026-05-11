@@ -18,7 +18,8 @@ type Token =
   | { tag: "atom"; marker: Marker; text: string; line: number }
   | { tag: "equal"; text: string; line: number }
   | { tag: "schema"; text: string; line: number }
-  | { tag: "ruleEnd"; line: number };
+  | { tag: "ruleEnd"; line: number }
+  | { tag: "dot"; line: number };
 
 export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
@@ -91,6 +92,15 @@ function tokenize(input: string): Token[] | ParseError {
         atomStart = true;
         continue;
       }
+      if (ch === ".") {
+        // `.` is always a top-level separator: handles spaced `a . b`,
+        // leading-dot `.bar` / `.(sub)`, and produces the dot side of
+        // glued `foo.bar` (the atom-body scanner below breaks on `.`).
+        tokens.push({ tag: "dot", line: lineno });
+        pos++;
+        atomStart = true;
+        continue;
+      }
       if (atomStart && ch === "%") {
         const text = raw.slice(pos + 1).trim();
         tokens.push({ tag: "schema", text, line: lineno });
@@ -103,7 +113,7 @@ function tokenize(input: string): Token[] | ParseError {
       let depth = 0;
       while (pos < raw.length) {
         const c = raw[pos]!;
-        if (depth === 0 && (c === "," || c === ")")) break;
+        if (depth === 0 && (c === "," || c === ")" || c === ".")) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
         pos++;
@@ -134,6 +144,17 @@ function tokenize(input: string): Token[] | ParseError {
   return tokens;
 }
 
+// Temporary per-rule body item. `sub` carries an unresolved inner body
+// (still a `BodyItem[]`) so the dot-desugar pass can thread an outer
+// fresh var into the sub's first atom across the recursion. Final
+// `desugarBody` produces a real `RuleAtom[]`.
+type BodyItem =
+  | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom" or "Equal"
+  | { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span }
+  | { kind: "dot"; line: number };
+
+type AtomItem = Extract<RuleAtom, { tag: "Atom" }>;
+
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
@@ -155,8 +176,12 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     }
 
     const startLine = t.line;
-    const body: RuleAtom[] = [];
-    const stack: RuleAtom[][] = [body];
+    const body: BodyItem[] = [];
+    // Each stack frame is the inner body of the enclosing sub (or the
+    // outer rule body at index 0). We also track each open sub so its
+    // `sequence` flag and span can be patched at the matching close.
+    const stack: BodyItem[][] = [body];
+    const openSubs: { item: { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span } }[] = [];
     let depth = 0;
 
     while (i < tokens.length) {
@@ -170,10 +195,11 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         break;
       }
       if (tok.tag === "open") {
-        const inner: RuleAtom[] = [];
-        const sub: RuleAtom = { tag: "Sub", body: inner, sequence: false, span: { line: tok.line } };
-        stack[stack.length - 1]!.push(sub);
+        const inner: BodyItem[] = [];
+        const subItem = { kind: "sub" as const, inner, sequence: false, span: { line: tok.line } };
+        stack[stack.length - 1]!.push(subItem);
         stack.push(inner);
+        openSubs.push({ item: subItem });
         depth++;
         i++;
         continue;
@@ -181,34 +207,215 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       if (tok.tag === "close") {
         if (depth === 0) return { line: tok.line, message: "unmatched ')'" };
         stack.pop();
-        const parent = stack[stack.length - 1]!;
-        const subAtom = parent[parent.length - 1]!;
-        if (subAtom.tag !== "Sub") throw new Error("internal: top of close stack not Sub");
-        if (tok.sequence) subAtom.sequence = true;
+        const opened = openSubs.pop()!;
+        if (tok.sequence) opened.item.sequence = true;
         depth--;
+        i++;
+        continue;
+      }
+      if (tok.tag === "dot") {
+        stack[stack.length - 1]!.push({ kind: "dot", line: tok.line });
         i++;
         continue;
       }
       if (tok.tag === "equal") {
         const parsedEq = parseEqualText(tok.text, tok.line);
         if ("message" in parsedEq) return parsedEq;
-        stack[stack.length - 1]!.push(parsedEq);
+        stack[stack.length - 1]!.push({ kind: "atom", atom: parsedEq });
         i++;
         continue;
       }
       const parsed = parseAtomText(tok.text, tok.marker, tok.line);
       if ("message" in parsed) return parsed;
-      stack[stack.length - 1]!.push(parsed);
+      stack[stack.length - 1]!.push({ kind: "atom", atom: parsed });
       i++;
     }
 
     if (depth > 0) return { line: startLine, message: "unmatched '('" };
     if (body.length > 0) {
-      rules.push({ name: `r${ruleNo++}`, body, span: { line: startLine } });
+      const usedNames = new Set<string>();
+      collectUsedNames(body, usedNames);
+      const counter = { n: 1 };
+      const desugared = desugarBody(body, usedNames, counter, undefined);
+      if (!Array.isArray(desugared)) return desugared;
+      rules.push({ name: `r${ruleNo++}`, body: desugared, span: { line: startLine } });
     }
   }
 
   return { rules, schema };
+}
+
+// Walk all `BodyItem`s and collect every `Variable` name that appears
+// anywhere in their term trees. Used by `desugarBody` to mint fresh
+// `_dotN` names that don't collide with user-written ones.
+function collectUsedNames(items: BodyItem[], out: Set<string>): void {
+  for (const it of items) {
+    if (it.kind === "dot") continue;
+    if (it.kind === "sub") {
+      collectUsedNames(it.inner, out);
+      continue;
+    }
+    const a = it.atom;
+    if (a.tag === "Atom") {
+      for (const t of a.atom.terms) collectVarsInTerm(t, out);
+      if (a.weight !== undefined) collectVarsInTerm(a.weight, out);
+      if (a.lLit !== undefined) collectVarsInTerm(a.lLit, out);
+      if (a.rLit !== undefined) collectVarsInTerm(a.rLit, out);
+    } else if (a.tag === "Equal") {
+      collectVarsInTerm(a.lhs, out);
+      collectVarsInTerm(a.rhs, out);
+    }
+  }
+}
+
+function collectVarsInTerm(t: Term, out: Set<string>): void {
+  if (t.tag === "Variable") {
+    out.add(t.name);
+  } else if (t.tag === "Atom" || t.tag === "Id") {
+    for (const inner of t.atom.terms) collectVarsInTerm(inner, out);
+  }
+}
+
+function mintName(usedNames: Set<string>, counter: { n: number }): string {
+  while (true) {
+    const name = `_dot${counter.n++}`;
+    if (!usedNames.has(name)) {
+      usedNames.add(name);
+      return name;
+    }
+  }
+}
+
+// Anchor frame for the dot-desugar walk. See plans/v2-dot-notation.md.
+//   anchor:      the most recent `tag === "Atom"` RuleAtom in this frame
+//                (the would-be left of any incoming dot); null until the
+//                first such atom is seen.
+//   freshVar:    lazily allocated when this frame's anchor first needs
+//                to be threaded; once allocated, the var has been
+//                appended to anchor.atom.terms exactly once.
+//   pendingDot:  a `.` was just seen — the next atom/sub is the right.
+type Frame = {
+  anchor: AtomItem | null;
+  freshVar: Term | null;
+  pendingDot: boolean;
+  // Line of the most recent `dot` BodyItem, for error reporting.
+  dotLine: number;
+};
+
+function ensureFresh(frame: Frame, usedNames: Set<string>, counter: { n: number }): Term {
+  if (frame.freshVar !== null) return frame.freshVar;
+  const v: Term = { tag: "Variable", name: mintName(usedNames, counter) };
+  frame.freshVar = v;
+  if (frame.anchor !== null) frame.anchor.atom.terms.push(v);
+  return v;
+}
+
+// Walks `items` left-to-right. If `incoming` is supplied, the first
+// real atom encountered (drilling through nested subs as needed) is
+// treated as the right-hand side of a dot from the *caller's* frame —
+// it gets the caller's fresh var prepended (after the head symbol),
+// and the caller's anchor receives a single appended copy.
+function desugarBody(
+  items: BodyItem[],
+  usedNames: Set<string>,
+  counter: { n: number },
+  incoming: Frame | undefined,
+): RuleAtom[] | ParseError {
+  const out: RuleAtom[] = [];
+  const frame: Frame = { anchor: null, freshVar: null, pendingDot: false, dotLine: 0 };
+  let incomingPending = incoming !== undefined;
+
+  for (const it of items) {
+    if (it.kind === "dot") {
+      if (incomingPending) {
+        return { line: it.line, message: "dot must follow an atom" };
+      }
+      if (frame.pendingDot) {
+        return { line: it.line, message: "consecutive '.' with no atom between them" };
+      }
+      if (frame.anchor === null) {
+        return { line: it.line, message: "dot must follow an atom" };
+      }
+      if (frame.anchor.marker === "aggregate") {
+        return { line: it.line, message: "aggregate atom (with '-> weight') cannot appear on the left of '.'" };
+      }
+      frame.pendingDot = true;
+      frame.dotLine = it.line;
+      continue;
+    }
+
+    if (it.kind === "atom") {
+      const ra = it.atom;
+      // Right-of-dot must be a plain Atom (not Equal). Sub is handled
+      // by its own BodyItem branch below.
+      const dotFromOuter = incomingPending;
+      const dotFromLocal = frame.pendingDot;
+      if (dotFromOuter || dotFromLocal) {
+        if (ra.tag !== "Atom") {
+          const ln = dotFromLocal ? frame.dotLine : ra.span.line;
+          return { line: ln, message: "right of '.' must be a plain atom (not '=')" };
+        }
+        if (ra.atom.terms.length === 0) {
+          const ln = dotFromLocal ? frame.dotLine : ra.span.line;
+          return { line: ln, message: "right of '.' must have a head symbol" };
+        }
+        if (dotFromOuter) {
+          const v = ensureFresh(incoming!, usedNames, counter);
+          ra.atom.terms.splice(1, 0, v);
+          incomingPending = false;
+          // Now the freshly-spliced atom becomes our local anchor.
+          frame.anchor = ra;
+          frame.freshVar = null;
+        } else {
+          const v = ensureFresh(frame, usedNames, counter);
+          ra.atom.terms.splice(1, 0, v);
+          frame.pendingDot = false;
+          // Advance: the right atom is the new local anchor.
+          frame.anchor = ra;
+          frame.freshVar = null;
+        }
+        out.push(ra);
+        continue;
+      }
+      // No pending dot. If this is an `Atom`, it becomes the new
+      // anchor. `Equal` does not advance the anchor (a dot after an
+      // equal still chains off the prior real atom).
+      if (ra.tag === "Atom") {
+        frame.anchor = ra;
+        frame.freshVar = null;
+      }
+      out.push(ra);
+      continue;
+    }
+
+    // it.kind === "sub"
+    let subIncoming: Frame | undefined;
+    if (incomingPending) {
+      // Outer's pending dot crosses two sub-boundaries. Pass the outer
+      // frame straight through; the inner first-atom will append to
+      // the outer anchor.
+      subIncoming = incoming;
+      incomingPending = false;
+      // No local anchor change — sub doesn't advance.
+    } else if (frame.pendingDot) {
+      subIncoming = frame;
+      frame.pendingDot = false;
+      // sub doesn't advance the local anchor; freshVar stays so
+      // further `.(...)` siblings reuse the same var.
+    }
+    const innerOut = desugarBody(it.inner, usedNames, counter, subIncoming);
+    if (!Array.isArray(innerOut)) return innerOut;
+    out.push({ tag: "Sub", body: innerOut, sequence: it.sequence, span: it.span });
+  }
+
+  if (frame.pendingDot) {
+    return { line: frame.dotLine, message: "trailing '.' with no right-hand atom" };
+  }
+  if (incomingPending) {
+    // Outer dot was passed in but this body had no atom to receive it.
+    return { line: incoming!.dotLine, message: "'.' before empty sub-block" };
+  }
+  return out;
 }
 
 function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {

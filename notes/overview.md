@@ -1,3 +1,23 @@
+
+# 26/05/11
+
+# .dot notation
+
+plan: plans/v2-dot-notation.md
+
+new purely syntactic feature: writing `foo . bar` is a shorthand for a binary join: `foo X1, bar X1`
+more examples:
+  foo X . bar y Z -> foo X X1, bar X1 y Z
+  player . score -> S -> player P, score P -> S
+  player .hand .top-card C -> player P, hand P H, top-card H C
+  player.hand.top-card C -> player P, hand P H, top-card H C
+  turn .(actor A) .(index I) -> turn T, (actor T A), (index T I)
+  turn .(actor.name N) .foo F -> turn T, (actor T A, name A N), foo T F
+
+we should introduce a new temp IR that the parser produces containing dots;
+then we rewrite into the current IR with the fresh variables inserted
+nothing later changes
+
 # 26/05/10
 
 # move decompose first, fix lingering rule expansion issues

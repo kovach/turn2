@@ -4,6 +4,83 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../v2/parse.js";
 import type { Program, Rule, RuleAtom } from "../v2/types.js";
+import type { Term } from "../types.js";
+
+// Alpha-equivalence over parser-output rule bodies: same structure
+// up to a consistent bijection on Variable names. Symbols, Wildcards,
+// markers, Sub sequence flags, term shapes, and weight presence must
+// match exactly; only Variable.name is allowed to differ (consistently).
+function alphaEqualBody(a: RuleAtom[], b: RuleAtom[]): boolean {
+  return walkBody(a, b, new Map(), new Map());
+}
+
+function walkBody(a: RuleAtom[], b: RuleAtom[], ab: Map<string, string>, ba: Map<string, string>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!walkRA(a[i]!, b[i]!, ab, ba)) return false;
+  return true;
+}
+
+function walkRA(a: RuleAtom, b: RuleAtom, ab: Map<string, string>, ba: Map<string, string>): boolean {
+  if (a.tag !== b.tag) return false;
+  if (a.tag === "Atom" && b.tag === "Atom") {
+    if (a.marker !== b.marker) return false;
+    if (!walkTerms(a.atom.terms, b.atom.terms, ab, ba)) return false;
+    if ((a.weight === undefined) !== (b.weight === undefined)) return false;
+    if (a.weight && b.weight && !walkTerm(a.weight, b.weight, ab, ba)) return false;
+    return true;
+  }
+  if (a.tag === "Sub" && b.tag === "Sub") {
+    if (a.sequence !== b.sequence) return false;
+    return walkBody(a.body, b.body, ab, ba);
+  }
+  if (a.tag === "Equal" && b.tag === "Equal") {
+    return walkTerm(a.lhs, b.lhs, ab, ba) && walkTerm(a.rhs, b.rhs, ab, ba);
+  }
+  return false;
+}
+
+function walkTerms(a: Term[], b: Term[], ab: Map<string, string>, ba: Map<string, string>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!walkTerm(a[i]!, b[i]!, ab, ba)) return false;
+  return true;
+}
+
+function walkTerm(a: Term, b: Term, ab: Map<string, string>, ba: Map<string, string>): boolean {
+  if (a.tag !== b.tag) return false;
+  if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
+  if (a.tag === "Wildcard" && b.tag === "Wildcard") return true;
+  if (a.tag === "Variable" && b.tag === "Variable") {
+    const mappedA = ab.get(a.name);
+    const mappedB = ba.get(b.name);
+    if (mappedA !== undefined && mappedA !== b.name) return false;
+    if (mappedB !== undefined && mappedB !== a.name) return false;
+    ab.set(a.name, b.name);
+    ba.set(b.name, a.name);
+    return true;
+  }
+  if ((a.tag === "Atom" || a.tag === "Id") && a.tag === b.tag) {
+    return walkTerms(a.atom.terms, (b as typeof a).atom.terms, ab, ba);
+  }
+  return false;
+}
+
+// Parse two programs and assert their rule bodies are alpha-equivalent
+// rule-for-rule. Fails loudly when the parser silently drops content
+// (lengths mismatch) or produces a structurally different shape.
+function assertAlpha(dotForm: string, refForm: string, label: string): void {
+  const a = parse(dotForm);
+  const b = parse(refForm);
+  if ("message" in a) throw new Error(`${label}: dot-form parse error: ${a.message}`);
+  if ("message" in b) throw new Error(`${label}: ref-form parse error: ${b.message}`);
+  assert.equal(a.rules.length, b.rules.length, `${label}: rule count`);
+  for (let i = 0; i < a.rules.length; i++) {
+    const ok = alphaEqualBody(a.rules[i]!.body, b.rules[i]!.body);
+    assert(
+      ok,
+      `${label}: rule ${i} not alpha-equivalent\n  dot:  ${JSON.stringify(a.rules[i]!.body)}\n  ref:  ${JSON.stringify(b.rules[i]!.body)}`,
+    );
+  }
+}
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -173,6 +250,146 @@ target A T
   }
   assert(p.rules.length > 0);
   console.log(`PASS: tutorial program parses (${p.rules.length} rules, ${p.schema.size} schema decls)`);
+}
+
+// ---- dot-notation desugaring (plans/v2-dot-notation.md) ----
+//
+// Each test parses both a dot-form program and a hand-written reference
+// (comma-form) program, then asserts their rule bodies are
+// alpha-equivalent. Markers, weights, Sub structure, and term shapes
+// must match exactly; only Variable names may differ (consistently).
+// Caveat: if the parser silently dropped *all* dot content from both
+// sides equally, these would still pass. Length checks below guard
+// against that for the main examples.
+
+function err(input: string): { line: number; message: string } {
+  const p = parse(input);
+  assert("message" in p, `expected parse error for ${JSON.stringify(input)}, got program`);
+  return p as { line: number; message: string };
+}
+
+// Spaced dot, basic
+assertAlpha(
+  "foo X . bar y Z\n",
+  "foo X T, bar T y Z\n",
+  "dot — spaced basic",
+);
+
+// Aggregate on right
+assertAlpha(
+  "player . score -> S\n",
+  "player T, score T -> S\n",
+  "dot — aggregate on right",
+);
+
+// Leading-dot chain
+assertAlpha(
+  "player .hand .top-card C\n",
+  "player T1, hand T1 T2, top-card T2 C\n",
+  "dot — leading-dot chain",
+);
+// And a body-length sanity check (alpha-eq alone wouldn't catch a
+// silently-empty-on-both-sides parser).
+assert.equal(ok("player .hand .top-card C\n").rules[0]!.body.length, 3);
+
+// Glued vs spaced
+assertAlpha(
+  "player.hand.top-card C\n",
+  "player .hand .top-card C\n",
+  "dot — glued matches spaced",
+);
+
+// Counter resets across rules
+assertAlpha(
+  "foo X . bar Y\n\nbaz . qux\n",
+  "foo X T, bar T Y\n\nbaz U, qux U\n",
+  "dot — counter resets across rules",
+);
+
+// Sibling-sub sharing — single outer fresh var threaded into both subs
+assertAlpha(
+  "turn .(actor A) .(index I)\n",
+  "turn T, (actor T A), (index T I)\n",
+  "dot — sibling subs share fresh var",
+);
+
+// Nested dot inside sub, then continue
+assertAlpha(
+  "turn .(actor.name N) .foo F\n",
+  "turn T, (actor T A, name A N), foo T F\n",
+  "dot — nested sub then continue",
+);
+
+// Name-collision avoidance: user wrote _dot1 already, so the fresh
+// var must be a *different* name. Alpha-eq lets us write the ref
+// with a clean name; the important guard is that the dot-form's two
+// occurrences of the fresh var are bound to the same name.
+assertAlpha(
+  "foo X _dot1 . bar Y\n",
+  "foo X _dot1 T, bar T Y\n",
+  "dot — fresh names avoid user-written _dotN",
+);
+// Also: the generated name must not equal the user's _dot1.
+{
+  const p = ok("foo X _dot1 . bar Y\n");
+  const t0 = atom(p.rules[0]!.body[0]!).atom.terms;
+  const last = t0[t0.length - 1]!;
+  assert(last.tag === "Variable" && last.name !== "_dot1", "generated var collided with _dot1");
+}
+
+// Dot inside Sub body
+assertAlpha(
+  "(player . score)\n",
+  "(player T, score T)\n",
+  "dot — desugar inside Sub",
+);
+
+// Markers must survive desugaring — only term lists change.
+assertAlpha(
+  "~foo . bar Y\n",
+  "~foo T, bar T Y\n",
+  "dot — episode marker on left",
+);
+assertAlpha(
+  "foo . + bar Y\n",
+  "foo T, + bar T Y\n",
+  "dot — fact marker on right",
+);
+assertAlpha(
+  "~foo.bar.~baz\n",
+  "~foo T1, bar T1 T2, ~baz T2\n",
+  "dot — glued mixed-marker chain ~foo.bar.~baz",
+);
+assertAlpha(
+  "^foo . ! bar . ? baz X\n",
+  "^foo T1, ! bar T1 T2, ? baz T2 X\n",
+  "dot — anchor/constrain/ask markers preserved",
+);
+assertAlpha(
+  "turn .(~ actor A) .(+ index I)\n",
+  "turn T, (~ actor T A), (+ index T I)\n",
+  "dot — marker-tagged atoms inside sibling subs share fresh var",
+);
+
+// Errors — kept as direct ParseError checks.
+{
+  assert.match(err(". bar\n").message, /dot must follow an atom/);
+  assert.match(err("foo X . = a b\n").message, /right of '\.'/);
+  assert.match(err("foo X . . bar\n").message, /consecutive/);
+  assert.match(err("foo -> W . bar\n").message, /aggregate atom .* on the left of '\.'/);
+  assert.match(err("foo X .\n").message, /trailing '\.'/);
+  assert.match(err("foo . ()\n").message, /empty sub-block/);
+  assert.match(err("(. bar)\n").message, /dot must follow an atom/);
+  console.log("PASS: dot — errors");
+}
+
+// Sanity: alpha-equivalence rejects a real structural mismatch (so
+// the helper itself isn't trivially passing everything).
+{
+  const a = ok("foo X . bar Y\n");
+  const b = ok("foo X, bar Y\n"); // missing the threaded var
+  assert(!alphaEqualBody(a.rules[0]!.body, b.rules[0]!.body), "alphaEqualBody false-positive");
+  console.log("PASS: dot — alpha-equivalence helper rejects mismatches");
 }
 
 console.log("ALL v2 parse tests passed");

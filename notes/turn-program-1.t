@@ -7,7 +7,7 @@ play-card E
 it E Card
 ~ move Card play-area
 
--- an atom is a sequence of terms or variables. terms are lower-case, variables uppercase or start with `_`. `_` alone is the blank
+-- an atom is a sequence of terms or variables. terms are lower-case, variables uppercase or start with `_`. `_` alone is the wildcard/blank that doesn't bind its value
 -- atoms are separated by newlines or `,`. the previous is equivalently:
 
 play-card E, it E Card, ~ move Card play-area
@@ -16,7 +16,7 @@ play-card E, it E Card, ~ move Card play-area
 -- each atom is a pattern
 -- like the current implementation, each stored tuple has time information attached
 -- unlike the current implementation, this time info is now a pair of terms representing start and end points in time
--- an *interval* is a pair (l, t) of values called *moments*.
+-- an *interval* is a pair (l, r) of values called *moments*.
 -- the database stores both tuples (each having an interval) and moment ordering facts (statements that m1 < m2)
 
 -- queries match only tuples that *overlap*:

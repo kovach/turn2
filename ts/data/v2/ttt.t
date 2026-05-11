@@ -3,6 +3,7 @@
 -- aggregate decls
 % fills -> count
 
+
 ~ game
   ( ~ setup );
   ( ~ turn
@@ -85,3 +86,13 @@ filled (cell z (s (s z))) M
 + won M diag2
 
 
+
+= V1 (*mom r1 1 l)
+= V2 (*mom r1 1 r)
+= V3 (*mom r1 2 V1 V2 V1 V2 l)
+= V4 (*mom r1 2 V1 V2 V1 V2 r)
+= V5 (*mom r1 3 V1 V2 V1 V2 V3 V4 V3 V4 V4 l)
+= V6 (*mom r1 3 V1 V2 V1 V2 V3 V4 V3 V4 V4 r)
+= V7 (*id r5 2 V5 V6 V5 V6 c)
+= V8 (cell (s z) z)
+^ is V7 V8
