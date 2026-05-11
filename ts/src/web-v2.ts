@@ -80,7 +80,35 @@ let loadedFile: string | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveStatus: "idle" | "pending" | "saving" | "error" = "idle";
 
+// Playground mode: when the page is loaded at /v2/playground, the source is
+// read from / written to the `?code=` URL param (URL-safe base64). No server
+// PUTs happen; the textarea state lives entirely in the URL so it's shareable.
+const playgroundMode = window.location.pathname === "/v2/playground";
+
 const SAVE_DEBOUNCE_MS = 400;
+
+function b64UrlEncode(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function b64UrlDecode(s: string): string {
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+function updatePlaygroundUrl(): void {
+  if (!playgroundMode) return;
+  const code = b64UrlEncode(sourceEl.value);
+  const url = new URL(window.location.href);
+  url.searchParams.set("code", code);
+  window.history.replaceState(null, "", url.toString());
+}
 
 function schedulePut(): void {
   if (loadedFile === null) return;
@@ -183,7 +211,8 @@ function saveMarker(): string {
 
 function updateFileNameDisplay(displayName: string | null): void {
   const parts: string[] = [];
-  if (loadedFile !== null) parts.push(`${loadedFile} ${saveMarker()}`);
+  if (playgroundMode) parts.push("(playground)");
+  else if (loadedFile !== null) parts.push(`${loadedFile} ${saveMarker()}`);
   else parts.push("(detached)");
   if (displayName) parts.push(`display: ${displayName}`);
   fileNameEl.textContent = parts.join("  ");
@@ -470,7 +499,8 @@ function scheduleRun(): void {
 
 sourceEl.addEventListener("input", () => {
   scheduleRun();
-  schedulePut();
+  if (playgroundMode) updatePlaygroundUrl();
+  else schedulePut();
   updateCursorLine();
 });
 
@@ -715,16 +745,26 @@ hideInternalEl.addEventListener("change", () => {
 // Bootstrap: try to load `data/v2/ttt.t` from the server. If unavailable
 // (static file server not running), the textarea starts empty.
 async function bootstrap(): Promise<void> {
-  const name = "ttt.t";
-  try {
-    const res = await fetch(`/api/v2-file/${encodeURIComponent(name)}`);
-    if (res.ok) {
-      const { content } = await res.json() as { content: string };
-      sourceEl.value = content;
-      loadedFile = name;
+  if (playgroundMode) {
+    const code = new URL(window.location.href).searchParams.get("code");
+    if (code) {
+      try { sourceEl.value = b64UrlDecode(code); }
+      catch { /* malformed — leave empty */ }
     }
-  } catch {
-    // No server — stay detached; edits won't save.
+    // Ensure the URL always carries the current code (even if empty/missing).
+    updatePlaygroundUrl();
+  } else {
+    const name = "ttt.t";
+    try {
+      const res = await fetch(`/api/v2-file/${encodeURIComponent(name)}`);
+      if (res.ok) {
+        const { content } = await res.json() as { content: string };
+        sourceEl.value = content;
+        loadedFile = name;
+      }
+    } catch {
+      // No server — stay detached; edits won't save.
+    }
   }
   try {
     const saved = sessionStorage.getItem(TAB_KEY);

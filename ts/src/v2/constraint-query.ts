@@ -25,6 +25,7 @@ import {
   tokenOf,
   type Store,
 } from "./store.js";
+import { aggregateOver } from "./scheduler.js";
 
 export type { ComponentOptions };
 
@@ -88,28 +89,37 @@ function activeTokensIn(atom: Atom, store: Store, activeSet: Set<number>): Set<n
 
 interface ConstrainRow {
   rowIndex: number;
+  // "plain": match candidates one tuple at a time by overlap + structural
+  // unification. "agg": fold candidates whose interval *contains* this row's
+  // interval via the relation's schema aggregator (no `_do-agg`/`_agg-
+  // result` rows are inserted into the store).
+  kind: "plain" | "agg";
   // The wrapped atom inside the constrain row's terms[1].
   wrapped: Atom;
   // Active tokens this row touches.
   touched: Set<number>;
   // The constrain row's own stored interval. Candidates for this row's
-  // wrapped atom are filtered to tuples whose interval overlaps [l, r] —
-  // each row in a component anchors its own query independently.
+  // wrapped atom are filtered to tuples whose interval overlaps [l, r]
+  // (plain) or contains [l, r] (agg) — each row in a component anchors its
+  // own query independently.
   l: Term;
   r: Term;
 }
 
 function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow[] {
   const out: ConstrainRow[] = [];
-  for (const idx of candidatesByHead(store, "_constrain")) {
-    const t = store.tuples[idx]!;
-    const wrappedTerm = t.atom.terms[1];
-    if (wrappedTerm === undefined) continue;
-    const wrapped = unwrapAtom(wrappedTerm, store);
-    if (wrapped === null) continue;
-    const touched = activeTokensIn(wrapped, store, activeSet);
-    if (touched.size === 0) continue;
-    out.push({ rowIndex: idx, wrapped, touched, l: t.l, r: t.r });
+  for (const head of ["_constrain", "_constrain-agg"] as const) {
+    const kind = head === "_constrain" ? "plain" : "agg";
+    for (const idx of candidatesByHead(store, head)) {
+      const t = store.tuples[idx]!;
+      const wrappedTerm = t.atom.terms[1];
+      if (wrappedTerm === undefined) continue;
+      const wrapped = unwrapAtom(wrappedTerm, store);
+      if (wrapped === null) continue;
+      const touched = activeTokensIn(wrapped, store, activeSet);
+      if (touched.size === 0) continue;
+      out.push({ rowIndex: idx, kind, wrapped, touched, l: t.l, r: t.r });
+    }
   }
   return out;
 }
@@ -182,6 +192,7 @@ function runComponent(
   comp: RawComponent,
   activeSet: Set<number>,
   termByTok: Map<number, Term>,
+  schema: Map<string, string>,
 ): ComponentOptions {
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
@@ -212,6 +223,10 @@ function runComponent(
     const row = comp.rows[rowIdx]!;
     const headTerm = row.wrapped.terms[0];
     if (headTerm === undefined || headTerm.tag !== "Symbol") return;
+    if (row.kind === "agg") {
+      runAggRow(row, sub, go, rowIdx, store, activeSet, schema);
+      return;
+    }
     const arity = row.wrapped.terms.length;
     for (const cidx of candidatesByHead(store, headTerm.name)) {
       const cand = store.tuples[cidx]!;
@@ -234,6 +249,51 @@ function runComponent(
 
   go(0, new Map());
   return { activeTerms, options };
+}
+
+// Evaluate one `_constrain-agg` row. Build an agg-pattern from `row.wrapped`
+// by rewriting active-token positions and the weight slot to `_free`, run
+// `aggregateOver`, then for each resulting group unify the original wrapped
+// pattern back against the group's filled terms + aggregated weight via
+// `matchTerm` (active tokens act as substitution slots, others demand
+// hashcons-token equality). Recurse to the next row per successful unify.
+function runAggRow(
+  row: ConstrainRow,
+  sub: Map<number, Term>,
+  go: (rowIdx: number, sub: Map<number, Term>) => void,
+  rowIdx: number,
+  store: Store,
+  activeSet: Set<number>,
+  schema: Map<string, string>,
+): void {
+  const wrapped = row.wrapped;
+  const arity = wrapped.terms.length;
+  if (arity < 2) return;
+  const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
+  const aggTerms: Term[] = [wrapped.terms[0]!];
+  for (let i = 1; i < arity - 1; i++) {
+    const t = wrapped.terms[i]!;
+    aggTerms.push(activeSet.has(tokenOf(store, t)) ? SYM_FREE : t);
+  }
+  aggTerms.push(SYM_FREE); // weight position always free
+  const aggPattern: Atom = { terms: aggTerms };
+  const results = aggregateOver(store, aggPattern, row.l, row.r, schema);
+  for (const res of results) {
+    const trial = new Map(sub);
+    let ok = true;
+    // res.filledTerms has length arity-1 (head + keys). Unify each key
+    // position against the original wrapped pattern's term.
+    for (let i = 1; i < arity - 1; i++) {
+      if (!matchTerm(wrapped.terms[i]!, res.filledTerms[i]!, trial, store, activeSet)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    // Unify the weight slot.
+    if (!matchTerm(wrapped.terms[arity - 1]!, res.weight, trial, store, activeSet)) continue;
+    go(rowIdx + 1, trial);
+  }
 }
 
 // Match pattern term against value term, threading substitutions for active
@@ -278,6 +338,7 @@ function childrenOf(term: Term, store: Store): readonly Term[] | null {
 export function computeComponents(
   store: Store,
   blocked: BlockedChoose[],
+  schema: Map<string, string>,
 ): ComputeComponentsResult {
   const { activeSet, termByTok } = gatherChoiceContext(store, blocked);
   if (activeSet.size === 0) return { kind: "ok", components: [] };
@@ -301,6 +362,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, activeSet, termByTok));
+  const out = components.map((c) => runComponent(store, c, activeSet, termByTok, schema));
   return { kind: "ok", components: out };
 }

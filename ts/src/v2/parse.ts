@@ -478,7 +478,7 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   const atom: Atom = { terms };
   // Head syms starting with `*` are reserved for compiler-generated identity
   // terms (e.g. `*id`, `*mom`, `*choose`). Engine-emitted predicates like
-  // `_choose` / `_constrain` / `_do-agg` / `_agg-result` are reserved by the
+  // `_choose` / `_constrain` / `_constrain-agg` / `_do-agg` / `_agg-result` are reserved by the
   // general `_`-prefix rule (such tokens parse as Variables, not Symbols, so
   // they cannot appear as a Symbol head from user source).
   const headTerm = atom.terms[0];
@@ -489,6 +489,7 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   // is an aggregate, not a match.
   let outMarker: Marker = marker;
   if (marker === "match" && weight !== undefined) outMarker = "aggregate";
+  if (marker === "constrain" && weight !== undefined) outMarker = "constrain-aggregate";
   const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line } };
   if (weight !== undefined) out.weight = weight;
   return out;

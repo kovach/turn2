@@ -134,6 +134,7 @@ const SYM_MOM: Term = { tag: "Symbol", name: "*mom" };
 const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
+const SYM_CONSTRAIN_AGG_ROW: Term = { tag: "Symbol", name: "_constrain-agg" };
 const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
 const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
 const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
@@ -474,7 +475,8 @@ function decomposeEmit(
   switch (a.marker) {
     case "fact":
     case "ask":
-    case "constrain": {
+    case "constrain":
+    case "constrain-aggregate": {
       // l = fresh moment, r = top.
       const momL = freshMomTemplate(state, k, "l");
       state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
@@ -539,6 +541,15 @@ function decomposeEmit(
   } else if (a.marker === "constrain") {
     const wrapped: Term = { tag: "Atom", atom: userAtom };
     rowAtom = { terms: [SYM_CONSTRAIN_ROW, wrapped] };
+  } else if (a.marker === "constrain-aggregate") {
+    // userAtom already includes the trailing weight position (decomposeEmit
+    // appends `weight` to userAtomTerms above). The wrapped pattern's
+    // layout matches `_do-agg`'s: [head, k1..kK, weight]. The constraint-
+    // query enumerator rewrites active-token positions + the weight slot
+    // to `_free` at evaluation time, then folds via the relation's schema
+    // aggregator.
+    const wrapped: Term = { tag: "Atom", atom: userAtom };
+    rowAtom = { terms: [SYM_CONSTRAIN_AGG_ROW, wrapped] };
   } else {
     rowAtom = userAtom;
   }

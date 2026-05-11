@@ -1,6 +1,20 @@
 
 # 26/05/11
 
+# default display
+plan: plans/v2-default-display.md
+
+sketch a plan for a "default display" that works for any program.
+  we'll use a special `icon` predicate to mark terms that want a visual representation.
+  each will get a div in display with the term pretty-printed as the label text.
+  then when a term is a valid choice for exactly one of the active components,
+    its icon can be clicked to create the `is` tuple
+
+# constrain by aggregate
+plan: plans/constrain-aggregate.md
+
+- handle `! at X -> Y` properly
+
 # .dot notation
 
 plan: plans/v2-dot-notation.md

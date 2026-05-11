@@ -32,6 +32,11 @@ export type MatchConstraint = "any" | "delta" | "old";
 //                by the parser when a default-marker atom carries a
 //                trailing `-> weight`. splitRule slices the body at the
 //                producer Emit's position.
+//   constrain-aggregate -> like constrain, but the wrapped row is
+//                (_constrain-agg atom) and the constraint-query enumerator
+//                folds candidates via the relation's schema aggregator
+//                instead of structurally unifying against one tuple at a
+//                time. Set by the parser when `!` carries a `-> weight`.
 export type Marker =
   | "match"
   | "episode"
@@ -39,7 +44,8 @@ export type Marker =
   | "anchor"
   | "ask"
   | "constrain"
-  | "aggregate";
+  | "aggregate"
+  | "constrain-aggregate";
 
 export type RuleAtom =
   // ----- Pre-expand only -----

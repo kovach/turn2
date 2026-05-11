@@ -93,8 +93,8 @@ export interface TimelineLayout {
 
 // --- Classification ---
 
-const SIDEBAR_HEADS = new Set(["is", "_constrain"]);
-const INTERNAL_HEADS = new Set(["_choose", "_constrain", "_do-agg", "_agg-result"]);
+const SIDEBAR_HEADS = new Set(["is", "_constrain", "_constrain-agg"]);
+const INTERNAL_HEADS = new Set(["_choose", "_constrain", "_constrain-agg", "_do-agg", "_agg-result"]);
 
 function headSym(atom: Atom): string | null {
   const h = atom.terms[0];

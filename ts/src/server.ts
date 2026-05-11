@@ -92,7 +92,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname === "/v2" || pathname === "/index-v2.html") {
+  if (pathname === "/v2" || pathname === "/index-v2.html" || pathname === "/v2/playground") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(fs.readFileSync(path.join(ROOT, "index-v2.html")));
     return;

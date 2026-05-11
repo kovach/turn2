@@ -83,7 +83,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     }
     // Earliest tier is all choices.
     const choices = collectBlockedChooses(store);
-    const cc = computeComponents(store, choices);
+    const cc = computeComponents(store, choices, expanded.schema);
     if (cc.kind === "empty-fringe-error") {
       return {
         store,

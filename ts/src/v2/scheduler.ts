@@ -174,8 +174,43 @@ export function closeDoAgg(
   schema: Map<string, string>,
 ): boolean {
   const wrapped = blocked.wrappedAtom;
+  const results = aggregateOver(store, wrapped, blocked.l, blocked.r, schema);
+  let any = false;
+  for (const r of results) {
+    if (emitAggResultRow(store, blocked, wrapped, r.rep, r.weight)) any = true;
+  }
+  return any;
+}
+
+// Generic aggregation over candidates inside `[l, r]` matching the
+// `_do-agg`-style wrapped pattern `[head, k1..kK, weight]`. Returns one
+// result per group (sum/count) or one per maximal candidate per group
+// (last). Each result carries the `filledTerms` for the wrapped-pattern
+// positions (with free positions substituted by the representative
+// candidate's actual values) plus the aggregated `weight`. Empty input:
+// `last` -> []; sum/count with no free key positions -> one zero row;
+// sum/count with free key positions -> [].
+export interface AggregateResult {
+  // Wrapped-pattern positions 0..arity-2 substituted with rep values where
+  // the position contained `_free`. Length arity-1 (head + keys, no weight).
+  filledTerms: Term[];
+  // Aggregated weight (sum/count) or candidate weight (last).
+  weight: Term;
+  // Representative candidate (group's first; for `last`, the maximal
+  // candidate this result corresponds to). null only for the zero-row case
+  // with no free key positions and no contributions.
+  rep: { terms: readonly Term[] } | null;
+}
+
+export function aggregateOver(
+  store: Store,
+  wrapped: Atom,
+  l: Term,
+  r: Term,
+  schema: Map<string, string>,
+): AggregateResult[] {
   const headTerm = wrapped.terms[0];
-  if (headTerm === undefined || headTerm.tag !== "Symbol") return false;
+  if (headTerm === undefined || headTerm.tag !== "Symbol") return [];
   const aggName = schema.get(headTerm.name);
   if (aggName === undefined) {
     throw new Error(`weighted query '${headTerm.name}' has no schema declaration`);
@@ -189,11 +224,11 @@ export function closeDoAgg(
   // contains `_free` at any depth; otherwise its candidate value must match
   // the wrapped pattern by recursive token unification.
   const arity = wrapped.terms.length;
-  if (arity < 2) return false;
+  if (arity < 2) return [];
 
-  // Candidates: tuples with same head sym + arity, interval contains the
-  // do-agg's interval, and each non-free wrapped position structurally
-  // matches the candidate's term.
+  // Candidates: tuples with same head sym + arity, interval contains
+  // [l, r], and each non-free wrapped position structurally matches the
+  // candidate's term.
   type Cand = { idx: number; terms: readonly Term[] };
   const candidates: Cand[] = [];
   for (const idx of candidatesByHead(store, headTerm.name)) {
@@ -202,7 +237,7 @@ export function closeDoAgg(
     // pattern doesn't (it's user-pattern + weight). Skip the id when
     // checking arity / matching positions.
     if (t.atom.terms.length !== arity + 1) continue;
-    if (!intervalContains(store, t.l, t.r, blocked.l, blocked.r)) continue;
+    if (!intervalContains(store, t.l, t.r, l, r)) continue;
     let ok = true;
     for (let i = 0; i < arity; i++) {
       if (!matchFreePattern(wrapped.terms[i]!, t.atom.terms[i]!, store)) {
@@ -228,35 +263,36 @@ export function closeDoAgg(
     if (bucket === undefined) { bucket = []; groups.set(sig, bucket); }
     bucket.push(c);
   }
-  if (groups.size === 0) {
-    // No contributions.
-    //   - last fails (per spec, last on empty has no agg-result).
-    //   - With free key positions (group-by), there are no groups — emit
-    //     nothing. Otherwise the consumer's match against the agg-result's
-    //     inner pattern would unify its key Variables against the literal
-    //     `_free` Symbol, and that bogus binding would leak into downstream
-    //     emissions.
-    //   - With no free key positions, "empty" still means a single fully-
-    //     specified group with count/sum zero — emit one zero row.
-    if (aggName === "last") return false;
-    if (keyPositions.length > 0) return false;
-    return emitAggResultRow(store, blocked, wrapped, null, aggregator.zero);
-  }
 
-  let any = false;
+  const out: AggregateResult[] = [];
+  if (groups.size === 0) {
+    // No contributions:
+    //   - last: no result.
+    //   - sum/count with free key positions: no groups -> no result.
+    //   - sum/count with no free key positions: one zero-row result.
+    if (aggName === "last") return out;
+    if (keyPositions.length > 0) return out;
+    out.push({ filledTerms: buildFilledTerms(wrapped, null, store), weight: aggregator.zero, rep: null });
+    return out;
+  }
   for (const group of groups.values()) {
     if (aggName === "last") {
+      // `c` is dominated by `d` iff c started strictly before d (comparing
+      // left endpoints). Right endpoints are unsuitable because `+` facts
+      // extend to SYM_TOP, so c.r <= d.l is never true for persistent
+      // facts even when c was emitted strictly before d.
       const maximal = group.filter((c) => {
         const ci = store.tuples[c.idx]!;
         for (const d of group) {
           if (d === c) continue;
           const di = store.tuples[d.idx]!;
-          if (lessEq(store, ci.r, di.l) && comparable(store, ci.r, di.l)) return false;
+          if (!comparable(store, ci.l, di.l)) continue;
+          if (lessEq(store, ci.l, di.l) && !lessEq(store, di.l, ci.l)) return false;
         }
         return true;
       });
       for (const c of maximal) {
-        if (emitAggResultRow(store, blocked, wrapped, c, c.terms[arity - 1]!)) any = true;
+        out.push({ filledTerms: buildFilledTerms(wrapped, c, store), weight: c.terms[arity - 1]!, rep: c });
       }
       continue;
     }
@@ -264,9 +300,32 @@ export function closeDoAgg(
     for (const c of group) {
       try { acc = aggregator.fold(acc, c.terms[arity - 1]!); } catch { /* skip */ }
     }
-    if (emitAggResultRow(store, blocked, wrapped, group[0]!, acc)) any = true;
+    const rep = group[0]!;
+    out.push({ filledTerms: buildFilledTerms(wrapped, rep, store), weight: acc, rep });
   }
-  return any;
+  return out;
+}
+
+// Fill the wrapped pattern's positions 0..arity-2 (head + keys, no weight):
+// each free-containing position is replaced by the representative candidate's
+// actual value at that index. Non-free positions are kept as-is.
+function buildFilledTerms(
+  wrapped: Atom,
+  rep: { terms: readonly Term[] } | null,
+  store: Store,
+): Term[] {
+  const arity = wrapped.terms.length;
+  const filled: Term[] = [];
+  for (let i = 0; i < arity - 1; i++) {
+    const w = wrapped.terms[i]!;
+    if (containsFree(w, store)) {
+      if (rep === null) filled.push(w);
+      else filled.push(rep.terms[i]!);
+    } else {
+      filled.push(w);
+    }
+  }
+  return filled;
 }
 
 // Construct an agg-result row. Its 3rd term mirrors the wrapped pattern's
@@ -280,23 +339,7 @@ function emitAggResultRow(
   rep: { terms: readonly Term[] } | null,
   weight: Term,
 ): boolean {
-  const arity = wrapped.terms.length;
-  const filledTerms: Term[] = [];
-  for (let i = 0; i < arity - 1; i++) {
-    const w = wrapped.terms[i]!;
-    if (containsFree(w, store)) {
-      if (rep === null) {
-        // No representative — only reachable when groups.size === 0 and
-        // there are no key positions, so this branch should never see a
-        // free-containing position.
-        filledTerms.push(w);
-      } else {
-        filledTerms.push(rep.terms[i]!);
-      }
-    } else {
-      filledTerms.push(w);
-    }
-  }
+  const filledTerms = buildFilledTerms(wrapped, rep, store);
   filledTerms.push(weight);
   const inner: Term = { tag: "Atom", atom: { terms: filledTerms.map((t) => hashconsTerm(t, store.hash)) } };
   const internedInner = hashconsTerm(inner, store.hash);
