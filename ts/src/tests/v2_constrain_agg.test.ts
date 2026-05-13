@@ -41,7 +41,7 @@ function optionSet(store: Store, options: Term[][]): Set<string> {
 //    `_constrain-agg` row, not `_constrain`.
 {
   const src = `
-% score key -> sum
+#acc score key -> sum
 + a
 
 a
@@ -60,7 +60,7 @@ a
 //    options to the (key, sum) pairs.
 {
   const src = `
-% score key -> sum
+#acc score key -> sum
 + score a 3
 + score a 5
 + score b 4
@@ -91,7 +91,7 @@ turn
   // Two distinct keys with one weight each; the active vars get bound to
   // each (key, weight) pair.
   const src = `
-% score key -> last
+#acc score key -> last
 + score a 1
 + score b 2
 + turn
@@ -112,7 +112,7 @@ turn
 // 4) Empty contribution set with `last` and free key: no options.
 {
   const src = `
-% score key -> last
+#acc score key -> last
 + turn
 
 turn
@@ -133,7 +133,7 @@ turn
 // 5) User-supplied case: `at e -> last` with sequential ~game subrules.
 {
   const src = `
-% at e -> last
+#acc at e -> last
 
 ~game
   (~a); (~a'); (~b)

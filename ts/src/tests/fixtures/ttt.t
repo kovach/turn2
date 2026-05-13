@@ -19,9 +19,9 @@
 --   : name        — (label-only in old syntax; dropped)
 
 -- aggregate decls
-% fills -> count
+#acc fills -> count
 
-% turn-counter -> count
+#acc turn-counter -> count
 
 turn
 + turn-counter -> x

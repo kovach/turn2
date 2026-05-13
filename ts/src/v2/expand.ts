@@ -184,9 +184,18 @@ function chainTemplateWithHead(state: DecState, lexPos: number, head: Term, trai
   return { tag: "Id", atom: { terms } };
 }
 
-// `freshIdTerm(varName)` template: `(*id rule lexPos ...chain <varName>)`
+// Convert a Variable name to a Symbol injectively. Prepending `:` is safe:
+// `:` can begin a Symbol token but never begins a Variable (parser only
+// recognizes Variables starting with A-Z or `_`). Used to embed a user
+// variable's identity as a slot tag inside Id templates without losing the
+// Symbol/Variable distinction on round-trip through compressRefs / parse.
+function variableToSymbol(v: { tag: "Variable"; name: string }): { tag: "Symbol"; name: string } {
+  return { tag: "Symbol", name: ":" + v.name };
+}
+
+// `freshIdTerm(varName)` template: `(*id rule lexPos ...chain <:varName>)`
 function freshIdTemplate(state: DecState, lexPos: number, varName: string): Term {
-  return chainTemplateWithHead(state, lexPos, SYM_ID, { tag: "Symbol", name: varName.toLowerCase() });
+  return chainTemplateWithHead(state, lexPos, SYM_ID, variableToSymbol({ tag: "Variable", name: varName }));
 }
 
 // `freshChooseId` template: `(*choose rule lexPos ...chain)`

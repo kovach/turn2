@@ -135,7 +135,7 @@ episode E, ( some-property E P )
 --       if multiple "last" atoms, this aggregation is multi-valued
 -- suppose we declare
 
-% points -> sum
+#acc points -> sum
 
 -- with the rule
 

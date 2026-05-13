@@ -148,6 +148,10 @@ export type RuleAtom =
 
 export interface Rule {
   name: string;
+  // Set when source carried `#def <name>`. Auto-named rules leave this
+  // undefined; the post-parse name-resolution pass fills `name` either
+  // way.
+  explicitName?: string;
   body: RuleAtom[];
   span: Span;
   // Set by `generateDeltaVariants`: head symbol of the variant's `"delta"`

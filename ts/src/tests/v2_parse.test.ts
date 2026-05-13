@@ -179,7 +179,7 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 
 // 8) schema decl
 {
-  const p = ok("% points -> sum\n+ points -> 3\n");
+  const p = ok("#acc points -> sum\n+ points -> 3\n");
   assert.equal(p.schema.get("points"), "sum");
   assert.equal(p.rules.length, 1);
   console.log("PASS: schema decl");
@@ -197,6 +197,54 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
     { tag: "Variable", name: "X" },
   ]);
   console.log("PASS: compound term in atom");
+}
+
+// 9b) #def names a rule
+{
+  const p = ok("#def activate\nfoo X\n+ bar X\n");
+  assert.equal(p.rules.length, 1);
+  assert.equal(p.rules[0]!.name, "activate");
+  assert.equal(p.rules[0]!.explicitName, "activate");
+  console.log("PASS: #def names a rule");
+}
+
+// 9c) unnamed rules keep r{N} by source position; named coexist
+{
+  const p = ok("foo\n\n#def named\nbar\n\nbaz\n");
+  assert.equal(p.rules.length, 3);
+  assert.equal(p.rules[0]!.name, "r1");
+  assert.equal(p.rules[1]!.name, "named");
+  assert.equal(p.rules[2]!.name, "r3");
+  console.log("PASS: #def positional auto-names");
+}
+
+// 9d) duplicate #def names → parse error
+{
+  const e = err("#def foo\nbar\n\n#def foo\nbaz\n");
+  assert.match(e.message, /duplicate rule name 'foo'/);
+  console.log("PASS: duplicate #def rejected");
+}
+
+// 9e) reserved-shape #def names
+{
+  assert.match(err("#def r3\nbar\n").message, /reserved for auto-naming/);
+  assert.match(err("#def _foo\nbar\n").message, /lowercase symbol/);
+  assert.match(err("#def Foo\nbar\n").message, /lowercase symbol/);
+  assert.match(err("#def foo bar\nbaz\n").message, /exactly one name/);
+  assert.match(err("#def\nbar\n").message, /requires a rule name/);
+  console.log("PASS: #def name shape checks");
+}
+
+// 9f) #def with no following rule → error
+{
+  assert.match(err("#def foo\n").message, /must precede a rule/);
+  console.log("PASS: dangling #def rejected");
+}
+
+// 9g) unknown command
+{
+  assert.match(err("#xyz blah\nfoo\n").message, /unknown command '#xyz'/);
+  console.log("PASS: unknown # command rejected");
 }
 
 // 10) wildcard and underscore variable

@@ -177,7 +177,7 @@ prop X Y
 // 6) aggregation: % points -> sum
 {
   const src = `
-% points -> sum
+#acc points -> sum
 
 + points -> 3
 + points -> 4
@@ -196,7 +196,7 @@ points -> N
 // per distinct X value, with the weights summed within each group.
 {
   const src = `
-% score -> sum
+#acc score -> sum
 
 ~ game, ( ~ init ); ( ~ check )
 

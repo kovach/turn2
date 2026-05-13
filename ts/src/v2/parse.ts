@@ -17,9 +17,14 @@ type Token =
   | { tag: "close"; sequence: boolean; line: number }
   | { tag: "atom"; marker: Marker; text: string; line: number }
   | { tag: "equal"; text: string; line: number }
-  | { tag: "schema"; text: string; line: number }
+  | { tag: "command"; name: string; argText: string; line: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number };
+
+// Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
+type Command =
+  | { kind: "def"; name: string; line: number }
+  | { kind: "acc"; decl: SchemaDecl };
 
 export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
@@ -101,9 +106,16 @@ function tokenize(input: string): Token[] | ParseError {
         atomStart = true;
         continue;
       }
-      if (atomStart && ch === "%") {
-        const text = raw.slice(pos + 1).trim();
-        tokens.push({ tag: "schema", text, line: lineno });
+      if (atomStart && ch === "#") {
+        const rest = raw.slice(pos + 1);
+        const trimmed = rest.trimStart();
+        const ws = trimmed.search(/\s/);
+        const name = ws < 0 ? trimmed : trimmed.slice(0, ws);
+        const argText = ws < 0 ? "" : trimmed.slice(ws).trim();
+        if (name.length === 0) {
+          return { line: lineno, message: "'#' must be followed by a command name" };
+        }
+        tokens.push({ tag: "command", name, argText, line: lineno });
         pos = raw.length;
         atomStart = true;
         continue;
@@ -155,27 +167,67 @@ type BodyItem =
 
 type AtomItem = Extract<RuleAtom, { tag: "Atom" }>;
 
+function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseError {
+  if (tok.name === "def") {
+    const tokens = tokenizeTermText(tok.argText);
+    if (tokens.length === 0) {
+      return { line: tok.line, message: "'#def' requires a rule name" };
+    }
+    if (tokens.length > 1) {
+      return { line: tok.line, message: "'#def' takes exactly one name" };
+    }
+    const name = tokens[0]!;
+    if (!isSymToken(name)) {
+      return { line: tok.line, message: `'#def' name must be a lowercase symbol (got '${name}')` };
+    }
+    if (/^r\d+$/.test(name)) {
+      return { line: tok.line, message: `'#def' name '${name}' is reserved for auto-naming` };
+    }
+    return { kind: "def", name, line: tok.line };
+  }
+  if (tok.name === "acc") {
+    const decl = parseSchemaText(tok.argText, tok.line);
+    if ("message" in decl) return decl;
+    return { kind: "acc", decl };
+  }
+  return { line: tok.line, message: `unknown command '#${tok.name}'` };
+}
+
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
   let i = 0;
-  let ruleNo = 1;
 
   while (i < tokens.length) {
     const t = tokens[i]!;
     if (t.tag === "ruleEnd") { i++; continue; }
-    if (t.tag === "schema") {
-      const decl = parseSchemaText(t.text, t.line);
-      if ("message" in decl) return decl;
-      if (schema.has(decl.relation)) {
-        return { line: t.line, message: `duplicate schema declaration for '${decl.relation}'` };
-      }
-      schema.set(decl.relation, decl.aggregator);
+    let explicitName: string | undefined;
+    let startLine = t.line;
+    if (t.tag === "command") {
+      const cmd = parseCommand(t);
+      if ("message" in cmd) return cmd;
       i++;
-      continue;
+      if (cmd.kind === "acc") {
+        if (schema.has(cmd.decl.relation)) {
+          return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
+        }
+        schema.set(cmd.decl.relation, cmd.decl.aggregator);
+        continue;
+      }
+      // cmd.kind === "def" — attach to the rule that follows. Skip any
+      // ruleEnd tokens between `#def` and the rule body.
+      explicitName = cmd.name;
+      startLine = cmd.line;
+      while (i < tokens.length && tokens[i]!.tag === "ruleEnd") i++;
+      if (i >= tokens.length) {
+        return { line: cmd.line, message: "'#def' must precede a rule" };
+      }
+      const next = tokens[i]!;
+      if (next.tag === "command") {
+        return { line: next.line, message: "'#def' must precede a rule" };
+      }
     }
 
-    const startLine = t.line;
     const body: BodyItem[] = [];
     // Each stack frame is the inner body of the enclosing sub (or the
     // outer rule body at index 0). We also track each open sub so its
@@ -190,8 +242,8 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (depth > 0) { i++; continue; }
         break;
       }
-      if (tok.tag === "schema") {
-        if (depth > 0) return { line: tok.line, message: "'%' schema decl not allowed inside a sub-rule" };
+      if (tok.tag === "command") {
+        if (depth > 0) return { line: tok.line, message: `'#${tok.name}' command not allowed inside a sub-rule` };
         break;
       }
       if (tok.tag === "open") {
@@ -238,11 +290,40 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const counter = { n: 1 };
       const desugared = desugarBody(body, usedNames, counter, undefined);
       if (!Array.isArray(desugared)) return desugared;
-      rules.push({ name: `r${ruleNo++}`, body: desugared, span: { line: startLine } });
+      const rule: Rule = { name: "", body: desugared, span: { line: startLine } };
+      if (explicitName !== undefined) rule.explicitName = explicitName;
+      rules.push(rule);
+    } else if (explicitName !== undefined) {
+      return { line: startLine, message: "'#def' must precede a rule" };
     }
   }
 
+  const nameErr = resolveRuleNames(rules);
+  if (nameErr !== null) return nameErr;
+
   return { rules, schema };
+}
+
+function resolveRuleNames(rules: Rule[]): ParseError | null {
+  const seen = new Map<string, number>();
+  for (const r of rules) {
+    if (r.explicitName === undefined) continue;
+    const prior = seen.get(r.explicitName);
+    if (prior !== undefined) {
+      return { line: r.span.line, message: `duplicate rule name '${r.explicitName}'` };
+    }
+    seen.set(r.explicitName, r.span.line);
+  }
+  let n = 1;
+  for (const r of rules) {
+    if (r.explicitName !== undefined) {
+      r.name = r.explicitName;
+    } else {
+      r.name = `r${n}`;
+    }
+    n++;
+  }
+  return null;
 }
 
 // Walk all `BodyItem`s and collect every `Variable` name that appears

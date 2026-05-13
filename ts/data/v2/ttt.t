@@ -1,7 +1,7 @@
 -- display: ttt-display.js
 
 -- aggregate decls
-% fills -> count
+#acc fills -> count
 
 
 ~ game

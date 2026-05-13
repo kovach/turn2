@@ -1,5 +1,17 @@
 
+# 26/05/13
+todo:
+  boolean acc
+  ? explicit id syntax
+
 # 26/05/11
+todo:
+  - default display
+    ! constraints might exist at different points in time
+  ? numeral relation literal
+
+# rule names/commands
+plan: plans/v2-rule-names.md
 
 # default display
 plan: plans/v2-default-display.md

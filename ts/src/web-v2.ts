@@ -10,6 +10,7 @@ import { refTagOf } from "./hashcons.js";
 import { renderTimeline } from "./v2/timeline.js";
 import type { Atom, Term } from "./types.js";
 import type { Store } from "./v2/store.js";
+import { lessThan } from "./v2/store.js";
 import type { ComponentOptions, Rule, RuleAtom } from "./v2/types.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
@@ -46,6 +47,7 @@ const infoEl = document.getElementById("info") as HTMLDivElement;
 const statusEl = document.getElementById("status-line") as HTMLSpanElement;
 const fileNameEl = document.getElementById("file-name") as HTMLSpanElement;
 const hideInternalEl = document.getElementById("hide-internal") as HTMLInputElement;
+const dbTemporalEl = document.getElementById("db-temporal") as HTMLInputElement;
 const editorTabEl = document.getElementById("editor-tab") as HTMLDivElement;
 const timelineTabEl = document.getElementById("timeline-tab") as HTMLDivElement;
 const timelineMainEl = document.getElementById("timeline-main") as HTMLDivElement;
@@ -253,65 +255,125 @@ function renderEndpoint(store: Store, term: Term): string {
   return renderTermShallow(store, term);
 }
 
+function renderTupleRow(store: Store, i: number): { atom: string; interval: string; line: number | undefined } {
+  const t = store.tuples[i]!;
+  const head = t.atom.terms[0];
+  const headStr = head !== undefined && head.tag === "Symbol"
+    ? `<span class="pred">${escapeHtml(head.name)}</span>`
+    : renderTermDb(store, head!);
+  // slice(1, -1): skip the head AND the trailing universal id slot.
+  const args = t.atom.terms.slice(1, -1).map((x) => renderTermDb(store, x)).join(" ");
+  const atomStr = args === "" ? headStr : `${headStr} ${args}`;
+  const intervalStr = `[${renderEndpoint(store, t.l)}, ${renderEndpoint(store, t.r)}]`;
+  return { atom: atomStr, interval: intervalStr, line: store.tupleSource[i]?.line };
+}
+
+function emitRows(
+  lines: string[],
+  rendered: { atom: string; interval: string; line: number | undefined }[],
+): void {
+  let maxAtomLen = 0;
+  for (const r of rendered) {
+    const plain = r.atom.replace(/<[^>]+>/g, "");
+    if (plain.length > maxAtomLen) maxAtomLen = plain.length;
+  }
+  const pad = Math.min(maxAtomLen, 48);
+  for (const r of rendered) {
+    const plainLen = r.atom.replace(/<[^>]+>/g, "").length;
+    const gap = " ".repeat(Math.max(2, pad - plainLen + 2));
+    const attr = r.line !== undefined ? ` data-source-line="${r.line}"` : "";
+    lines.push(`  <span class="row"${attr}>${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span></span>`);
+  }
+}
+
+// Topological sort of tuple indices by temporal precedence: a precedes b iff
+// a.r < b.l. Incomparable tuples may appear in any order; we tie-break by
+// store insertion order so the result is deterministic.
+function temporalOrder(store: Store, idxs: number[]): number[] {
+  const n = idxs.length;
+  // depth[k] = longest chain of strict predecessors ending at idxs[k].
+  const depth = new Array<number>(n).fill(0);
+  // Successors per element so we can relax in topo order using a simple
+  // iterative longest-path computation; since we don't have the DAG up front,
+  // do an O(n^2) pass: for each pair (i, j) determine precedence via lessThan
+  // on endpoints, then propagate via repeated relaxation. n^2 is acceptable
+  // for a UI-side database view.
+  const preds: number[][] = [];
+  for (let k = 0; k < n; k++) preds.push([]);
+  for (let i = 0; i < n; i++) {
+    const ti = store.tuples[idxs[i]!]!;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const tj = store.tuples[idxs[j]!]!;
+      // ti precedes tj iff ti.r < tj.l.
+      if (lessThan(store, ti.r, tj.l)) preds[j]!.push(i);
+    }
+  }
+  // Iterate until stable (DAG, so converges in <= n rounds).
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let k = 0; k < n; k++) {
+      let d = 0;
+      for (const p of preds[k]!) {
+        if (depth[p]! + 1 > d) d = depth[p]! + 1;
+      }
+      if (d !== depth[k]) { depth[k] = d; changed = true; }
+    }
+  }
+  const order = idxs.map((_, k) => k);
+  order.sort((a, b) => depth[a]! - depth[b]! || idxs[a]! - idxs[b]!);
+  return order.map((k) => idxs[k]!);
+}
+
 function renderDatabase(store: Store): void {
   const hide = hideInternalEl.checked;
-  // Group tuples by head sym name. Tuples without a Symbol head fall under
-  // "(other)".
-  const groups = new Map<string, number[]>();
+  const temporal = dbTemporalEl.checked;
+
+  // Select visible tuple indices.
+  const visible: number[] = [];
   for (let i = 0; i < store.tuples.length; i++) {
     const head = store.tuples[i]!.atom.terms[0];
     const name = head !== undefined && head.tag === "Symbol" ? head.name : "(other)";
-    let bucket = groups.get(name);
-    if (bucket === undefined) { bucket = []; groups.set(name, bucket); }
-    bucket.push(i);
+    if (hide && name.startsWith("_")) continue;
+    visible.push(i);
   }
-  const userKeys: string[] = [];
-  const internalKeys: string[] = [];
-  for (const k of groups.keys()) {
-    if (k.startsWith("_")) {
-      internalKeys.push(k);
-    } else {
-      userKeys.push(k);
-    }
-  }
-  userKeys.sort();
-  internalKeys.sort();
-  const orderedKeys = hide ? userKeys : [...userKeys, ...internalKeys];
 
-  if (orderedKeys.length === 0) {
+  if (visible.length === 0) {
     dbEl.innerHTML = `<span style="color:#666">(empty)</span>`;
     return;
   }
 
   const lines: string[] = [];
-  for (const key of orderedKeys) {
-    const idxs = groups.get(key)!;
-    lines.push(`<span class="group-heading">${escapeHtml(key)} (${idxs.length})</span>`);
-    // Render each tuple. Args after the head are pretty-printed; the first
-    // term is highlighted as a predicate.
-    const rendered: { atom: string; interval: string; line: number | undefined }[] = [];
-    let maxAtomLen = 0;
-    for (const i of idxs) {
-      const t = store.tuples[i]!;
-      const head = t.atom.terms[0];
-      const headStr = head !== undefined && head.tag === "Symbol"
-        ? `<span class="pred">${escapeHtml(head.name)}</span>`
-        : renderTermDb(store, head!);
-      // slice(1, -1): skip the head AND the trailing universal id slot.
-      const args = t.atom.terms.slice(1, -1).map((x) => renderTermDb(store, x)).join(" ");
-      const atomStr = args === "" ? headStr : `${headStr} ${args}`;
-      const intervalStr = `[${renderEndpoint(store, t.l)}, ${renderEndpoint(store, t.r)}]`;
-      // Strip HTML for length calculation.
-      const plain = atomStr.replace(/<[^>]+>/g, "");
-      maxAtomLen = Math.max(maxAtomLen, plain.length);
-      rendered.push({ atom: atomStr, interval: intervalStr, line: store.tupleSource[i]?.line });
+  if (temporal) {
+    const ordered = temporalOrder(store, visible);
+    const rendered = ordered.map((i) => renderTupleRow(store, i));
+    emitRows(lines, rendered);
+  } else {
+    // Group tuples by head sym name. Tuples without a Symbol head fall under
+    // "(other)".
+    const groups = new Map<string, number[]>();
+    for (const i of visible) {
+      const head = store.tuples[i]!.atom.terms[0];
+      const name = head !== undefined && head.tag === "Symbol" ? head.name : "(other)";
+      let bucket = groups.get(name);
+      if (bucket === undefined) { bucket = []; groups.set(name, bucket); }
+      bucket.push(i);
     }
-    const pad = Math.min(maxAtomLen, 48);
-    for (const r of rendered) {
-      const plainLen = r.atom.replace(/<[^>]+>/g, "").length;
-      const gap = " ".repeat(Math.max(2, pad - plainLen + 2));
-      const attr = r.line !== undefined ? ` data-source-line="${r.line}"` : "";
-      lines.push(`  <span class="row"${attr}>${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span></span>`);
+    const userKeys: string[] = [];
+    const internalKeys: string[] = [];
+    for (const k of groups.keys()) {
+      if (k.startsWith("_")) internalKeys.push(k);
+      else userKeys.push(k);
+    }
+    userKeys.sort();
+    internalKeys.sort();
+    const orderedKeys = [...userKeys, ...internalKeys];
+    for (const key of orderedKeys) {
+      const idxs = groups.get(key)!;
+      lines.push(`<span class="group-heading">${escapeHtml(key)} (${idxs.length})</span>`);
+      const rendered = idxs.map((i) => renderTupleRow(store, i));
+      emitRows(lines, rendered);
     }
   }
   dbEl.innerHTML = lines.join("\n");
@@ -723,23 +785,46 @@ sourceEl.addEventListener("keydown", (e) => {
     indentRange(firstLine.start, lastLine.end, e.shiftKey);
     return;
   }
+  if (e.key === "Home" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const value = sourceEl.value;
+    const pos = sourceEl.selectionStart;
+    const { start } = lineBoundsAt(value, pos);
+    const before = value.slice(start, pos);
+    const indentMatch = value.slice(start).match(/^[ \t]*/);
+    const indentEnd = start + (indentMatch ? indentMatch[0].length : 0);
+    const target = /^[ \t]*$/.test(before) ? start : indentEnd;
+    e.preventDefault();
+    sourceEl.setSelectionRange(target, target);
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     const value = sourceEl.value;
     const pos = sourceEl.selectionStart;
-    const { start } = lineBoundsAt(value, pos);
+    const { start, end } = lineBoundsAt(value, pos);
+    const line = value.slice(start, end);
+    sourceEl.focus();
+    if (line.length > 0 && /^[ \t]+$/.test(line)) {
+      // Whitespace-only line: wipe it before inserting the newline so the
+      // cursor lands at column 0 instead of inheriting stale indent.
+      sourceEl.setSelectionRange(start, end);
+      document.execCommand("insertText", false, "\n");
+      return;
+    }
     const lineToCursor = value.slice(start, pos);
     const indentMatch = lineToCursor.match(/^[ \t]*/);
     const indent = indentMatch ? indentMatch[0] : "";
-    const inserted = "\n" + indent;
-    sourceEl.focus();
-    document.execCommand("insertText", false, inserted);
+    document.execCommand("insertText", false, "\n" + indent);
     return;
   }
 });
 
 hideInternalEl.addEventListener("change", () => {
   void run();
+});
+
+dbTemporalEl.addEventListener("change", () => {
+  if (lastStore !== null) renderDatabase(lastStore);
 });
 
 // Bootstrap: try to load `data/v2/ttt.t` from the server. If unavailable
