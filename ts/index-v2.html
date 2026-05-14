@@ -67,6 +67,26 @@
       z-index: 1;
       display: none;
     }
+    .editors .pane { background: #1a1a1a; }
+    .editors textarea { background: transparent; position: relative; z-index: 2; }
+    .source-symbol-overlay {
+      position: absolute;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 14px;
+      line-height: 1.6;
+      tab-size: 2;
+      white-space: pre;
+      color: transparent;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 0;
+    }
+    .source-symbol-overlay mark {
+      background-color: rgba(255, 200, 0, 0.30);
+      color: transparent;
+      border-radius: 2px;
+    }
   </style>
 </head>
 <body>

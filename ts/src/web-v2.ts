@@ -574,6 +574,7 @@ function updateCursorLine(): void {
   sourceCursorLineEl.textContent = `L${line}:${col}`;
   currentLine = line;
   highlightDbFromSource();
+  updateSymbolHighlights();
 }
 
 // --- Source ↔ output linking ---
@@ -590,6 +591,102 @@ let positiveLines: Set<number> = new Set();
 const sourceLineHighlightEl = document.createElement("div");
 sourceLineHighlightEl.className = "source-line-highlight";
 sourceEl.parentElement!.insertBefore(sourceLineHighlightEl, sourceEl);
+
+const symbolOverlayEl = document.createElement("div");
+symbolOverlayEl.className = "source-symbol-overlay";
+sourceEl.parentElement!.insertBefore(symbolOverlayEl, sourceEl);
+
+// Split source into tokens delimited by whitespace, parens, comma, dot,
+// semicolon. Strip a leading atom-marker char (`-~+^!?=`) so e.g. `+card`,
+// `~card`, `card` all match each other. Skip variables (start with uppercase
+// or `_`) and wildcards.
+function scanSymbolTokens(text: string): Array<{ start: number; end: number; name: string }> {
+  const out: Array<{ start: number; end: number; name: string }> = [];
+  const isSep = (c: string) =>
+    c === " " || c === "\t" || c === "\n" || c === "\r" ||
+    c === "(" || c === ")" || c === "," || c === "." || c === ";";
+  let i = 0;
+  while (i < text.length) {
+    if (isSep(text[i]!)) { i++; continue; }
+    let j = i;
+    while (j < text.length && !isSep(text[j]!)) j++;
+    let s = i;
+    const marker = text[s]!;
+    if (marker === "-" || marker === "~" || marker === "+" || marker === "^" ||
+        marker === "!" || marker === "?" || marker === "=") {
+      if (j - s > 1) s++;
+    }
+    const name = text.slice(s, j);
+    const c0 = name[0];
+    if (c0 !== undefined && c0 !== "_" && !(c0 >= "A" && c0 <= "Z")) {
+      out.push({ start: s, end: j, name });
+    }
+    i = j;
+  }
+  return out;
+}
+
+let symbolTokens: Array<{ start: number; end: number; name: string }> = [];
+let symbolTokensFor: string | null = null;
+
+function ensureSymbolTokens(): void {
+  if (symbolTokensFor === sourceEl.value) return;
+  symbolTokens = scanSymbolTokens(sourceEl.value);
+  symbolTokensFor = sourceEl.value;
+}
+
+function syncOverlayBox(): void {
+  symbolOverlayEl.style.top = `${sourceEl.offsetTop}px`;
+  symbolOverlayEl.style.left = `${sourceEl.offsetLeft}px`;
+  symbolOverlayEl.style.width = `${sourceEl.offsetWidth}px`;
+  symbolOverlayEl.style.height = `${sourceEl.offsetHeight}px`;
+}
+
+function updateSymbolHighlights(): void {
+  syncOverlayBox();
+  ensureSymbolTokens();
+  const pos = sourceEl.selectionStart;
+  const hasSelection = sourceEl.selectionStart !== sourceEl.selectionEnd;
+  let target: string | null = null;
+  let cursorTokenStart = -1;
+  if (!hasSelection) {
+    for (const t of symbolTokens) {
+      if (pos >= t.start && pos <= t.end) {
+        target = t.name;
+        cursorTokenStart = t.start;
+        break;
+      }
+    }
+  }
+  if (target === null) {
+    symbolOverlayEl.textContent = "";
+    return;
+  }
+  const value = sourceEl.value;
+  const matches = symbolTokens.filter((t) => t.name === target && t.start !== cursorTokenStart);
+  if (matches.length === 0) {
+    symbolOverlayEl.textContent = "";
+    return;
+  }
+  let html = "";
+  let i = 0;
+  for (const m of matches) {
+    if (m.start > i) html += escapeHtml(value.slice(i, m.start));
+    html += `<mark>${escapeHtml(value.slice(m.start, m.end))}</mark>`;
+    i = m.end;
+  }
+  if (i < value.length) html += escapeHtml(value.slice(i));
+  symbolOverlayEl.innerHTML = html;
+  symbolOverlayEl.scrollTop = sourceEl.scrollTop;
+  symbolOverlayEl.scrollLeft = sourceEl.scrollLeft;
+}
+
+sourceEl.addEventListener("scroll", () => {
+  symbolOverlayEl.scrollTop = sourceEl.scrollTop;
+  symbolOverlayEl.scrollLeft = sourceEl.scrollLeft;
+});
+
+window.addEventListener("resize", () => updateSymbolHighlights());
 
 function getLineMetrics(): { lineHeight: number; paddingTop: number } {
   const style = getComputedStyle(sourceEl);
@@ -785,17 +882,45 @@ sourceEl.addEventListener("keydown", (e) => {
     indentRange(firstLine.start, lastLine.end, e.shiftKey);
     return;
   }
-  if (e.key === "Home" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  if (e.key === "Home" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const value = sourceEl.value;
-    const pos = sourceEl.selectionStart;
+    const selStart = sourceEl.selectionStart;
+    const selEnd = sourceEl.selectionEnd;
+    const dir = sourceEl.selectionDirection;
+    const pos = dir === "backward" ? selStart : selEnd;
+    const anchor = dir === "backward" ? selEnd : selStart;
     const { start } = lineBoundsAt(value, pos);
     const before = value.slice(start, pos);
     const indentMatch = value.slice(start).match(/^[ \t]*/);
     const indentEnd = start + (indentMatch ? indentMatch[0].length : 0);
     const target = /^[ \t]*$/.test(before) ? start : indentEnd;
     e.preventDefault();
-    sourceEl.setSelectionRange(target, target);
+    if (e.shiftKey) {
+      const lo = Math.min(anchor, target);
+      const hi = Math.max(anchor, target);
+      sourceEl.setSelectionRange(lo, hi, target < anchor ? "backward" : "forward");
+    } else {
+      sourceEl.setSelectionRange(target, target);
+    }
     return;
+  }
+  if (e.key === "Delete" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const value = sourceEl.value;
+    const selStart = sourceEl.selectionStart;
+    const selEnd = sourceEl.selectionEnd;
+    if (selStart === selEnd) {
+      const { end } = lineBoundsAt(value, selStart);
+      if (selStart === end && end < value.length && value[end] === "\n") {
+        const wsMatch = value.slice(end + 1).match(/^[ \t]*/);
+        const wsLen = wsMatch ? wsMatch[0].length : 0;
+        e.preventDefault();
+        sourceEl.focus();
+        sourceEl.setSelectionRange(end, end + 1 + wsLen);
+        document.execCommand("insertText", false, "");
+        sourceEl.setSelectionRange(end, end);
+        return;
+      }
+    }
   }
   if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
@@ -839,12 +964,17 @@ async function bootstrap(): Promise<void> {
     // Ensure the URL always carries the current code (even if empty/missing).
     updatePlaygroundUrl();
   } else {
-    const name = "ttt.t";
+    const fileParam = new URL(window.location.href).searchParams.get("file");
+    const requested = fileParam && fileParam.length > 0 ? fileParam : "ttt.t";
+    const name = requested.endsWith(".t") ? requested : `${requested}.t`;
     try {
       const res = await fetch(`/api/v2-file/${encodeURIComponent(name)}`);
       if (res.ok) {
         const { content } = await res.json() as { content: string };
         sourceEl.value = content;
+        loadedFile = name;
+      } else if (res.status === 404) {
+        // File doesn't exist yet; attach anyway so the first edit creates it.
         loadedFile = name;
       }
     } catch {
