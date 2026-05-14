@@ -2,6 +2,15 @@
 // and the constraint-query module to round-trip terms back to text that
 // `parse` will re-accept.
 //
+// >>> DEBUGGING: use `renderDebugDump` <<<
+// Don't roll your own term renderer for ad-hoc scripts. Hashconsed terms
+// share subterms in a DAG; naively expanding every Ref re-emits each shared
+// subterm at every occurrence, producing megabytes of output for tiny
+// stores. `renderDebugDump` returns a JSON-serializable object with each
+// Ref body printed once in a `refs` map and per-tuple terms shown as
+// shallow `*<id>` handles — total size linear in distinct Refs, and the
+// caller can `console.log(dump.tuples)` alone if they don't need the map.
+//
 // Id-opacity invariant (notes/v2-design.md): printers must not recursively
 // unfold `Id` terms — neither `Id`-tagged literals nor `Ref`s whose backing
 // tag is `Id`. We render ids as opaque handles (`*<token>` for refs,
@@ -164,4 +173,68 @@ export function compressRefs(
 
   const results = roots.map(renderInner);
   return { bindings, results };
+}
+
+// Debug dump for ad-hoc scripts. Returns two flat strings:
+//   - `hashConsStore`: one line per Ref body, `*<id> = (terms…)`. Nested
+//     Refs in the body render as `*<id>` handles, not unfolded. Each Ref
+//     body appears exactly once. Id-tagged bodies are signalled by the
+//     `*`-prefixed head Symbol convention (e.g. `*mom`, `*id`), matching
+//     the surface form parsers accept.
+//   - `db`: one line per tuple, `<atom-terms> @ <l>..<r> #<id>`, where
+//     `<id>` is the trailing universal id slot every emitted tuple carries.
+//
+// Why this shape: hashconsed terms share subterms in a DAG. Naive
+// recursive rendering re-emits each shared body at every occurrence
+// (megabytes for tens of tuples). Printing the store once and referencing
+// Refs by id everywhere else is linear in distinct Refs.
+export interface DebugDump {
+  hashConsStore: string;
+  db: string;
+}
+
+function shallowTerm(t: Term, used: Set<number>): string {
+  switch (t.tag) {
+    case "Symbol": return t.name;
+    case "Variable": return `?${t.name}`;
+    case "Wildcard": return "_";
+    case "Ref": used.add(t.id); return `*${t.id}`;
+    case "Id": return renderIdLiteral(t.atom);
+    case "Atom":
+      return `(${t.atom.terms.map((x) => shallowTerm(x, used)).join(" ")})`;
+  }
+}
+
+export function renderDebugDump(
+  store: Store,
+  tuples: readonly { atom: Atom; l: Term; r: Term }[],
+): DebugDump {
+  const used = new Set<number>();
+  const dbLines: string[] = [];
+  for (const t of tuples) {
+    const atomStr = userTerms(t.atom).map((x) => shallowTerm(x, used)).join(" ");
+    const l = shallowTerm(t.l, used);
+    const r = shallowTerm(t.r, used);
+    const idTerm = t.atom.terms[t.atom.terms.length - 1];
+    const idStr = idTerm === undefined ? "" : ` #${shallowTerm(idTerm, used)}`;
+    dbLines.push(`${atomStr} @ ${l}..${r}${idStr}`);
+  }
+  const refLines = new Map<number, string>();
+  while (true) {
+    let added = false;
+    for (const id of used) {
+      if (refLines.has(id)) continue;
+      const atom = store.hash.refToAtom.get(id);
+      if (atom === undefined) continue;
+      const body = atom.terms.map((x) => shallowTerm(x, used)).join(" ");
+      refLines.set(id, `*${id} = (${body})`);
+      added = true;
+    }
+    if (!added) break;
+  }
+  const sortedIds = [...refLines.keys()].sort((a, b) => a - b);
+  return {
+    hashConsStore: sortedIds.map((id) => refLines.get(id)!).join("\n"),
+    db: dbLines.join("\n"),
+  };
 }

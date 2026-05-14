@@ -10,9 +10,13 @@
 
 import type { Atom, Span, Term } from "../types.js";
 import type { MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
+import { pruneChains } from "./expand-liveness.js";
 
 export function expand(program: Program): Program {
-  const decomposed = program.rules.map(decomposeRule);
+  const decomposed = program.rules.map((r) => {
+    const { rule, essential } = decomposeRule(r);
+    return pruneChains(rule, essential);
+  });
   const split: Rule[] = [];
   for (const rule of decomposed) split.push(...splitRule(rule));
   // Drop trailing slices with no observable effect (no Emit and no AssertLt).
@@ -125,6 +129,15 @@ interface DecState {
   chain: Term[];
   // Names already in `chain`, for O(1) dedup.
   seen: Set<string>;
+  // Names of chain entries whose contribution to a fresh-* template is
+  // load-bearing for per-firing uniqueness — i.e., dropping them would
+  // let two distinct firings collide on the emitted row's universal id
+  // slot (causing dedup to coalesce them). Populated at chain pushes
+  // corresponding to user Variables; not populated for endpoint slots
+  // (`_l_K` / `_r_K`) or anchor SSA (`_xl_K` / `_xr_K`), which are
+  // either downstream-recoverable or pure reductions of other entries.
+  // Consumed by `pruneChains` in expand-liveness.ts.
+  essential: Set<string>;
 }
 
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
@@ -132,6 +145,7 @@ const SYM_TOP: Term = { tag: "Symbol", name: "top" };
 const SYM_ID: Term = { tag: "Symbol", name: "*id" };
 const SYM_MOM: Term = { tag: "Symbol", name: "*mom" };
 const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
+const SYM_CHAIN: Term = { tag: "Symbol", name: "*chain" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
 const SYM_CONSTRAIN_AGG_ROW: Term = { tag: "Symbol", name: "_constrain-agg" };
@@ -141,7 +155,7 @@ const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
-function decomposeRule(rule: Rule): Rule {
+function decomposeRule(rule: Rule): { rule: Rule; essential: Set<string> } {
   const state: DecState = {
     ruleName: rule.name,
     out: [],
@@ -149,9 +163,10 @@ function decomposeRule(rule: Rule): Rule {
     anchorCounter: 0,
     chain: [],
     seen: new Set(),
+    essential: new Set(),
   };
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
-  return { ...rule, body: state.out };
+  return { rule: { ...rule, body: state.out }, essential: state.essential };
 }
 
 function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
@@ -166,19 +181,25 @@ function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
   return v;
 }
 
-// Snapshot of `[head, ruleName, lexPos, ...state.chain, trailing?]` wrapped
-// as an `Id` term. Mirrors `assignIds` + `instantiated{Id,Mom,Choose}Terms`
-// from the legacy evaluator: every fresh-* template snapshots the chain
-// *before* the current atom contributes its own slots, so the template
-// is a deterministic per-firing fingerprint of all earlier bindings.
-// Templates are `Id`-tagged so unification stays opaque on them per
-// notes/v2-design.md.
+// Snapshot of `[head, ruleName, lexPos, (*chain ...state.chain), trailing?]`
+// wrapped as an `Id` term. Mirrors `assignIds` +
+// `instantiated{Id,Mom,Choose}Terms` from the legacy evaluator: every
+// fresh-* template snapshots the chain *before* the current atom
+// contributes its own slots, so the template is a deterministic
+// per-firing fingerprint of all earlier bindings. Templates are
+// `Id`-tagged per notes/v2-design.md; the chain is grouped under a
+// `*chain` sub-Atom so the template has fixed arity regardless of chain
+// length (makes it trivial to find/rewrite the chain).
 function chainTemplateWithHead(state: DecState, lexPos: number, head: Term, trailing?: Term): Term {
+  const chainAtom: Term = {
+    tag: "Id",
+    atom: { terms: [SYM_CHAIN, ...state.chain] },
+  };
   const terms: Term[] = [
     head,
     { tag: "Symbol", name: state.ruleName },
     { tag: "Symbol", name: String(lexPos) },
-    ...state.chain,
+    chainAtom,
   ];
   if (trailing !== undefined) terms.push(trailing);
   return { tag: "Id", atom: { terms } };
@@ -193,17 +214,17 @@ function variableToSymbol(v: { tag: "Variable"; name: string }): { tag: "Symbol"
   return { tag: "Symbol", name: ":" + v.name };
 }
 
-// `freshIdTerm(varName)` template: `(*id rule lexPos ...chain <:varName>)`
+// `freshIdTerm(varName)` template: `(*id rule lexPos (*chain ...) <:varName>)`
 function freshIdTemplate(state: DecState, lexPos: number, varName: string): Term {
   return chainTemplateWithHead(state, lexPos, SYM_ID, variableToSymbol({ tag: "Variable", name: varName }));
 }
 
-// `freshChooseId` template: `(*choose rule lexPos ...chain)`
+// `freshChooseId` template: `(*choose rule lexPos (*chain ...))`
 function freshChooseTemplate(state: DecState, lexPos: number): Term {
   return chainTemplateWithHead(state, lexPos, SYM_CHOOSE);
 }
 
-// `freshMoment(side)` template: `(*mom rule lexPos ...chain <side>)`
+// `freshMoment(side)` template: `(*mom rule lexPos (*chain ...) <side>)`
 function freshMomTemplate(state: DecState, lexPos: number, side: "l" | "r"): Term {
   return chainTemplateWithHead(state, lexPos, SYM_MOM, side === "l" ? SYM_L : SYM_R);
 }
@@ -213,6 +234,7 @@ function noteVar(state: DecState, name: string): void {
   if (state.seen.has(name)) return;
   state.seen.add(name);
   state.chain.push({ tag: "Variable", name });
+  state.essential.add(name);
 }
 
 function collectVarsTerm(t: Term, state: DecState): void {
@@ -248,6 +270,7 @@ function emitBindingsAndRewrite(term: Term, state: DecState, lexPos: number, spa
       state.out.push({ tag: "Equal", lhs: term, rhs: fresh, span });
       state.seen.add(term.name);
       state.chain.push(term);
+      state.essential.add(term.name);
     }
     return term;
   }
@@ -320,10 +343,15 @@ function decomposeMatch(
   const lVar: Term = { tag: "Variable", name: lName };
   const rVar: Term = { tag: "Variable", name: rName };
   // Add slots to chain *before* user vars (matches today's assignIds order).
+  // Endpoint slots are essential: they distinguish matched-tuple identities
+  // across firings, so two firings on different stored rows produce
+  // distinct idTpls even when user vars coincide.
   state.seen.add(lName);
   state.chain.push(lVar);
+  state.essential.add(lName);
   state.seen.add(rName);
   state.chain.push(rVar);
+  state.essential.add(rName);
 
   // Append a trailing Wildcard so the Match unifies against stored tuples
   // that carry the universal id slot (every Emit appends one).
@@ -432,8 +460,10 @@ function decomposeAggregate(
   const rVar: Term = { tag: "Variable", name: rName };
   state.seen.add(lName);
   state.chain.push(lVar);
+  state.essential.add(lName);
   state.seen.add(rName);
   state.chain.push(rVar);
+  state.essential.add(rName);
 
   // Consumer: Match (_agg-result originalPatternWithWeight idTpl) at
   // (_l_K, _r_K). No scaffolding (see header).
@@ -577,8 +607,10 @@ function decomposeEmit(
   // Now contribute lVar/rVar to chain for subsequent atoms.
   state.seen.add(lName);
   state.chain.push(lVar);
+  state.essential.add(lName);
   state.seen.add(rName);
   state.chain.push(rVar);
+  state.essential.add(rName);
 
   // Anchor update.
   if (updateAnchor) {

@@ -4,6 +4,8 @@ todo:
   boolean acc
   ? explicit id syntax
 
+# expand liveness
+
 # 26/05/11
 todo:
   - default display

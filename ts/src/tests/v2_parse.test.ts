@@ -208,6 +208,15 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
   console.log("PASS: #def names a rule");
 }
 
+// 9b2) #def allows rule body to begin on the same line
+{
+  const p = ok("#def a ~a\n");
+  assert.equal(p.rules.length, 1);
+  assert.equal(p.rules[0]!.name, "a");
+  assert.equal(p.rules[0]!.body.length, 1);
+  console.log("PASS: #def same-line body");
+}
+
 // 9c) unnamed rules keep r{N} by source position; named coexist
 {
   const p = ok("foo\n\n#def named\nbar\n\nbaz\n");
@@ -230,7 +239,6 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
   assert.match(err("#def r3\nbar\n").message, /reserved for auto-naming/);
   assert.match(err("#def _foo\nbar\n").message, /lowercase symbol/);
   assert.match(err("#def Foo\nbar\n").message, /lowercase symbol/);
-  assert.match(err("#def foo bar\nbaz\n").message, /exactly one name/);
   assert.match(err("#def\nbar\n").message, /requires a rule name/);
   console.log("PASS: #def name shape checks");
 }

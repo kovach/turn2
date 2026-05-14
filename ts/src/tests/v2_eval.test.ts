@@ -315,4 +315,52 @@ foo X
   console.log("PASS: = parser errors");
 }
 
+// 13) Aggregate scheduling: tier selection must respect the prior partial
+// order so that ok1/ok2 see dahan-count contributions instead of firing
+// prematurely with the bound-key empty-zero fallback. Regression test.
+{
+  const src = `
+#acc at e -> last
+
+move It To, +at It -> To
+
+~game
+  ( ~setup );
+  ( ~look );
+
+setup
+  +land l1
+  +land l2
+  +dahan d1, ~move d1 l1
+  +dahan d2, ~move d2 l1
+
+#acc dahan-count land -> count
+
+look, ~locations, ~counts
+
+locations
+  at X -> L
+  ^ here X L
+
+here D L, dahan D, ^has-dahan L, ^dahan-count L -> ()
+
+counts, dahan-count L -> N, ^hey N
+
+look
+  (counts, land L, dahan-count L -> N)
+  ^ok1 L N
+
+look
+  (counts, dahan-count L -> N)
+  ^ok2 L N
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("ok1 l1 (s (s z))"), `missing 'ok1 l1 (s (s z))': ${tuples.filter((t) => t.startsWith("ok"))}`);
+  assert(tuples.includes("ok1 l2 z"), `missing 'ok1 l2 z': ${tuples.filter((t) => t.startsWith("ok"))}`);
+  assert(tuples.includes("ok2 l1 (s (s z))"), `missing 'ok2 l1 (s (s z))': ${tuples.filter((t) => t.startsWith("ok"))}`);
+  assert(tuples.includes("hey (s (s z))"), `missing 'hey (s (s z))': ${tuples.filter((t) => t.startsWith("hey"))}`);
+  console.log("PASS: aggregate tier respects prior order");
+}
+
 console.log("ALL v2 eval tests passed");

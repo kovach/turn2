@@ -111,10 +111,26 @@ function tokenize(input: string): Token[] | ParseError {
         const trimmed = rest.trimStart();
         const ws = trimmed.search(/\s/);
         const name = ws < 0 ? trimmed : trimmed.slice(0, ws);
-        const argText = ws < 0 ? "" : trimmed.slice(ws).trim();
         if (name.length === 0) {
           return { line: lineno, message: "'#' must be followed by a command name" };
         }
+        if (name === "def") {
+          // `#def <name>` consumes only the name; the rest of the line
+          // continues tokenizing so the rule body can follow on the same line.
+          const afterName = ws < 0 ? "" : trimmed.slice(ws);
+          const afterTrimmed = afterName.trimStart();
+          const ws2 = afterTrimmed.search(/\s/);
+          const defName = ws2 < 0 ? afterTrimmed : afterTrimmed.slice(0, ws2);
+          tokens.push({ tag: "command", name, argText: defName, line: lineno });
+          // Advance pos to just after the name token (or to end of line if none).
+          const consumed = defName.length === 0
+            ? raw.length
+            : (raw.length - afterTrimmed.length) + defName.length;
+          pos = consumed;
+          atomStart = true;
+          continue;
+        }
+        const argText = ws < 0 ? "" : trimmed.slice(ws).trim();
         tokens.push({ tag: "command", name, argText, line: lineno });
         pos = raw.length;
         atomStart = true;
@@ -172,9 +188,6 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     const tokens = tokenizeTermText(tok.argText);
     if (tokens.length === 0) {
       return { line: tok.line, message: "'#def' requires a rule name" };
-    }
-    if (tokens.length > 1) {
-      return { line: tok.line, message: "'#def' takes exactly one name" };
     }
     const name = tokens[0]!;
     if (!isSymToken(name)) {

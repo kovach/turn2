@@ -86,3 +86,15 @@ filled (cell z (s (s z))) M
 + won M diag2
 
 
+
+= V1 (*chain)
+= V2 (*mom r1 1 V1 l)
+= V3 (*mom r1 1 V1 r)
+= V4 (*chain V2 V3 V2 V3)
+= V5 (*mom r1 2 V4 r)
+= V6 (*chain V2 V3 V3 (*mom r1 2 V4 l) V5 V5)
+= V7 (*mom r1 3 V6 l)
+= V8 (*mom r1 3 V6 r)
+= V9 (*id r5 2 (*chain V7 V8 V7 V8) :C)
+= V10 (cell (s z) z)
+^ is V9 V10

@@ -127,35 +127,17 @@ function expandRef(term: Term, store: Store): Term | null {
   return { tag, atom: a };
 }
 
-// `prior` over intervals: A.r ≤ B.l, OR B properly contains A.
+// `prior` over intervals: A is prior to B iff A starts strictly before B.
 function isPrior(store: Store, a: { l: Term; r: Term }, b: { l: Term; r: Term }): boolean {
-  if (a.r === b.l || (lessEq(store, a.r, b.l) && comparable(store, a.r, b.l))) return true;
-  // Proper containment: B contains A and B != A.
-  if (intervalContains(store, b.l, b.r, a.l, a.r)) {
-    if (a.l !== b.l || a.r !== b.r) return true;
-  }
-  return false;
+  return lessThan(store, a.l, b.l);
 }
 
-// Earliest tier: prefix of prior-sorted list whose first element is prior to
-// nothing else; include everything prior-incomparable to it.
+// Earliest tier: minimal elements of the `prior` partial order — items with
+// no other item strictly prior to them.
 export function selectEarliestTier(store: Store, items: Blocked[]): Blocked[] {
-  if (items.length <= 1) return items.slice();
-  const interval = (b: Blocked) => b.kind === "agg" ? b.row : b.row;
-  const sorted = [...items].sort((x, y) => {
-    if (isPrior(store, interval(x), interval(y))) return -1;
-    if (isPrior(store, interval(y), interval(x))) return 1;
-    return 0;
-  });
-  const first = sorted[0]!;
-  const tier: Blocked[] = [first];
-  const firstI = interval(first);
-  for (let i = 1; i < sorted.length; i++) {
-    const next = sorted[i]!;
-    if (isPrior(store, firstI, interval(next))) break;
-    tier.push(next);
-  }
-  return tier;
+  return items.filter((item) =>
+    !items.some((other) => other !== item && isPrior(store, other.row, item.row))
+  );
 }
 
 export function collectAllBlocked(store: Store): Blocked[] {
