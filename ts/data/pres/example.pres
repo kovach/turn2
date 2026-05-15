@@ -1,0 +1,25 @@
+[metadata][%
+  title: Turn Intro
+  author: Scott Kovach
+  date: [today]
+%]
+
+[slide][%Purpose%]
+- Turn is for describing situations [pause]
+- It does stuff
+
+[slide][%The Now%]
+A query describes a point in time, reading from top to bottom:
+[code][%
+turn T       -- during some Turn... [pause]
+play-card C  -- a card is played... [pause]
+action C     -- that is an action... [pause]
+~activate C  -- so activate the card.
+%]
+
+[slide][%Demo%]
+[code][%
+~turn T       -- during some Turn...
+~play-card C  -- a card is played...
+~action C     -- that is an action...
+%][timeline,tuples]

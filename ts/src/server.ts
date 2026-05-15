@@ -98,6 +98,26 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/pres" || pathname === "/index-pres.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(fs.readFileSync(path.join(ROOT, "index-pres.html")));
+    return;
+  }
+
+  if (pathname.startsWith("/data/pres/")) {
+    const file = pathname.slice("/data/pres/".length);
+    if (file.includes("..") || file.includes("/")) {
+      res.writeHead(400); res.end("Invalid path");
+      return;
+    }
+    try {
+      const content = fs.readFileSync(path.join(ROOT, "data", "pres", file));
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(content);
+    } catch { res.writeHead(404); res.end("Not found"); }
+    return;
+  }
+
   // v2 source/display files. `/data/v2/*.t` is text; `/data/v2/*.js` is a
   // display module loaded via dynamic import. Plus a tiny GET API for the
   // editor to fetch `data/v2/*.t` source files.
