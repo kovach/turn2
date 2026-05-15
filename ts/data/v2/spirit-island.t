@@ -1,15 +1,12 @@
-
-
-
--- If target land has Dahan, gain a Major Power. 
+-- If target land has Dahan, gain a Major Power.
 -- If you Forget this Power, gain Energy equal to Dahan and
 -- you may play the Major Power immediately, paying its cost.
 -- https://sick.oberien.de/?query=call%20on%20midnight
 -- https://spiritislandwiki.com/index.php?title=Call_on_Midnight%27s_Dream
 activate .(it.is This, card:name This call) .(target T)
   ( ~this-is This );
-  ( ~look, has-dahan T ); 
-  ( ~gain-power.(^type major).(it.is Gained) 
+  ( ~look, has-dahan T );
+  ( ~gain-power.(^type major).(it.is Gained)
     forget-power.forgot.is This );
   ~play-power.^it.^is Gained
 

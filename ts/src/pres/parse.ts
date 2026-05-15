@@ -274,6 +274,10 @@ export function parse(src: string): Doc {
     if (tok.name === "code") {
       const c = needCur();
       flushAll(c.builder);
+      const hasCode = c.builder.blocks.some(b => b.kind === "code");
+      if (hasCode) {
+        throw new Error(`slide "${c.title}" has more than one [code] block (only one allowed per slide)`);
+      }
       const { segments, addedPauses } = parseCodeBody(tok.body ?? "");
       if (segments.length > 0) {
         segments[0]!.text = segments[0]!.text.replace(/^\n/, "");

@@ -582,17 +582,19 @@ export function renderTimeline(
     line.setAttribute("y1", String(stub.y1));
     line.setAttribute("x2", String(stub.x2));
     line.setAttribute("y2", String(stub.y2));
-    line.setAttribute("stroke", "#c8c8c8");
+    line.setAttribute("stroke", "currentColor");
     line.setAttribute("stroke-width", "1");
+    line.classList.add("tl-fact-line");
     svg.appendChild(line);
     for (const f of group) {
       const lp = proj.factLabelPos(rank, f.row);
       const label = document.createElementNS(SVG_NS, "text");
       label.setAttribute("x", String(lp.x));
       label.setAttribute("y", String(lp.y));
-      label.setAttribute("fill", "#c8c8c8");
+      label.setAttribute("fill", "currentColor");
       label.setAttribute("font-size", "11");
       label.setAttribute("font-family", "monospace");
+      label.classList.add("tl-fact-label");
       label.textContent = f.label;
       svg.appendChild(label);
     }
@@ -624,5 +626,24 @@ export function renderTimeline(
     }
   }
 
+  if (opts.orientation === "horizontal") attachHorizontalWheelScroll(svg);
+
   return { main: svg, sidebar: sidebarEl };
+}
+
+// Translate vertical wheel deltas into horizontal scroll on the timeline's
+// scroll container. Pure vertical wheel (mouse wheel, no shift, no deltaX)
+// scrolls the container left/right; shift-wheel and trackpad horizontal
+// gestures pass through to default behavior.
+function attachHorizontalWheelScroll(svg: SVGSVGElement): void {
+  svg.addEventListener("wheel", (e: WheelEvent) => {
+    if (e.shiftKey) return;
+    if (e.deltaX !== 0) return;
+    if (e.deltaY === 0) return;
+    const scroller = svg.parentElement;
+    if (!scroller) return;
+    if (scroller.scrollWidth <= scroller.clientWidth) return;
+    e.preventDefault();
+    scroller.scrollLeft += e.deltaY;
+  }, { passive: false });
 }

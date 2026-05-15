@@ -13,7 +13,7 @@ action-phase _
 play-action.it.is A
   ( ~announce A );
   ( ~move A in-play );
-  ( ~activate.^it.^is A)
+  ( ~activate.^it.^is A) 
 
 -- How to activate an action (two examples)
 

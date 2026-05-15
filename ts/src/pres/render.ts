@@ -1,18 +1,39 @@
 import type { Block, Doc, Slide, Span } from "./types.js";
+import { Editor } from "../v2/editor.js";
+import { renderTuples, renderTimelineH } from "../v2/render-output.js";
+import { parse as parseV2 } from "../v2/parse.js";
+import { runFixpoint } from "../v2/fixpoint.js";
 
 type State = { slide: number; reveal: number };
+
+type EffectiveSlide = {
+  kind: "title" | "content";
+  slide: Slide;
+};
+
+type ActiveBlock = {
+  slideIdx: number;
+  blockIdx: number;
+  editor: Editor;
+  preEl: HTMLElement;
+  containerEl: HTMLElement;
+  hosts: { timeline?: HTMLElement; tuples?: HTMLElement };
+  debounceTimer: ReturnType<typeof setTimeout> | null;
+};
 
 type RenderHandle = {
   doc: Doc;
   effectiveSlides: EffectiveSlide[];
   state: State;
   root: HTMLElement;
+  mountedSlide: number;
+  editMap: Map<string, string>;
+  active: ActiveBlock | null;
 };
 
-type EffectiveSlide = {
-  kind: "title" | "content";
-  slide: Slide;
-};
+const GAS = 100;
+const TUPLE_GAS = 3000;
+const DEBOUNCE_MS = 200;
 
 function buildEffectiveSlides(doc: Doc): EffectiveSlide[] {
   const out: EffectiveSlide[] = [];
@@ -33,7 +54,7 @@ function spanHtml(spans: Span[]): string {
   ).join("");
 }
 
-function renderBlock(b: Block): string {
+function renderBlock(b: Block, blockIdx: number): string {
   if (b.kind === "para") {
     return `<p class="block para">${spanHtml(b.spans)}</p>`;
   }
@@ -49,19 +70,18 @@ function renderBlock(b: Block): string {
     `<span class="frag" data-reveal="${s.reveal}">${escapeHtml(s.text)}</span>`
   ).join("");
   const opts = b.opts.length > 0 ? ` data-opts="${b.opts.join(",")}"` : "";
-  return `<div class="block code"${opts}><pre class="code-display">${segs}</pre></div>`;
+  return `<div class="block code" data-block-idx="${blockIdx}"${opts}><pre class="code-display">${segs}</pre></div>`;
 }
 
 function renderSlide(eff: EffectiveSlide, reveal: number): string {
   if (eff.kind === "title") {
-    // Title slide: pull from doc metadata at render time.
     return `<div class="slide title-slide r-${reveal}">
       <h1 class="title-line">${escapeHtml(eff.slide.title)}</h1>
       <div class="meta-author" data-slot="author"></div>
       <div class="meta-date" data-slot="date"></div>
     </div>`;
   }
-  const body = eff.slide.blocks.map(renderBlock).join("");
+  const body = eff.slide.blocks.map((b, i) => renderBlock(b, i)).join("");
   return `<div class="slide content-slide r-${reveal}">
     <h1 class="slide-title">${escapeHtml(eff.slide.title)}</h1>
     <div class="slide-body">${body}</div>
@@ -77,7 +97,6 @@ function escapeHtml(s: string): string {
 }
 
 function applyReveal(slideEl: HTMLElement, reveal: number) {
-  // Strip prior r-N classes.
   slideEl.className = slideEl.className.replace(/\br-\d+\b/g, "").trim();
   slideEl.classList.add(`r-${reveal}`);
   const frags = slideEl.querySelectorAll<HTMLElement>(".frag");
@@ -105,14 +124,20 @@ export function mount(root: HTMLElement, doc: Doc): RenderHandle {
   const effectiveSlides = buildEffectiveSlides(doc);
   if (effectiveSlides.length === 0) {
     root.innerHTML = `<div class="empty">no slides</div>`;
-    return { doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root };
+    return {
+      doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
+      mountedSlide: -1, editMap: new Map(), active: null,
+    };
   }
   const init = readUrlHash();
   const state: State = {
     slide: clamp(init.slide ?? 0, 0, effectiveSlides.length - 1),
     reveal: Math.max(1, init.reveal ?? 1),
   };
-  const handle: RenderHandle = { doc, effectiveSlides, state, root };
+  const handle: RenderHandle = {
+    doc, effectiveSlides, state, root,
+    mountedSlide: -1, editMap: new Map(), active: null,
+  };
   renderCurrent(handle);
   attachKeyHandler(handle);
   window.addEventListener("hashchange", () => {
@@ -135,16 +160,149 @@ function clamp(n: number, lo: number, hi: number): number {
 function renderCurrent(h: RenderHandle) {
   const eff = h.effectiveSlides[h.state.slide]!;
   h.state.reveal = clamp(h.state.reveal, 1, eff.slide.overlayCount);
-  h.root.innerHTML = renderSlide(eff, h.state.reveal);
-  if (eff.kind === "title") {
-    const authorEl = h.root.querySelector<HTMLElement>('[data-slot="author"]');
-    const dateEl = h.root.querySelector<HTMLElement>('[data-slot="date"]');
-    if (authorEl) authorEl.textContent = h.doc.metadata.author ?? "";
-    if (dateEl) dateEl.textContent = h.doc.metadata.date ?? "";
+
+  if (h.mountedSlide !== h.state.slide) {
+    teardownActive(h);
+    h.root.innerHTML = renderSlide(eff, h.state.reveal);
+    h.mountedSlide = h.state.slide;
+    if (eff.kind === "title") {
+      const authorEl = h.root.querySelector<HTMLElement>('[data-slot="author"]');
+      const dateEl = h.root.querySelector<HTMLElement>('[data-slot="date"]');
+      if (authorEl) authorEl.textContent = h.doc.metadata.author ?? "";
+      if (dateEl) dateEl.textContent = h.doc.metadata.date ?? "";
+    }
   }
+
   const slideEl = h.root.querySelector<HTMLElement>(".slide");
   if (slideEl) applyReveal(slideEl, h.state.reveal);
+  reconcileCodeBlock(h);
   updateUrlHash(h.state);
+}
+
+function reconcileCodeBlock(h: RenderHandle) {
+  const eff = h.effectiveSlides[h.state.slide]!;
+  if (eff.kind !== "content") return;
+  const slide = eff.slide;
+  const blockIdx = slide.blocks.findIndex(b => b.kind === "code");
+  if (blockIdx < 0) return;
+  const atFinal = h.state.reveal === slide.overlayCount;
+
+  if (atFinal && !h.active) {
+    mountActive(h, blockIdx);
+  } else if (!atFinal && h.active) {
+    teardownActive(h);
+  }
+}
+
+function editKey(slideIdx: number, blockIdx: number): string {
+  return `${slideIdx}/${blockIdx}`;
+}
+
+function mountActive(h: RenderHandle, blockIdx: number) {
+  const slide = h.effectiveSlides[h.state.slide]!.slide;
+  const block = slide.blocks[blockIdx];
+  if (!block || block.kind !== "code") return;
+  const containerEl = h.root.querySelector<HTMLElement>(`.block.code[data-block-idx="${blockIdx}"]`);
+  if (!containerEl) return;
+  const preEl = containerEl.querySelector<HTMLElement>(".code-display");
+  if (!preEl) return;
+
+  const key = editKey(h.state.slide, blockIdx);
+  const initial = h.editMap.get(key) ?? block.segments.map(s => s.text).join("");
+  const hostBox = document.createElement("div");
+  hostBox.className = "pres-editor-host";
+  containerEl.insertBefore(hostBox, preEl);
+  preEl.style.display = "none";
+
+  const hosts: { timeline?: HTMLElement; tuples?: HTMLElement } = {};
+  const outBox = document.createElement("div");
+  outBox.className = "pres-output";
+  for (const opt of block.opts) {
+    const host = document.createElement("div");
+    host.className = `pres-output-${opt}`;
+    outBox.appendChild(host);
+    if (opt === "timeline") hosts.timeline = host;
+    else if (opt === "tuples") hosts.tuples = host;
+  }
+  containerEl.appendChild(outBox);
+
+  const active: ActiveBlock = {
+    slideIdx: h.state.slide,
+    blockIdx,
+    editor: null!,
+    preEl,
+    containerEl,
+    hosts,
+    debounceTimer: null,
+  };
+
+  const runOnce = (source: string) => {
+    runAndRender(source, hosts);
+  };
+
+  const editor = new Editor({
+    host: hostBox,
+    initial,
+    saveBackend: "none",
+    autoGrow: true,
+    onChange: (value: string) => {
+      h.editMap.set(key, value);
+      if (active.debounceTimer !== null) clearTimeout(active.debounceTimer);
+      active.debounceTimer = setTimeout(() => {
+        active.debounceTimer = null;
+        runOnce(value);
+      }, DEBOUNCE_MS);
+    },
+  });
+  active.editor = editor;
+  h.active = active;
+
+  // Initial run with the seed text.
+  runOnce(initial);
+}
+
+function teardownActive(h: RenderHandle) {
+  const a = h.active;
+  if (!a) return;
+  // Snapshot current text in case debounce hasn't fired.
+  h.editMap.set(editKey(a.slideIdx, a.blockIdx), a.editor.value);
+  if (a.debounceTimer !== null) clearTimeout(a.debounceTimer);
+  a.editor.destroy();
+  // Remove output box (sibling of preEl).
+  const outBox = a.containerEl.querySelector<HTMLElement>(".pres-output");
+  if (outBox) outBox.remove();
+  // Remove editor host box.
+  const hostBox = a.containerEl.querySelector<HTMLElement>(".pres-editor-host");
+  if (hostBox) hostBox.remove();
+  a.preEl.style.display = "";
+  h.active = null;
+}
+
+function runAndRender(
+  source: string,
+  hosts: { timeline?: HTMLElement; tuples?: HTMLElement },
+): void {
+  const parsed = parseV2(source);
+  if ("message" in parsed) {
+    showError(hosts, `parse error line ${parsed.line}: ${parsed.message}`);
+    return;
+  }
+  const { store, status } = runFixpoint(parsed, GAS, TUPLE_GAS);
+  if (status.kind === "gas") {
+    showError(hosts, `gas exceeded (${GAS} iterations)`);
+    return;
+  }
+  if (hosts.timeline) renderTimelineH(hosts.timeline, store);
+  if (hosts.tuples) renderTuples(hosts.tuples, store, { temporal: true });
+}
+
+function showError(
+  hosts: { timeline?: HTMLElement; tuples?: HTMLElement },
+  msg: string,
+): void {
+  const html = `<div class="pres-eval-error">${escapeHtml(msg)}</div>`;
+  if (hosts.timeline) hosts.timeline.innerHTML = html;
+  if (hosts.tuples) hosts.tuples.innerHTML = html;
 }
 
 function attachKeyHandler(h: RenderHandle) {
@@ -153,19 +311,25 @@ function attachKeyHandler(h: RenderHandle) {
     let handled = true;
     switch (ev.key) {
       case "ArrowRight":
+      case "l":
       case " ":
         nextReveal(h); break;
       case "ArrowLeft":
+      case "h":
         prevReveal(h); break;
       case "ArrowDown":
+      case "j":
       case "PageDown":
         nextSlide(h); break;
       case "ArrowUp":
+      case "k":
       case "PageUp":
         prevSlide(h); break;
       case "Home":
+      case "p":
         h.state.slide = 0; h.state.reveal = 1; renderCurrent(h); break;
       case "End":
+      case "n":
         h.state.slide = h.effectiveSlides.length - 1;
         h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
         renderCurrent(h); break;
