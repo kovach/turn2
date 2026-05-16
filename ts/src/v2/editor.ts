@@ -87,6 +87,11 @@ export class Editor {
   }
 
   private onKeyDown(ev: KeyboardEvent): void {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      this.ta.blur();
+      return;
+    }
     if (ev.key === "Tab") {
       ev.preventDefault();
       this.indentSelection(ev.shiftKey);

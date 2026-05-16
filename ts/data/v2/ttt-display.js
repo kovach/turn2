@@ -7,10 +7,14 @@
 
 const CSS = `
 .ttt-board { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.ttt-grid { display: grid; grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(3, 60px); gap: 2px; background: #333; padding: 2px; }
-.ttt-cell { background: #1e1e1e; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; }
+.ttt-grid { display: grid; grid-template-columns: repeat(3, 60px); grid-template-rows: repeat(3, 60px); gap: 2px; background: var(--border, #333); padding: 2px; }
+.ttt-cell { background: var(--bg-2, #1e1e1e); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; color: var(--fg, #d4d4d4); }
 .ttt-empty { cursor: pointer; }
-.ttt-empty:hover { background: #2a2a2a; }
+.ttt-empty:hover { background: var(--hover, #2a2a2a); }
+html.mode-light .ttt-mark-x { color: #16803c; }
+html.mode-light .ttt-mark-o { color: #c0392b; }
+html.mode-dark  .ttt-mark-x { color: #4ade80; }
+html.mode-dark  .ttt-mark-o { color: #f87171; }
 .ttt-mark-x { color: #4ade80; }
 .ttt-mark-o { color: #f87171; }
 `;

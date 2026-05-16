@@ -9,9 +9,11 @@ const ROOT = path.join(__dirname, "..");
 const args = process.argv.slice(2);
 let dataDir = path.join(ROOT, "data");
 let port = 3000;
+let readOnly = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--data" && args[i + 1]) dataDir = path.resolve(args[++i]!);
   if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i]!, 10);
+  if (args[i] === "--read-only") readOnly = true;
 }
 
 function slFiles(): string[] {
@@ -72,6 +74,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "PUT") {
+      if (readOnly) { sendJson(res, 403, { error: "read-only" }); return; }
       if (!exists) { sendJson(res, 404, { error: "not found" }); return; }
       try { fs.writeFileSync(filePath, await readBody(req), "utf8"); sendJson(res, 200, { ok: true }); }
       catch { sendJson(res, 500, { error: "write error" }); }
@@ -79,6 +82,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (method === "POST") {
+      if (readOnly) { sendJson(res, 403, { error: "read-only" }); return; }
       if (exists) { sendJson(res, 409, { error: "already exists" }); return; }
       try { fs.writeFileSync(filePath, await readBody(req), "utf8"); sendJson(res, 200, { ok: true }); }
       catch { sendJson(res, 500, { error: "write error" }); }
@@ -155,6 +159,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "PUT") {
+      if (readOnly) { sendJson(res, 403, { error: "read-only" }); return; }
       try {
         fs.writeFileSync(filePath, await readBody(req), "utf8");
         sendJson(res, 200, { ok: true });
@@ -194,4 +199,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`Slide  http://localhost:${port}`);
   console.log(`Data   ${dataDir}`);
+  if (readOnly) console.log(`Mode   read-only (file writes disabled)`);
 });

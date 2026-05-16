@@ -1,4 +1,4 @@
-import type { Block, Doc, Slide, Span } from "./types.js";
+import type { Block, Doc, ListItem, Slide, Span } from "./types.js";
 import { Editor } from "../v2/editor.js";
 import { renderTuples, renderTimelineH } from "../v2/render-output.js";
 import { parse as parseV2 } from "../v2/parse.js";
@@ -17,7 +17,9 @@ type ActiveBlock = {
   editor: Editor;
   preEl: HTMLElement;
   containerEl: HTMLElement;
-  hosts: { timeline?: HTMLElement; tuples?: HTMLElement };
+  hosts: { timeline: HTMLElement; tuples: HTMLElement };
+  enabled: { timeline: boolean; tuples: boolean };
+  toggle: (which: "tuples" | "timeline") => void;
   debounceTimer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -48,10 +50,46 @@ function buildEffectiveSlides(doc: Doc): EffectiveSlide[] {
   return out;
 }
 
+function wrapSpan(s: Span): string {
+  let inner = escapeHtml(s.text);
+  if (s.code) inner = `<code>${inner}</code>`;
+  if (s.italic) inner = `<em>${inner}</em>`;
+  if (s.bold) inner = `<strong>${inner}</strong>`;
+  return `<span class="frag" data-reveal="${s.reveal}">${inner}</span>`;
+}
+
 function spanHtml(spans: Span[]): string {
-  return spans.map(s =>
-    `<span class="frag" data-reveal="${s.reveal}">${escapeHtml(s.text)}</span>`
-  ).join("");
+  return spans.map(wrapSpan).join("");
+}
+
+function renderListItems(items: ListItem[]): string {
+  let html = "";
+  const stack: number[] = [];
+  let openLi = false;
+  for (const item of items) {
+    while (stack.length > 0 && stack[stack.length - 1]! > item.level) {
+      if (openLi) { html += "</li>"; openLi = false; }
+      html += "</ul>";
+      stack.pop();
+      if (stack.length > 0) openLi = true;
+    }
+    if (stack.length === 0 || stack[stack.length - 1]! < item.level) {
+      html += `<ul class="block list">`;
+      stack.push(item.level);
+      openLi = false;
+    } else {
+      if (openLi) { html += "</li>"; openLi = false; }
+    }
+    html += `<li class="frag" data-reveal="${item.reveal}">${spanHtml(item.spans)}`;
+    openLi = true;
+  }
+  while (stack.length > 0) {
+    if (openLi) { html += "</li>"; openLi = false; }
+    html += "</ul>";
+    stack.pop();
+    if (stack.length > 0) openLi = true;
+  }
+  return html;
 }
 
 function renderBlock(b: Block, blockIdx: number): string {
@@ -59,11 +97,7 @@ function renderBlock(b: Block, blockIdx: number): string {
     return `<p class="block para">${spanHtml(b.spans)}</p>`;
   }
   if (b.kind === "list") {
-    const items = b.items.map(item => {
-      const firstReveal = item[0]?.reveal ?? 1;
-      return `<li class="frag" data-reveal="${firstReveal}">${spanHtml(item)}</li>`;
-    }).join("");
-    return `<ul class="block list">${items}</ul>`;
+    return renderListItems(b.items);
   }
   // code
   const segs = b.segments.map(s =>
@@ -185,11 +219,16 @@ function reconcileCodeBlock(h: RenderHandle) {
   const slide = eff.slide;
   const blockIdx = slide.blocks.findIndex(b => b.kind === "code");
   if (blockIdx < 0) return;
-  const atFinal = h.state.reveal === slide.overlayCount;
+  const block = slide.blocks[blockIdx]!;
+  if (block.kind !== "code") return;
+  // Mount once every segment of the code block is revealed, even if the
+  // slide has further [pause]s after the block.
+  const codeMaxReveal = block.segments.reduce((m, s) => Math.max(m, s.reveal), 1);
+  const fullyShown = h.state.reveal >= codeMaxReveal;
 
-  if (atFinal && !h.active) {
+  if (fullyShown && !h.active) {
     mountActive(h, blockIdx);
-  } else if (!atFinal && h.active) {
+  } else if (!fullyShown && h.active) {
     teardownActive(h);
   }
 }
@@ -214,17 +253,50 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   containerEl.insertBefore(hostBox, preEl);
   preEl.style.display = "none";
 
-  const hosts: { timeline?: HTMLElement; tuples?: HTMLElement } = {};
+  const tuplesHost = document.createElement("div");
+  tuplesHost.className = "pres-output-tuples";
+  const timelineHost = document.createElement("div");
+  timelineHost.className = "pres-output-timeline";
   const outBox = document.createElement("div");
   outBox.className = "pres-output";
-  for (const opt of block.opts) {
-    const host = document.createElement("div");
-    host.className = `pres-output-${opt}`;
-    outBox.appendChild(host);
-    if (opt === "timeline") hosts.timeline = host;
-    else if (opt === "tuples") hosts.tuples = host;
-  }
+  outBox.appendChild(tuplesHost);
+  outBox.appendChild(timelineHost);
   containerEl.appendChild(outBox);
+
+  const enabled = {
+    tuples: block.opts.includes("tuples"),
+    timeline: block.opts.includes("timeline"),
+  };
+  const applyVisibility = () => {
+    tuplesHost.style.display = enabled.tuples ? "" : "none";
+    timelineHost.style.display = enabled.timeline ? "" : "none";
+    outBox.style.display = (enabled.tuples || enabled.timeline) ? "" : "none";
+  };
+  applyVisibility();
+
+  // Toolbar with toggle buttons.
+  const toolbar = document.createElement("div");
+  toolbar.className = "pres-editor-toolbar";
+  const refreshers: Array<() => void> = [];
+  const toggleFn = (which: "tuples" | "timeline") => {
+    enabled[which] = !enabled[which];
+    for (const r of refreshers) r();
+    applyVisibility();
+    if (enabled[which]) runOnce(editor.value);
+  };
+  const mkToggle = (label: string, which: "tuples" | "timeline") => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pres-toggle";
+    btn.textContent = label;
+    const refresh = () => btn.classList.toggle("active", enabled[which]);
+    refresh();
+    refreshers.push(refresh);
+    btn.addEventListener("click", () => toggleFn(which));
+    toolbar.appendChild(btn);
+  };
+  mkToggle("db", "tuples");
+  mkToggle("timeline", "timeline");
 
   const active: ActiveBlock = {
     slideIdx: h.state.slide,
@@ -232,12 +304,14 @@ function mountActive(h: RenderHandle, blockIdx: number) {
     editor: null!,
     preEl,
     containerEl,
-    hosts,
+    hosts: { timeline: timelineHost, tuples: tuplesHost },
+    enabled,
+    toggle: toggleFn,
     debounceTimer: null,
   };
 
   const runOnce = (source: string) => {
-    runAndRender(source, hosts);
+    runAndRender(source, { timeline: timelineHost, tuples: tuplesHost }, enabled);
   };
 
   const editor = new Editor({
@@ -255,6 +329,7 @@ function mountActive(h: RenderHandle, blockIdx: number) {
     },
   });
   active.editor = editor;
+  hostBox.appendChild(toolbar);
   h.active = active;
 
   // Initial run with the seed text.
@@ -280,62 +355,71 @@ function teardownActive(h: RenderHandle) {
 
 function runAndRender(
   source: string,
-  hosts: { timeline?: HTMLElement; tuples?: HTMLElement },
+  hosts: { timeline: HTMLElement; tuples: HTMLElement },
+  enabled: { timeline: boolean; tuples: boolean },
 ): void {
   const parsed = parseV2(source);
   if ("message" in parsed) {
-    showError(hosts, `parse error line ${parsed.line}: ${parsed.message}`);
+    showError(hosts, enabled, `parse error line ${parsed.line}: ${parsed.message}`);
     return;
   }
   const { store, status } = runFixpoint(parsed, GAS, TUPLE_GAS);
   if (status.kind === "gas") {
-    showError(hosts, `gas exceeded (${GAS} iterations)`);
+    showError(hosts, enabled, `gas exceeded (${GAS} iterations)`);
     return;
   }
-  if (hosts.timeline) renderTimelineH(hosts.timeline, store);
-  if (hosts.tuples) renderTuples(hosts.tuples, store, { temporal: true });
+  if (enabled.timeline) renderTimelineH(hosts.timeline, store);
+  if (enabled.tuples) renderTuples(hosts.tuples, store, { temporal: true });
 }
 
 function showError(
-  hosts: { timeline?: HTMLElement; tuples?: HTMLElement },
+  hosts: { timeline: HTMLElement; tuples: HTMLElement },
+  enabled: { timeline: boolean; tuples: boolean },
   msg: string,
 ): void {
   const html = `<div class="pres-eval-error">${escapeHtml(msg)}</div>`;
-  if (hosts.timeline) hosts.timeline.innerHTML = html;
-  if (hosts.tuples) hosts.tuples.innerHTML = html;
+  if (enabled.timeline) hosts.timeline.innerHTML = html;
+  if (enabled.tuples) hosts.tuples.innerHTML = html;
 }
 
 function attachKeyHandler(h: RenderHandle) {
+  const gotoStart = () => { h.state.slide = 0; h.state.reveal = 1; renderCurrent(h); };
+  const gotoEnd = () => {
+    h.state.slide = h.effectiveSlides.length - 1;
+    h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
+    renderCurrent(h);
+  };
+  const toggleTimeline = () => { if (h.active) h.active.toggle("timeline"); };
+  const toggleTuples = () => { if (h.active) h.active.toggle("tuples"); };
+
+  const bindings: Record<string, () => void> = {
+    "ArrowRight": () => nextReveal(h),
+    "l":          () => nextReveal(h),
+    " ":          () => nextReveal(h),
+    "ArrowLeft":  () => prevReveal(h),
+    "h":          () => prevReveal(h),
+    "ArrowDown":  () => nextSlide(h),
+    "j":          () => nextSlide(h),
+    "PageDown":   () => nextSlide(h),
+    "ArrowUp":    () => prevSlide(h),
+    "k":          () => prevSlide(h),
+    "PageUp":     () => prevSlide(h),
+    "Home":       gotoStart,
+    "p":          gotoStart,
+    "End":        gotoEnd,
+    "n":          gotoEnd,
+    "t":          toggleTimeline,
+    "d":          toggleTuples,
+  };
+
   document.addEventListener("keydown", ev => {
     if (ev.target instanceof HTMLTextAreaElement || ev.target instanceof HTMLInputElement) return;
-    let handled = true;
-    switch (ev.key) {
-      case "ArrowRight":
-      case "l":
-      case " ":
-        nextReveal(h); break;
-      case "ArrowLeft":
-      case "h":
-        prevReveal(h); break;
-      case "ArrowDown":
-      case "j":
-      case "PageDown":
-        nextSlide(h); break;
-      case "ArrowUp":
-      case "k":
-      case "PageUp":
-        prevSlide(h); break;
-      case "Home":
-      case "p":
-        h.state.slide = 0; h.state.reveal = 1; renderCurrent(h); break;
-      case "End":
-      case "n":
-        h.state.slide = h.effectiveSlides.length - 1;
-        h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
-        renderCurrent(h); break;
-      default: handled = false;
-    }
-    if (handled) ev.preventDefault();
+    // Any modifier suppresses our handlers — those combos belong to the browser/OS.
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const fn = bindings[ev.key];
+    if (!fn) return;
+    fn();
+    ev.preventDefault();
   });
 }
 
@@ -362,10 +446,14 @@ function prevReveal(h: RenderHandle) {
 
 function nextSlide(h: RenderHandle) {
   if (h.state.slide >= h.effectiveSlides.length - 1) return;
-  h.state.slide++; h.state.reveal = 1; renderCurrent(h);
+  h.state.slide++;
+  h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
+  renderCurrent(h);
 }
 
 function prevSlide(h: RenderHandle) {
   if (h.state.slide <= 0) return;
-  h.state.slide--; h.state.reveal = 1; renderCurrent(h);
+  h.state.slide--;
+  h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
+  renderCurrent(h);
 }

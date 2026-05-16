@@ -5,11 +5,21 @@
 %]
 
 [slide][%Purpose%]
-- Turn is for describing situations
+- Turn is for describing situations.
 - It weaves queries, action, and choice together.
 
-[slide][%The now%]
-A query describes a point in time, reading from top to bottom:
+[slide][%Atoms%]
+The basic constituent of a situation is called a *tuple* or *atom*
+[code][%
+turn T                   -- "T is a turn"
+card C                   -- "C is a card"
+card:name C pot-of-greed -- "the name of C is pot-of-greed"
+%]
+[pause]
+(variables are capitalized; symbols lower-case)
+
+[slide][%The Now%]
+A compound query is a sequence of atoms. It describes a point in time, reading from top to bottom:
 [code][%
 turn T       -- during some Turn... [pause]
 play-card C  -- a card is played... [pause]
@@ -18,16 +28,28 @@ action C     -- that is an action... [pause]
 %]
 
 [slide][%Kinds of Action%]
-- ~episode: creates a new interval contained within now
-- +fact: creates a new interval (left, Top), with left contained in now, extending indefinitely forward in time
-- ^property: creates a new interval equal to now
+- [%~episode%]: creates a new interval contained within now
+- [%+fact%]: creates a new interval (left, Top), with left contained in now, extending indefinitely forward in time
+- [%^property%]: creates a new interval equal to now
 
 [slide][%Match/Assert Symmetry%]
 Matches and Assertions distinguished by prefix symbol:
 [code][%
-+action C     -- create an action card
-~turn T       -- create a Turn (after `action` begins)
-~play-card C  -- play the card (during that turn)
++action C     -- create an action card (fact)
+~turn T       -- create a Turn (after `action` begins) (episode)
+~play-card C  -- play the card (during that turn) (episode)
+%][timeline]
+
+[slide][%Timeline View%]
+[code][%
+~game
+
+game, ~turn
+
+turn
+  ( ~action-phase );
+  ( ~buy-phase );
+  ( ~cleanup-phase )
 %][timeline]
 
 [slide][%The now%]
@@ -37,7 +59,7 @@ Sometimes we need several related points in time, so we allow grouping, which te
 turn T
   ( draw-phase, draw-card C ) [pause]
   ( action-phase, play-card C )
-  ...
+  -- ...
 %]
 [pause]
 The two phases do not overlap, but we can still match this situation and respond.
@@ -46,6 +68,10 @@ The two phases do not overlap, but we can still match this situation and respond
 - A tuple sees every tuple that fully contains it.
 - We use this idea to implement aggregates: we can collapse a whole relation down to one value.
 - Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.
+
+[slide][%Aggregation: Last Position%]
+[code][%
+%][timeline]
 
 [slide][%Choices%]
 - The purpose of a Turn program is to construct a choice set; it's a function from past decisions to future choices.
@@ -69,3 +95,16 @@ earthquake, choose-card, it C
 %]
 [pause]
 ... that's it.
+
+[slide][%Composable Choice%]
+There might be multiple ways for a card to be *sturdy*:
+[code][%
++card shelter
++sturdy shelter  -- it is a fact that Shelter is sturdy
+[pause]
+-- "If (at least) two cards have been
+-- played this turn, Trading Post is sturdy
+turn
+  ( play-card _, play-card-count -> N )
+  ^sturdy trading-post
+%]
