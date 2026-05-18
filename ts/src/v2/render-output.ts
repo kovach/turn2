@@ -100,7 +100,7 @@ function temporalOrder(store: Store, idxs: number[]): number[] {
 }
 
 export function renderTuples(host: HTMLElement, store: Store, opts: TuplesOptions = {}): void {
-  const hide = !!opts.hideInternal;
+  const hide = opts.hideInternal ?? true;
   const temporal = !!opts.temporal;
 
   const visible: number[] = [];
@@ -150,6 +150,6 @@ export function renderTuples(host: HTMLElement, store: Store, opts: TuplesOption
 }
 
 export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineOptions = {}): void {
-  const out = renderTimeline(store, { hideInternal: !!opts.hideInternal, orientation: "horizontal" });
+  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal" });
   host.replaceChildren(out.main);
 }

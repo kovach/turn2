@@ -30,7 +30,7 @@ import { aggregateOver } from "./scheduler.js";
 export type { ComponentOptions };
 
 export type ComputeComponentsResult =
-  | { kind: "ok"; components: ComponentOptions[] }
+  | { kind: "ok"; components: ComponentOptions[]; surfaced: BlockedChoose[] }
   | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term };
 
 interface ChoiceContext {
@@ -339,20 +339,62 @@ export function computeComponents(
   store: Store,
   blocked: BlockedChoose[],
   schema: Map<string, string>,
+  // Restrict surfaced components to those reachable (via shared `_constrain`
+  // / `_constrain-agg` rows) from these seed choose rows. The closure pulls
+  // in entangled non-seed chooses; other blocked chooses stay blocked and
+  // re-surface on a subsequent fixpoint round.
+  seedChoices: BlockedChoose[],
 ): ComputeComponentsResult {
   const { activeSet, termByTok } = gatherChoiceContext(store, blocked);
-  if (activeSet.size === 0) return { kind: "ok", components: [] };
+  if (activeSet.size === 0) return { kind: "ok", components: [], surfaced: [] };
 
-  const rows = gatherConstrainRows(store, activeSet);
-  const components = buildComponents(activeSet, rows);
+  const allRows = gatherConstrainRows(store, activeSet);
+
+  // BFS from seed active tokens over the bipartite (token ↔ constrain-row)
+  // graph: a row is reachable iff it touches a reachable token; touching a
+  // reachable row marks all of its other touched tokens reachable.
+  const closedActive = new Set<number>();
+  for (const c of seedChoices) {
+    for (const a of c.activeTerms) {
+      const tok = tokenOf(store, a);
+      if (activeSet.has(tok)) closedActive.add(tok);
+    }
+  }
+  const reachableRows = new Set<number>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < allRows.length; i++) {
+      if (reachableRows.has(i)) continue;
+      const row = allRows[i]!;
+      let hits = false;
+      for (const tok of row.touched) {
+        if (closedActive.has(tok)) { hits = true; break; }
+      }
+      if (!hits) continue;
+      reachableRows.add(i);
+      for (const tok of row.touched) {
+        if (!closedActive.has(tok)) {
+          closedActive.add(tok);
+          changed = true;
+        }
+      }
+    }
+  }
+  const rowsForComponents = [...reachableRows].map((i) => allRows[i]!);
+  const surfaced = blocked.filter((c) =>
+    c.activeTerms.some((a) => closedActive.has(tokenOf(store, a))),
+  );
+
+  const components = buildComponents(closedActive, rowsForComponents);
 
   // Empty-fringe: any component with active members but no rows.
   for (const c of components) {
     if (c.rows.length > 0) continue;
     for (const k of c.members) {
-      if (!activeSet.has(k)) continue;
+      if (!closedActive.has(k)) continue;
       const choiceTerm = termByTok.get(k)!;
-      const owning = blocked.find((b) =>
+      const owning = surfaced.find((b) =>
         b.activeTerms.some((t) => tokenOf(store, t) === k),
       );
       if (owning === undefined) {
@@ -362,6 +404,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, activeSet, termByTok, schema));
-  return { kind: "ok", components: out };
+  const out = components.map((c) => runComponent(store, c, closedActive, termByTok, schema));
+  return { kind: "ok", components: out, surfaced };
 }

@@ -1,0 +1,128 @@
+[metadata][%
+  title: Turn
+  author: Scott Kovach
+  date: [today]
+%]
+
+[slide][%Purpose%]
+- Turn is for describing situations.
+- It weaves queries, action, and choice together.
+
+[slide][%Atoms%]
+The basic constituent of a situation is called a *tuple* or *atom*
+[code][%
+turn T                   -- "T is a turn"
+card C                   -- "C is a card"
+card:name C pot-of-greed -- "the name of C is pot-of-greed"
+%]
+[pause]
+(variables are capitalized; symbols lower-case)
+
+[slide][%The Now%]
+A compound query is a sequence of atoms. It describes an interval in time, reading from top to bottom:
+[code][%
+turn T       -- during some Turn... [pause]
+play-card C  -- a card is played... [pause]
+action C     -- that is an action... [pause]
+~activate C  -- so activate the card.
+%]
+
+[slide][%Kinds of Action%]
+- [%~episode%]: creates a new interval contained within now
+- [%+fact%]: creates a new interval (left, Top), with left contained in now, extending indefinitely forward in time
+- [%^property%]: creates a new interval equal to now
+
+[slide][%Match/Assert Symmetry%]
+Matches and assertions distinguished by prefix symbol:
+[code][%
++action C     -- create an action card (fact)
+~turn T       -- create a Turn (after `action` begins) (episode)
+~play-card C  -- play the card (during that turn) (episode)
+[pause]
+%][timeline]
+
+[slide][%Timeline View%]
+[code][%
+~game
+
+game, ~turn
+
+turn
+  ( ~action-phase );
+  ( ~buy-phase );
+  ( ~cleanup-phase )
+%][timeline]
+
+[slide][%The now(s)%]
+Sometimes we need several related points in time, so we allow grouping.
+This temporarily shrinks the interval and later pops the changes:
+[code][%
+-- "If you play the card you drew, ... [pause]
+turn T
+  ( draw-phase, draw-card C )    -- "drew C" [pause]
+  ( action-phase, play-card C )  -- "play C"
+  -- ...
+%]
+[pause]
+The two phases do not overlap, but we can still match this situation after it happened and respond.
+
+[slide][%Aggregates%]
+- A tuple sees every tuple that fully contains it.
+- We use this idea to implement aggregates: we can collapse a whole relation down to one value.
+- Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.
+
+[slide][%Aggregation: Last Position%]
+[code][%
+-- Directive: `at` is a binary predicate, aggregated by `last`
+#acc at _ -> last
+
+-- We use this to move `me` around...
+step L, +at me -> L
+[pause]
+-- and this to observe.
+look, at me -> L, ^print L
+[pause]
+~game
+  ( ~step here );
+  ( ~look );
+  ( ~step there );
+  ( ~look );
+[pause]
+%][timeline]
+
+[slide][%Choices%]
+- The purpose of a Turn program is to construct a choice set; it's a function from past decisions to future choices.
+- The choice set is represented by a query; the query returns all the valid choices.
+
+[slide][%Choices%]
+[code][%
+choose-card
+  ?Card      -- introduces *choice variable*
+  ~it Card   -- allows other queries to grab it
+  !card Card -- asserts that any valid decision must be a `card`
+%]
+
+[slide][%Composable Choice%]
+Other rules, besides the one that introduces a choice, can refine it:
+[code][%
+-- if "Earthquake" is active:
+--   when choosing a card, it must be *sturdy* [pause]
+
+earthquake, choose-card, it C
+  !sturdy C
+%]
+[pause]
+... that's it.
+
+[slide][%Composable Choice%]
+There might be multiple ways for a card to be *sturdy*:
+[code][%
++card shelter
++sturdy shelter  -- it is a fact that Shelter is sturdy
+[pause]
+-- "If at least two cards have been
+-- played this turn, Trading Post is sturdy
+turn
+  ( play-card _, play-card-count -> N, le 2 N )
+  ^sturdy trading-post
+%]

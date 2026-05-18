@@ -81,9 +81,13 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       }
       continue;
     }
-    // Earliest tier is all choices.
+    // Earliest tier is all choices. Surface only components reachable from
+    // the earliest-tier seed; later-tier chooses entangled via shared
+    // constrain rows are pulled in by `computeComponents`, the rest stay
+    // blocked for the next round.
     const choices = collectBlockedChooses(store);
-    const cc = computeComponents(store, choices, expanded.schema);
+    const seedChoices = tier.flatMap((b) => b.kind === "choose" ? [b.row] : []);
+    const cc = computeComponents(store, choices, expanded.schema, seedChoices);
     if (cc.kind === "empty-fringe-error") {
       return {
         store,
@@ -94,7 +98,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     return {
       store,
       iterations: totalIters,
-      status: { kind: "active-choices", choices, components: cc.components },
+      status: { kind: "active-choices", choices: cc.surfaced, components: cc.components },
     };
   }
 }

@@ -141,4 +141,74 @@ is C V
   console.log("PASS: is-resolution unblocks downstream rule");
 }
 
+// 5) Two independent chooses at different moments — only the earliest tier
+//    surfaces. The later one stays blocked and would re-surface after the
+//    earlier is resolved.
+{
+  const src = `
++ cell c1
++ cell c2
++ turn
+
+turn
+? A
+! cell A
+? B
+! cell B
+`;
+  const { status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(status.choices.length, 1, `expected only earliest choose to surface, got ${status.choices.length}`);
+  assert.equal(status.components.length, 1);
+  assert.equal(status.components[0]!.activeTerms.length, 1);
+  console.log("PASS: independent later choose stays blocked while earliest surfaces");
+}
+
+// 6) Entanglement via a shared `_constrain` row: two chooses sharing one
+//    constraint surface together even though only one is in the earliest
+//    tier.
+{
+  const src = `
++ pair c1 c1
++ turn
+
+turn
+? A
+? B
+! pair A B
+`;
+  const { status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "active-choices");
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(status.choices.length, 2, "both chooses should be pulled in by shared constrain row");
+  assert.equal(status.components.length, 1, "shared row -> one entangled component");
+  assert.equal(status.components[0]!.activeTerms.length, 2);
+  console.log("PASS: shared _constrain row entangles seed with later choose");
+}
+
+// 7) Mixed: A and B entangled via `! pair A B`; D is independent. Earliest
+//    tier seed = {A}; closure pulls in B; D stays blocked.
+{
+  const src = `
++ pair c1 c2
++ cell c1
++ turn
+
+turn
+? A
+? B
+! pair A B
+? D
+! cell D
+`;
+  const { status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "active-choices");
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(status.choices.length, 2, `independent later choose should stay blocked, got ${status.choices.length}`);
+  assert.equal(status.components.length, 1);
+  assert.equal(status.components[0]!.activeTerms.length, 2);
+}
+console.log("PASS: mixed entangled + independent — only entangled batch surfaces");
+
 console.log("ALL v2 choice tests passed");

@@ -1,3 +1,7 @@
+# 26/05/18
+# fix choice issue
+plan: plans/v2-earliest-tier-choices.md
+currently all choices are being proffered at once, not just the earliest component(s)
 
 # 26/05/13
 todo:
