@@ -70,8 +70,6 @@ The two phases do not overlap, but we can still match this situation and respond
 - Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.
 
 [slide][%Aggregation: Last Position%]
-[code][%
-%][timeline]
 
 [slide][%Choices%]
 - The purpose of a Turn program is to construct a choice set; it's a function from past decisions to future choices.

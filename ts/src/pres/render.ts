@@ -152,9 +152,9 @@ function readUrlHash(): Partial<State> {
 }
 
 export function mount(root: HTMLElement, doc: Doc): RenderHandle {
-  const mode = doc.metadata.mode ?? "light";
+  const theme = doc.metadata.theme ?? "light";
   document.body.classList.remove("mode-light", "mode-dark");
-  document.body.classList.add(`mode-${mode}`);
+  document.body.classList.add(`mode-${theme}`);
   const effectiveSlides = buildEffectiveSlides(doc);
   if (effectiveSlides.length === 0) {
     root.innerHTML = `<div class="empty">no slides</div>`;

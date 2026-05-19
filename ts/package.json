@@ -8,7 +8,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "serve": "npm run build && node dist/server.js",
-    "watch": "sh watch.sh"
+    "watch": "sh watch.sh",
+    "build:pres": "tsx src/pres/build-standalone.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +17,7 @@
   "type": "module",
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "esbuild": "^0.27.7",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }

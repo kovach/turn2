@@ -96,7 +96,7 @@ function parseMetadata(body: string, meta: Doc["metadata"]) {
     const key = m[1]!.toLowerCase();
     const value = resolveMetaValue(m[2]!);
     if (key === "title" || key === "author" || key === "date") meta[key] = value;
-    else if (key === "mode" && (value === "light" || value === "dark")) meta.mode = value;
+    else if (key === "theme" && (value === "light" || value === "dark")) meta.theme = value;
   }
 }
 

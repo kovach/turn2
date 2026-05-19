@@ -1,5 +1,5 @@
 export type Doc = {
-  metadata: { title?: string; author?: string; date?: string; mode?: "light" | "dark" };
+  metadata: { title?: string; author?: string; date?: string; theme?: "light" | "dark" };
   slides: Slide[];
 };
 

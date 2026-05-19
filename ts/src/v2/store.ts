@@ -38,6 +38,10 @@ export interface Store {
   top: Term;
   botTok: number;
   topTok: number;
+  // Token → Term recovery for moments — populated by addOrder, addTuple
+  // (endpoints), and createStore (bot/top). Used by leastUpperBound to
+  // return a Term when the LUB is a moment not in the input set.
+  momentTerms: Map<number, Term>;
   // Dedup set for moment-order edges already asserted, keyed as
   // `${ltTok},${gtTok}`. Avoids re-walking the closure during inserts.
   edgeSet: Set<string>;
@@ -98,6 +102,9 @@ export function createStore(): Store {
   const hash = createHashcons();
   const bot = hashconsTerm({ tag: "Symbol", name: "bot" }, hash);
   const top = hashconsTerm({ tag: "Symbol", name: "top" }, hash);
+  const botTok = tokenOfId(bot, hash);
+  const topTok = tokenOfId(top, hash);
+  const momentTerms = new Map<number, Term>([[botTok, bot], [topTok, top]]);
   return {
     hash,
     tuples: [],
@@ -106,8 +113,9 @@ export function createStore(): Store {
     orderFwd: new Map(),
     bot,
     top,
-    botTok: tokenOfId(bot, hash),
-    topTok: tokenOfId(top, hash),
+    botTok,
+    topTok,
+    momentTerms,
     edgeSet: new Set(),
     ltPos: new Map(),
     ltNeg: new Map(),
@@ -151,6 +159,8 @@ export function addTuple(
   const atomTok = tokenOfId(atomRef, store.hash);
   const lTok = tokenOf(store, l);
   const rTok = tokenOf(store, r);
+  if (!store.momentTerms.has(lTok)) store.momentTerms.set(lTok, l);
+  if (!store.momentTerms.has(rTok)) store.momentTerms.set(rTok, r);
   const key = `${atomTok},${lTok},${rTok}`;
   if (store.tupleSet.has(key)) {
     store.tupleDupes++;
@@ -194,6 +204,8 @@ export function addTuple(
 export function addOrder(store: Store, lt: Term, gt: Term): void {
   const ltTok = tokenOf(store, lt);
   const gtTok = tokenOf(store, gt);
+  if (!store.momentTerms.has(ltTok)) store.momentTerms.set(ltTok, lt);
+  if (!store.momentTerms.has(gtTok)) store.momentTerms.set(gtTok, gt);
   if (ltTok === gtTok) return;
   if (ltTok === store.botTok || gtTok === store.topTok) return;
   if (ORDER_STRATEGY === "old") {
@@ -349,4 +361,72 @@ export function intervalContains(
 // in `tuples` so callers can iterate without copying.
 export function candidatesByHead(store: Store, head: string): readonly number[] {
   return store.byHead.get(head) ?? [];
+}
+
+// Least upper bound (join) of a finite set of moments under the moment-
+// order partial order. Empty input returns `bot` (the join of {}).
+// Singleton returns its element. Otherwise folds `lubPair`; returns null
+// if any intermediate step has no unique minimum (≥2 incomparable minimal
+// upper bounds). See plans/v2-moment-lub.md.
+export function leastUpperBound(store: Store, moments: Term[]): Term | null {
+  if (moments.length === 0) return store.bot;
+  let acc = moments[0]!;
+  for (let i = 1; i < moments.length; i++) {
+    const next = lubPair(store, acc, moments[i]!);
+    if (next === null) return null;
+    acc = next;
+  }
+  return acc;
+}
+
+function lubPair(store: Store, a: Term, b: Term): Term | null {
+  const aT = tokenOf(store, a);
+  const bT = tokenOf(store, b);
+  if (aT === bT) return a;
+  if (lessThanTok(store, aT, bT)) return b;
+  if (lessThanTok(store, bT, aT)) return a;
+  const ua = upperSetTok(store, aT);
+  const ub = upperSetTok(store, bT);
+  const [small, big] = ua.size <= ub.size ? [ua, ub] : [ub, ua];
+  const U = new Set<number>();
+  for (const m of small) if (big.has(m)) U.add(m);
+  if (U.size === 0) return null; // unreachable: top is in every upper set
+  // U is upward-closed → m is non-minimal iff some asserted-edge ancestor
+  // is in U. `top` is universally above other moments but has no incoming
+  // edges in orderFwd, so it must be disqualified explicitly when U has
+  // any other member.
+  const notMin = new Set<number>();
+  for (const m of U) {
+    const succ = store.orderFwd.get(m);
+    if (succ === undefined) continue;
+    for (const n of succ) if (U.has(n)) notMin.add(n);
+  }
+  if (U.size > 1 && U.has(store.topTok)) notMin.add(store.topTok);
+  let lub = -1;
+  for (const m of U) {
+    if (notMin.has(m)) continue;
+    if (lub !== -1) return null; // ≥2 incomparable minimal upper bounds
+    lub = m;
+  }
+  if (lub === -1) return null;
+  return store.momentTerms.get(lub) ?? null;
+}
+
+function upperSetTok(store: Store, t: number): Set<number> {
+  if (ORDER_STRATEGY === "eager") {
+    const closure = store.gt.get(t);
+    const out = new Set<number>(closure ?? []);
+    out.add(t);
+    out.add(store.topTok);
+    return out;
+  }
+  const out = new Set<number>([t, store.topTok]);
+  const stack = [t];
+  while (stack.length > 0) {
+    const x = stack.pop()!;
+    const succ = store.orderFwd.get(x);
+    if (succ === undefined) continue;
+    for (const y of succ) if (!out.has(y)) { out.add(y); stack.push(y); }
+  }
+  return out;
 }

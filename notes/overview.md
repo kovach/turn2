@@ -1,14 +1,32 @@
+# 26/05/19
+# standalone slides
+plan: plans/v2-pres-standalone.md
+
+modify pres/ to generate standalone pages.
+foo.pres -> foo.html.
+this is a minimal change: all we want to do is embed the original slide source as a string inside `foo.html`
+we can do parsing and rendering at load time, just like now
+
 # 26/05/18
+# temporal issues around choices and constraints
+## moment LUB
+plan: plans/v2-moment-lub.md
+
+given a set of moments S and a store:
+- compute the set U of moments >= everything in S
+- compute the minimal elements of U
+- if the result set is a singleton {LUB}, define that to be the least upper bound of S
+
+##
+
 # fix choice issue
 plan: plans/v2-earliest-tier-choices.md
 currently all choices are being proffered at once, not just the earliest component(s)
 
 # 26/05/13
-todo:
-  boolean acc
-  ? explicit id syntax
 
 # expand liveness
+see ts/src/v2/expand-liveness.ts
 
 # 26/05/11
 todo:
@@ -21,6 +39,7 @@ plan: plans/v2-rule-names.md
 
 # default display
 plan: plans/v2-default-display.md
+status: blocked on design
 
 sketch a plan for a "default display" that works for any program.
   we'll use a special `icon` predicate to mark terms that want a visual representation.

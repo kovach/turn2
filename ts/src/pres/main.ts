@@ -2,6 +2,8 @@ import { parse } from "./parse.js";
 import { mount } from "./render.js";
 
 async function load(): Promise<string> {
+  const embedded = document.getElementById("pres-src");
+  if (embedded instanceof HTMLTemplateElement) return embedded.content.textContent ?? "";
   const params = new URLSearchParams(location.search);
   const doc = params.get("doc") ?? "example.pres";
   const res = await fetch(`/data/pres/${encodeURIComponent(doc)}`);

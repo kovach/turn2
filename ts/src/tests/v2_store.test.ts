@@ -7,6 +7,7 @@ import {
   intervalContains,
   intervalsOverlap,
   intern,
+  leastUpperBound,
   lessThan,
 } from "../v2/store.js";
 import type { Term } from "../types.js";
@@ -112,6 +113,103 @@ function sym(name: string): Term { return { tag: "Symbol", name }; }
   assert.equal(s.tuples.length, 1);
   assert.deepEqual(s.byHead.get("foo"), [0]);
   console.log("PASS: tuple insert + index");
+}
+
+// 9) leastUpperBound — empty and singleton.
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  assert.equal(leastUpperBound(s, []), s.bot);
+  assert.equal(leastUpperBound(s, [a]), a);
+  console.log("PASS: lub of empty is bot; lub of singleton is itself");
+}
+
+// 10) leastUpperBound — comparable pair: returns the upper of the two.
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  const b = intern(s, sym("b"));
+  addOrder(s, a, b);
+  assert.equal(leastUpperBound(s, [a, b]), b);
+  assert.equal(leastUpperBound(s, [b, a]), b);
+  // Equal terms in the input.
+  assert.equal(leastUpperBound(s, [a, a]), a);
+  console.log("PASS: lub of comparable pair returns the upper");
+}
+
+// 11) leastUpperBound — incomparable pair with one shared descendant.
+//      a   b
+//       \ /
+//        c
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  const b = intern(s, sym("b"));
+  const c = intern(s, sym("c"));
+  addOrder(s, a, c);
+  addOrder(s, b, c);
+  assert.equal(leastUpperBound(s, [a, b]), c);
+  console.log("PASS: lub of incomparable pair with shared descendant returns it");
+}
+
+// 12) leastUpperBound — incomparable pair with no shared descendant: top
+//      (top is the only moment universally above both).
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  const b = intern(s, sym("b"));
+  // Touch them with orderFwd so they're recorded as moments.
+  addOrder(s, a, intern(s, sym("a-up")));
+  addOrder(s, b, intern(s, sym("b-up")));
+  assert.equal(leastUpperBound(s, [a, b]), s.top);
+  console.log("PASS: lub falls back to top when no in-store common descendant");
+}
+
+// 13) leastUpperBound — two incomparable minimal upper bounds → null.
+//      a       b
+//      |\     /|
+//      | \   / |
+//      |  \ /  |
+//      c   X   d   (c and d both above {a,b}; c, d incomparable)
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  const b = intern(s, sym("b"));
+  const c = intern(s, sym("c"));
+  const d = intern(s, sym("d"));
+  addOrder(s, a, c);
+  addOrder(s, a, d);
+  addOrder(s, b, c);
+  addOrder(s, b, d);
+  // c and d both upper bounds; neither below the other.
+  assert.equal(leastUpperBound(s, [a, b]), null);
+  console.log("PASS: lub returns null when ≥2 incomparable minimal upper bounds");
+}
+
+// 14) leastUpperBound — triple via fold. a < c, b < c, c < d.
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  const b = intern(s, sym("b"));
+  const c = intern(s, sym("c"));
+  const d = intern(s, sym("d"));
+  addOrder(s, a, c);
+  addOrder(s, b, c);
+  addOrder(s, c, d);
+  assert.equal(leastUpperBound(s, [a, b, c]), c);
+  assert.equal(leastUpperBound(s, [a, b, d]), d);
+  console.log("PASS: lub folds correctly over a triple");
+}
+
+// 15) leastUpperBound — bot/top edge cases.
+{
+  const s = createStore();
+  const a = intern(s, sym("a"));
+  addOrder(s, a, intern(s, sym("a-up"))); // record `a` as a moment
+  assert.equal(leastUpperBound(s, [s.bot, a]), a);
+  assert.equal(leastUpperBound(s, [a, s.top]), s.top);
+  assert.equal(leastUpperBound(s, [s.bot, s.bot]), s.bot);
+  console.log("PASS: lub handles bot/top as identity/absorber");
 }
 
 console.log("ALL v2 store tests passed");
