@@ -1,10 +1,11 @@
-# Choice component evaluation at a canonical moment
+# Choice component evaluation at the component moment
 
 ## Goal
 
 When evaluating a choice component (the per-component conjunctive query in
 `ts/src/v2/constraint-query.ts`), evaluate every `_constrain` / `_constrain-agg`
-row against a single canonical moment `M` shared across the component, rather
+row against the **choice component moment** `M` — a single moment shared
+across the component — rather
 than each row using its own stored interval `[row.l, row.r]`.
 
 `M` is defined as `leastUpperBound(store, [row.l for row in component])` — the

@@ -2,7 +2,7 @@
 plan: plans/v2-choice-component-evaluation.md
 note: notes/moment-insertion.md
 
-- use the moment-lub function to compute a canonical moment associated with a choice component
+- use the moment-lub function to compute the **choice component moment** (the moment associated with a choice component)
 - specifically, compute the lub M of all the left endpoints of all the constrain/constrain-agg tuples in the component
 - instead of evaluating each constrain wrt its own interval, evaluate wrt M:
   - constrain tuples are restricted to tuples that contain M

@@ -90,19 +90,22 @@ function activeTokensIn(atom: Atom, store: Store, activeSet: Set<number>): Set<n
 
 interface ConstrainRow {
   rowIndex: number;
-  // "plain": match candidates one tuple at a time by overlap + structural
-  // unification. "agg": fold candidates whose interval *contains* this row's
-  // interval via the relation's schema aggregator (no `_do-agg`/`_agg-
-  // result` rows are inserted into the store).
+  // "plain": match candidates one tuple at a time by structural
+  // unification against the wrapped atom. "agg": fold candidates via the
+  // relation's schema aggregator (no `_do-agg`/`_agg-result` rows are
+  // inserted into the store). In both cases the choice component moment
+  // `M` (see `choiceComponentMoment`) gates which candidates are visible:
+  // plain rows require `cand` to contain `M`; agg rows aggregate over
+  // contributions whose interval contains `M`.
   kind: "plain" | "agg";
   // The wrapped atom inside the constrain row's terms[1].
   wrapped: Atom;
   // Active tokens this row touches.
   touched: Set<number>;
   // The constrain row's stored left endpoint. Used to compute the
-  // component's canonical moment `M = lub(row.l for row in comp)`; the
-  // row's own right endpoint is not consulted (the component evaluates
-  // against `M` rather than per-row intervals).
+  // choice component moment `M = lub(row.l for row in comp)`; the row's
+  // own right endpoint is not consulted (the component evaluates against
+  // `M` rather than per-row intervals).
   l: Term;
 }
 
@@ -136,6 +139,24 @@ function unwrapAtom(term: Term, store: Store): Atom | null {
 interface RawComponent {
   members: Set<number>;       // active-term tokens in this component
   rows: ConstrainRow[];
+}
+
+// The choice component moment: the single moment `M` at which every
+// constrain / constrain-agg row in `comp` is interpreted. Defined as the
+// least upper bound of the rows' left endpoints. The moment graph is a
+// lattice (see notes/moment-insertion.md), so `M` is guaranteed to exist
+// uniquely whenever `comp` has at least one row. A zero-row component is
+// unreachable in practice — the empty-fringe check in `computeComponents`
+// intercepts it — but is asserted here as a defensive invariant.
+function choiceComponentMoment(store: Store, comp: RawComponent): Term {
+  if (comp.rows.length === 0) {
+    throw new Error("choiceComponentMoment: zero-row component (should be caught by empty-fringe)");
+  }
+  const m = leastUpperBound(store, comp.rows.map((r) => r.l));
+  if (m === null) {
+    throw new Error("choiceComponentMoment: moment graph invariant violated — expected lattice");
+  }
+  return m;
 }
 
 function buildComponents(activeSet: Set<number>, rows: ConstrainRow[]): RawComponent[] {
@@ -197,17 +218,9 @@ function runComponent(
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
 
-  // Canonical moment M: LUB of all row left endpoints. The moment graph
-  // is a lattice (see notes/moment-insertion.md), so M is guaranteed
-  // non-null whenever the component has ≥1 row. A zero-row component is
-  // unreachable: empty-fringe in computeComponents intercepts it.
-  if (comp.rows.length === 0) {
-    throw new Error("runComponent: zero-row component (should be caught by empty-fringe)");
-  }
-  const M = leastUpperBound(store, comp.rows.map((r) => r.l));
-  if (M === null) {
-    throw new Error("runComponent: moment graph invariant violated — expected lattice");
-  }
+  // The choice component moment — every row in `comp` is evaluated against
+  // this single moment rather than its own stored interval.
+  const M = choiceComponentMoment(store, comp);
 
   const seen = new Set<string>();
   const options: Term[][] = [];
