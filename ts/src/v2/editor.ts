@@ -14,11 +14,15 @@ const SAVE_DEBOUNCE_MS = 400;
 
 export class Editor {
   private readonly ta: HTMLTextAreaElement;
+  private readonly wrap: HTMLElement;
+  private readonly gutterEl: HTMLElement;
   private readonly opts: EditorOptions;
   private readonly adopted: boolean;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly keyHandler: (ev: KeyboardEvent) => void;
   private readonly inputHandler: () => void;
+  private readonly scrollHandler: () => void;
+  private lastLineCount = 0;
 
   constructor(opts: EditorOptions) {
     this.opts = opts;
@@ -26,6 +30,16 @@ export class Editor {
       this.ta = opts.existing;
       this.adopted = true;
       if (opts.initial !== undefined) this.ta.value = opts.initial;
+      const parent = this.ta.parentNode;
+      if (!parent) throw new Error("Editor: existing textarea has no parent");
+      this.wrap = document.createElement("div");
+      this.wrap.className = "editor-wrap";
+      parent.insertBefore(this.wrap, this.ta);
+      this.gutterEl = document.createElement("div");
+      this.gutterEl.className = "editor-gutter";
+      this.gutterEl.setAttribute("aria-hidden", "true");
+      this.wrap.appendChild(this.gutterEl);
+      this.wrap.appendChild(this.ta);
     } else {
       if (!opts.host) throw new Error("Editor: host or existing required");
       this.ta = document.createElement("textarea");
@@ -34,14 +48,25 @@ export class Editor {
       this.ta.spellcheck = false;
       this.ta.autocapitalize = "off";
       this.ta.autocomplete = "off";
-      opts.host.appendChild(this.ta);
+      this.wrap = document.createElement("div");
+      this.wrap.className = "editor-wrap";
+      this.gutterEl = document.createElement("div");
+      this.gutterEl.className = "editor-gutter";
+      this.gutterEl.setAttribute("aria-hidden", "true");
+      this.wrap.appendChild(this.gutterEl);
+      this.wrap.appendChild(this.ta);
+      opts.host.appendChild(this.wrap);
       this.adopted = false;
     }
 
     this.keyHandler = (ev) => this.onKeyDown(ev);
     this.inputHandler = () => this.onInput();
+    this.scrollHandler = () => { this.gutterEl.scrollTop = this.ta.scrollTop; };
     this.ta.addEventListener("keydown", this.keyHandler);
     this.ta.addEventListener("input", this.inputHandler);
+    this.ta.addEventListener("scroll", this.scrollHandler);
+
+    this.rebuildGutter();
 
     if (opts.autoGrow) {
       this.ta.style.overflowY = "hidden";
@@ -51,7 +76,11 @@ export class Editor {
   }
 
   get value(): string { return this.ta.value; }
-  set value(v: string) { this.ta.value = v; if (this.opts.autoGrow) this.fitHeight(); }
+  set value(v: string) {
+    this.ta.value = v;
+    this.rebuildGutter();
+    if (this.opts.autoGrow) this.fitHeight();
+  }
   get element(): HTMLTextAreaElement { return this.ta; }
   focus(): void { this.ta.focus(); }
 
@@ -62,10 +91,12 @@ export class Editor {
     }
     this.ta.removeEventListener("keydown", this.keyHandler);
     this.ta.removeEventListener("input", this.inputHandler);
-    if (!this.adopted) this.ta.remove();
+    this.ta.removeEventListener("scroll", this.scrollHandler);
+    if (!this.adopted) this.wrap.remove();
   }
 
   private onInput(): void {
+    this.rebuildGutter();
     if (this.opts.autoGrow) this.fitHeight();
     if (this.opts.onChange) this.opts.onChange(this.ta.value);
     this.scheduleSave();
@@ -74,6 +105,26 @@ export class Editor {
   private fitHeight(): void {
     this.ta.style.height = "auto";
     this.ta.style.height = this.ta.scrollHeight + "px";
+    this.gutterEl.style.height = this.ta.style.height;
+  }
+
+  private rebuildGutter(): void {
+    const value = this.ta.value;
+    let n = 1;
+    for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) === 10) n++;
+    if (n === this.lastLineCount) return;
+    if (n > this.lastLineCount) {
+      for (let i = this.lastLineCount; i < n; i++) {
+        const row = document.createElement("div");
+        row.textContent = String(i + 1);
+        this.gutterEl.appendChild(row);
+      }
+    } else {
+      while (this.gutterEl.childNodes.length > n) {
+        this.gutterEl.removeChild(this.gutterEl.lastChild!);
+      }
+    }
+    this.lastLineCount = n;
   }
 
   // Replace [start, end) in the textarea with `text`, going through

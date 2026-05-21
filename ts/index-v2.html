@@ -37,6 +37,10 @@
     .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .pane-label { padding: 5px 12px; font-size: 11px; color: var(--fg-faint); background: var(--bg-2); border-bottom: 1px solid var(--border-2); letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
     textarea { flex: 1; background: var(--bg); color: var(--fg); border: none; outline: none; padding: 12px; font-family: monospace; font-size: 14px; line-height: 1.6; resize: none; tab-size: 2; white-space: pre; }
+    .editor-wrap { display: flex; align-items: stretch; flex: 1; min-height: 0; background: var(--bg); }
+    .editor-wrap .editor-textarea, .editor-wrap textarea { flex: 1 1 auto; }
+    .editor-gutter { flex: 0 0 auto; user-select: none; text-align: right; padding: 12px 6px 12px 10px; font-family: monospace; font-size: 14px; line-height: 1.6; color: var(--editor-gutter-fg, var(--fg-faint)); overflow: hidden; white-space: pre; background: var(--bg); }
+    .editor-gutter > div { min-width: 2ch; }
     .editors { display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; }
     .right-column { display: flex; flex-direction: column; min-height: 0; }
     .display-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
@@ -164,6 +168,10 @@
         <span>orientation:</span>
         <button id="timeline-orient-h" class="active">horizontal</button>
         <button id="timeline-orient-v">vertical</button>
+        <span style="margin-left: 12px;">lanes:</span>
+        <button id="timeline-lane-compact">compact</button>
+        <button id="timeline-lane-nested">nested</button>
+        <button id="timeline-lane-tree" class="active">tree</button>
       </div>
       <div id="timeline-main"></div>
     </div>

@@ -296,7 +296,10 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       i++;
     }
 
-    if (depth > 0) return { line: startLine, message: "unmatched '('" };
+    if (depth > 0) {
+      const ln = openSubs[openSubs.length - 1]!.item.span.line;
+      return { line: ln, message: "unmatched '('" };
+    }
     if (body.length > 0) {
       const usedNames = new Set<string>();
       collectUsedNames(body, usedNames);

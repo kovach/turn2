@@ -150,6 +150,6 @@ export function renderTuples(host: HTMLElement, store: Store, opts: TuplesOption
 }
 
 export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineOptions = {}): void {
-  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal" });
+  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal", laneMode: "tree" });
   host.replaceChildren(out.main);
 }

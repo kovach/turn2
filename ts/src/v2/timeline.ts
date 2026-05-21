@@ -22,6 +22,7 @@ import { renderAtomShallow, renderTermShallow } from "./print.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 export type Orientation = "horizontal" | "vertical";
+export type LaneMode = "compact" | "nested" | "tree";
 
 // Font constants — used both for SVG <text> attributes and for
 // canvas-based width measurement so the two cannot drift apart.
@@ -51,6 +52,7 @@ export interface TimelineOpts {
   factLabelMaxRows: number;
   barLabelMaxLen: number;
   margin: number;
+  laneMode: LaneMode;
 }
 
 export const DEFAULT_OPTS: TimelineOpts = {
@@ -62,6 +64,7 @@ export const DEFAULT_OPTS: TimelineOpts = {
   factLabelMaxRows: 8,
   barLabelMaxLen: 28,
   margin: 16,
+  laneMode: "tree",
 };
 
 interface MomentNode {
@@ -107,9 +110,15 @@ export interface TimelineLayout {
   // mode's per-rank-step sizing so stacked labels fit.
   maxStartGroupSize: number;
   // Per-rank-step widths in pixels; length === maxRank. Step r is the
-  // gap between rank r and rank r+1. Sized to fit bar/fact/end-tick
-  // labels measured via the canvas measurer.
+  // gap between rank r and rank r+1. Sized to fit bar/fact label widths
+  // measured via the canvas measurer.
   colWidths: number[];
+  // Measured pixel widths of the "bot" / "top" tick labels — used by the
+  // horizontal projector to push the timeline rightward so the labels
+  // fit in the margins flanking the spine. 0 when unused (e.g. empty
+  // store with maxRank < 1).
+  botLabelWidth: number;
+  topLabelWidth: number;
   sidebar: SidebarSection[];
 }
 
@@ -270,25 +279,15 @@ export function layoutTimeline(
     }
   }
 
-  // Lane-pack bars greedily by start rank, then by end rank.
-  rawBars.sort((a, b) => (a.lRank - b.lRank) || (a.rRank - b.rRank) || (a.tupleIndex - b.tupleIndex));
-  const laneEnds: number[] = []; // last placed bar's end rank per lane
-  type PartialBar = Bar & { lRank: number };
-  const bars: PartialBar[] = [];
-  for (const b of rawBars) {
-    let lane = -1;
-    for (let li = 0; li < laneEnds.length; li++) {
-      if (laneEnds[li]! <= b.lRank) { lane = li; break; }
-    }
-    if (lane < 0) { lane = laneEnds.length; laneEnds.push(0); }
-    laneEnds[lane] = b.rRank;
-    bars.push({
-      tupleIndex: b.tupleIndex,
-      lTok: b.lTok, rTok: b.rTok,
-      lane, label: b.label, full: b.full,
-      startGroupRow: 0, lRank: b.lRank,
-    });
-  }
+  // For nested mode, containment uses the moment partial order (the
+  // local `gt` reachability map above), not ranks: two moments may
+  // share a rank without being comparable in the order.
+  const leqTok = (a: number, b: number): boolean =>
+    a === b || (gt.get(a)?.has(b) ?? false);
+  const { bars, laneCount: packedLaneCount } =
+    opts.laneMode === "nested" ? packBarsNested(rawBars, leqTok, store.botTok) :
+    opts.laneMode === "tree"   ? packBarsTree(rawBars, leqTok, store.botTok) :
+    packBarsCompact(rawBars);
   // Group bars by starting rank; assign each its row within the group
   // (lane-ordered). Track the largest group for downstream sizing.
   const byStartRank = new Map<number, PartialBar[]>();
@@ -356,7 +355,7 @@ export function layoutTimeline(
   if (isRows.length > 0) sidebar.push({ heading: `is (${isRows.length})`, rows: isRows });
   if (constrainRows.length > 0) sidebar.push({ heading: `! / constrain (${constrainRows.length})`, rows: constrainRows });
 
-  const laneCount = laneEnds.length;
+  const laneCount = packedLaneCount;
 
   // --- Per-rank-step widths (horizontal mode sizing) ---
   // Step r is the gap between rank r and rank r+1. We compute a lower
@@ -376,14 +375,11 @@ export function layoutTimeline(
     const w = FACT_LABEL_PAD_L + measure(f.label, FACT_LABEL_PX) + FACT_LABEL_PAD_R;
     if (w > colWidths[r]!) colWidths[r] = w;
   }
-  if (maxRank >= 1) {
-    // bot/top tick labels are centered on their rank's x; each consumes
-    // half its width into the adjacent step.
-    const botHalf = measure("bot", END_TICK_PX) / 2;
-    const topHalf = measure("top", END_TICK_PX) / 2;
-    if (botHalf > colWidths[0]!) colWidths[0] = botHalf;
-    if (topHalf > colWidths[maxRank - 1]!) colWidths[maxRank - 1] = topHalf;
-  }
+  // bot/top tick labels sit OUTSIDE the rank range (left of rank 0, right
+  // of rank maxRank). Their widths flow into the projector's left/right
+  // margins, not into the per-step widths.
+  const botLabelWidth = maxRank >= 1 ? measure("bot", END_TICK_PX) : 0;
+  const topLabelWidth = maxRank >= 1 ? measure("top", END_TICK_PX) : 0;
   for (let r = 0; r < maxRank; r++) {
     if (colWidths[r]! < opts.minColWidth) colWidths[r] = opts.minColWidth;
   }
@@ -413,12 +409,208 @@ export function layoutTimeline(
     lane: b.lane, label: b.label, full: b.full,
     startGroupRow: b.startGroupRow,
   }));
-  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, colWidths, sidebar };
+  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, colWidths, botLabelWidth, topLabelWidth, sidebar };
 }
 
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + "…";
+}
+
+// --- Lane-pack strategies ---
+
+type RawBar = { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string };
+type PartialBar = Bar & { lRank: number };
+
+// Greedy interval-graph packing — minimum lane count.
+function packBarsCompact(rawBars: RawBar[]): { bars: PartialBar[]; laneCount: number } {
+  const order = rawBars.slice().sort((a, b) =>
+    (a.lRank - b.lRank) || (a.rRank - b.rRank) || (a.tupleIndex - b.tupleIndex));
+  const laneEnds: number[] = [];
+  const bars: PartialBar[] = [];
+  for (const b of order) bars.push(placeBar(b, laneEnds));
+  return { bars, laneCount: laneEnds.length };
+}
+
+type Forest = {
+  N: number;
+  parent: (number | null)[];
+  children: number[][];
+  roots: number[];
+};
+
+// Containment forest over the moment partial order: A properly contains
+// B iff lA <= lB AND rB <= rA in the order. Identical-endpoint ties are
+// broken by tupleIndex (lower index = "outer"). Each bar's parent is
+// its innermost container; rank-interval span is the tiebreaker when
+// two containers are incomparable to each other.
+function buildContainmentForest(
+  rawBars: RawBar[],
+  leqTok: (a: number, b: number) => boolean,
+): Forest {
+  const N = rawBars.length;
+  const properlyContains = (A: RawBar, B: RawBar): boolean => {
+    if (!leqTok(A.lTok, B.lTok)) return false;
+    if (!leqTok(B.rTok, A.rTok)) return false;
+    const same = A.lTok === B.lTok && A.rTok === B.rTok;
+    if (same) return A.tupleIndex < B.tupleIndex;
+    return true;
+  };
+  const span = (b: RawBar) => b.rRank - b.lRank;
+  const parent: (number | null)[] = new Array(N).fill(null);
+  for (let i = 0; i < N; i++) {
+    const bi = rawBars[i]!;
+    let bestJ: number | null = null;
+    for (let j = 0; j < N; j++) {
+      if (j === i) continue;
+      const bj = rawBars[j]!;
+      if (!properlyContains(bj, bi)) continue;
+      if (bestJ === null) { bestJ = j; continue; }
+      const bb = rawBars[bestJ]!;
+      const ds = span(bj) - span(bb);
+      if (ds < 0 || (ds === 0 && bj.tupleIndex < bb.tupleIndex)) bestJ = j;
+    }
+    parent[i] = bestJ;
+  }
+  const children: number[][] = Array.from({ length: N }, () => []);
+  const roots: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const p = parent[i] ?? null;
+    if (p === null) roots.push(i);
+    else children[p]!.push(i);
+  }
+  // Children sorted by start rank; shorter first as the tiebreaker so
+  // that crossing siblings at the same start rank settle the short one
+  // first (frees its lane sooner) and let the longer one take a higher
+  // lane. Sequential (non-tied) siblings keep their natural
+  // left-to-right order, preserving lane reuse.
+  const sortChildren = (a: number, b: number): number => {
+    const A = rawBars[a]!, B = rawBars[b]!;
+    const sa = A.rRank - A.lRank;
+    const sb = B.rRank - B.lRank;
+    return (A.lRank - B.lRank) || (sa - sb) || (A.tupleIndex - B.tupleIndex);
+  };
+  roots.sort(sortChildren);
+  for (const cs of children) cs.sort(sortChildren);
+  return { N, parent, children, roots };
+}
+
+// Build a placer + finalizer shared between nested/tree packers.
+// Lane-sharing rule: a bar can join a lane iff its lTok comes
+// non-strictly after the lane's last placed rTok in the moment partial
+// order. No owner check — two bars from different subtrees may share a
+// lane when they're temporally disjoint. Structural separation between
+// a bar and its descendants/ancestor is preserved by the caller via
+// `minLane`, not here.
+function makePlacer(
+  rawBars: RawBar[],
+  leqTok: (a: number, b: number) => boolean,
+  botTok: number,
+) {
+  const N = rawBars.length;
+  // Each lane stores its last placed bar's rTok. Empty lanes hold
+  // `botTok` as a sentinel, which `leqTok` treats as ≤ anything.
+  const laneLastRTok: number[] = [];
+  const lane: number[] = new Array(N).fill(-1);
+
+  const place = (idx: number, minLane: number): void => {
+    const b = rawBars[idx]!;
+    for (let li = minLane; li < laneLastRTok.length; li++) {
+      if (leqTok(laneLastRTok[li]!, b.lTok)) {
+        laneLastRTok[li] = b.rTok;
+        lane[idx] = li;
+        return;
+      }
+    }
+    // No reusable lane. Open the new lane AT minLane so the bar sits as
+    // close to its parent as possible, shifting any existing lanes at
+    // minLane and above up by one. Pad with empty sentinels if minLane
+    // jumps past current length.
+    while (laneLastRTok.length < minLane) laneLastRTok.push(botTok);
+    laneLastRTok.splice(minLane, 0, b.rTok);
+    for (let i = 0; i < N; i++) {
+      if (i !== idx && lane[i]! >= minLane) lane[i] = lane[i]! + 1;
+    }
+    lane[idx] = minLane;
+  };
+
+  const finalize = (): { bars: PartialBar[]; laneCount: number } => {
+    const out: PartialBar[] = new Array(N);
+    for (let i = 0; i < N; i++) {
+      const b = rawBars[i]!;
+      out[i] = {
+        tupleIndex: b.tupleIndex,
+        lTok: b.lTok, rTok: b.rTok,
+        lane: lane[i]!, label: b.label, full: b.full,
+        startGroupRow: 0, lRank: b.lRank,
+      };
+    }
+    return { bars: out, laneCount: laneLastRTok.length };
+  };
+
+  return { place, lane, finalize };
+}
+
+// Post-order DFS — leaves get low lanes; each parent sits on a lane
+// above all of its direct children. Yields a nested picture where root
+// is OUTermost and leaves are nearest the spine.
+function packBarsNested(
+  rawBars: RawBar[],
+  leqTok: (a: number, b: number) => boolean,
+  botTok: number,
+): { bars: PartialBar[]; laneCount: number } {
+  if (rawBars.length === 0) return { bars: [], laneCount: 0 };
+  const forest = buildContainmentForest(rawBars, leqTok);
+  const { place, lane, finalize } = makePlacer(rawBars, leqTok, botTok);
+  const visit = (idx: number): void => {
+    for (const c of forest.children[idx]!) visit(c);
+    // Re-read lane[c] AFTER all child subtrees finish — earlier-placed
+    // siblings can have been shifted up by `place`'s splice-insert
+    // when a later sibling's subtree opened a new lane at <= their lane.
+    let childMax = -1;
+    for (const c of forest.children[idx]!) if (lane[c]! > childMax) childMax = lane[c]!;
+    place(idx, childMax + 1);
+  };
+  for (const r of forest.roots) visit(r);
+  return finalize();
+}
+
+// Pre-order DFS — parent placed first, then descendants on lanes above.
+// Yields a picture where the root sits nearest the spine (lane 0) and
+// the tree branches outward. Siblings that share a parent can share
+// a lane when temporally disjoint, even if their own subtrees push
+// further outward — useful when sibling structure matters more than
+// hierarchical depth.
+function packBarsTree(
+  rawBars: RawBar[],
+  leqTok: (a: number, b: number) => boolean,
+  botTok: number,
+): { bars: PartialBar[]; laneCount: number } {
+  if (rawBars.length === 0) return { bars: [], laneCount: 0 };
+  const forest = buildContainmentForest(rawBars, leqTok);
+  const { place, lane, finalize } = makePlacer(rawBars, leqTok, botTok);
+  const visit = (idx: number, minLane: number): void => {
+    place(idx, minLane);
+    const myLane = lane[idx]!;
+    for (const c of forest.children[idx]!) visit(c, myLane + 1);
+  };
+  for (const r of forest.roots) visit(r, 0);
+  return finalize();
+}
+
+function placeBar(b: RawBar, laneEnds: number[]): PartialBar {
+  let lane = -1;
+  for (let li = 0; li < laneEnds.length; li++) {
+    if (laneEnds[li]! <= b.lRank) { lane = li; break; }
+  }
+  if (lane < 0) { lane = laneEnds.length; laneEnds.push(0); }
+  laneEnds[lane] = b.rRank;
+  return {
+    tupleIndex: b.tupleIndex,
+    lTok: b.lTok, rTok: b.rTok,
+    lane, label: b.label, full: b.full,
+    startGroupRow: 0, lRank: b.lRank,
+  };
 }
 
 // --- Projector: maps abstract (rank, lane/row) to pixel space + dims. ---
@@ -453,13 +645,19 @@ function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
   if (opts.orientation === "horizontal") {
     const spineY = margin + layout.laneCount * laneHeight + laneHeight;
     const factAreaH = layout.factRowCount * factLabelHeight;
+    // bot label sits left of rank 0; top label sits right of rank maxRank.
+    // Gap between dot and label.
+    const END_LABEL_GAP = 6;
+    const leftPad = layout.botLabelWidth > 0 ? layout.botLabelWidth + END_LABEL_GAP : 0;
+    const rightPad = layout.topLabelWidth > 0 ? layout.topLabelWidth + END_LABEL_GAP : 0;
     // Prefix-sum the per-step widths into rank x-coordinates.
     const xs: number[] = new Array(layout.maxRank + 1);
-    xs[0] = margin;
+    xs[0] = margin + leftPad;
     for (let r = 0; r < layout.maxRank; r++) xs[r + 1] = xs[r]! + layout.colWidths[r]!;
-    const width = xs[layout.maxRank]! + margin;
+    const width = xs[layout.maxRank]! + rightPad + margin;
     const height = spineY + laneHeight + factAreaH + margin;
     const xOf = (rank: number) => xs[rank]!;
+    const maxRank = layout.maxRank;
     return {
       width, height,
       momentPos: (rank) => ({ x: xOf(rank), y: spineY }),
@@ -482,7 +680,9 @@ function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
         x: xOf(rank) + 4,
         y: spineY + 6 + (row + 1) * factLabelHeight - 4,
       }),
-      endTickPos: (rank, _which) => ({ x: xOf(rank), y: spineY + 14, anchor: "middle" }),
+      endTickPos: (_rank, which) => which === "bot"
+        ? { x: xOf(0) - END_LABEL_GAP, y: spineY + 4, anchor: "end" }
+        : { x: xOf(maxRank) + END_LABEL_GAP, y: spineY + 4, anchor: "start" },
     };
   }
 
@@ -535,6 +735,63 @@ function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
       anchor: "middle",
     }),
   };
+}
+
+// --- ASCII rendering ---
+//
+// Renders the lane layout as text. Lanes stack top-down with the
+// highest-lane bar on the first row. Each rank step occupies a fixed
+// character width (sized to fit the longest bar label). Bars are drawn
+// as `[label …]`; brackets mark lRank and rRank exactly. Facts and
+// moment ticks are omitted — the intent is to make the bar/lane
+// arrangement legible at a glance, not to replicate the SVG.
+//
+// Runs headless (stub measurer; no canvas/DOM), so it's the easiest
+// way to inspect or compare layout-algorithm output from a `tsx`
+// driver under `ts/src/` — e.g. for debugging lane packing or the
+// containment forest without a browser round-trip.
+
+export function renderTimelineAscii(
+  store: Store,
+  opts: Partial<TimelineOpts> = {},
+): string {
+  const o: TimelineOpts = { ...DEFAULT_OPTS, ...opts };
+  // ASCII output doesn't need pixel widths; stub the measurer so this
+  // works in node (no canvas) and skip the layout's per-step sizing pass.
+  const layout = layoutTimeline(store, o, () => 0);
+  if (layout.bars.length === 0 || layout.maxRank < 1) return "";
+
+  // Pick cell width: smallest int >= 2 such that every bar's label fits
+  // between its brackets. For a bar spanning S rank steps, the available
+  // interior is S * cellWidth - 1 chars.
+  let cellWidth = 2;
+  for (const bar of layout.bars) {
+    const lR = layout.moments.get(bar.lTok)!.rank;
+    const rR = layout.moments.get(bar.rTok)!.rank;
+    const span = Math.max(1, rR - lR);
+    const need = Math.ceil((bar.label.length + 1) / span);
+    if (need > cellWidth) cellWidth = need;
+  }
+  const totalCols = layout.maxRank * cellWidth + 1;
+
+  const rows: string[] = [];
+  for (let lane = layout.laneCount - 1; lane >= 0; lane--) {
+    const row: string[] = new Array(totalCols).fill(" ");
+    for (const bar of layout.bars) {
+      if (bar.lane !== lane) continue;
+      const lR = layout.moments.get(bar.lTok)!.rank;
+      const rR = layout.moments.get(bar.rTok)!.rank;
+      const startCol = lR * cellWidth;
+      const endCol = rR * cellWidth;
+      row[startCol] = "[";
+      row[endCol] = "]";
+      const labelMax = endCol - startCol - 1;
+      const label = bar.label.length > labelMax ? bar.label.slice(0, labelMax) : bar.label;
+      for (let i = 0; i < label.length; i++) row[startCol + 1 + i] = label[i]!;
+    }
+    rows.push(row.join("").replace(/ +$/, ""));
+  }
+  return rows.join("\n");
 }
 
 // --- Rendering ---

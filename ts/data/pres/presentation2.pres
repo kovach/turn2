@@ -19,7 +19,8 @@ card:name C pot-of-greed -- "the name of C is pot-of-greed"
 (variables are capitalized; symbols lower-case)
 
 [slide][%The Now%]
-A compound query is a sequence of atoms. It describes an interval in time, reading from top to bottom:
+A compound query is a sequence of atoms. It describes an interval in time, the *now*,
+reading from top to bottom:
 [code][%
 turn T       -- during some Turn... [pause]
 play-card C  -- a card is played... [pause]
@@ -28,17 +29,21 @@ action C     -- that is an action... [pause]
 %]
 
 [slide][%Kinds of Action%]
-- [%~episode%]: creates a new interval contained within now
-- [%+fact%]: creates a new interval (left, Top), with left contained in now, extending indefinitely forward in time
-- [%^property%]: creates a new interval equal to now
+- [%~episode%]: creates a new interval contained within *now*
+- [%+fact%]: creates a new interval (left, Top), with left contained in *now*, extending indefinitely forward in time
+- [%^property%]: creates a new interval equal to *now*
 
-[slide][%Match/Assert Symmetry%]
-Matches and assertions distinguished by prefix symbol:
+[slide][%Triggering the Rule%]
 [code][%
-+action C     -- create an action card (fact)
-~turn T       -- create a Turn (after `action` begins) (episode)
-~play-card C  -- play the card (during that turn) (episode)
+-- Reminder: the rule we want to trigger
+-- turn T, play-card C, action C, ~activate C
 [pause]
++action C     -- create an action card (fact) [pause]
+~turn T       -- create a Turn (after `action` begins) (episode) [pause]
+~play-card C  -- play the card (during that turn) (episode)
+
+-- re-introduce the rule... [pause]
+turn T, play-card C, action C, ~activate C
 %][timeline]
 
 [slide][%Timeline View%]
@@ -66,33 +71,60 @@ turn T
 [pause]
 The two phases do not overlap, but we can still match this situation after it happened and respond.
 
+[slide][%"Co-routines"%]
+[code][%
+%][timeline]
+
 [slide][%Aggregates%]
-- A tuple sees every tuple that fully contains it.
-- We use this idea to implement aggregates: we can collapse a whole relation down to one value.
-- Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.
+- An tuple sees every tuple that fully contains it.
+- We use this idea to implement aggregates: we can collapse a pile of atoms down to one.
+- Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.[pause]
+- *We use aggregates to implement state.*
+
+[slide][%Where am I?%]
+- Answer: wherever you last put me.[pause]
+
+[code][%
+#acc at * -> last
+-- Explanation:[pause]
+-- #acc ...          -- Directive declaring an accumulated relation[pause]
+-- #acc at ...       -- named *at*[pause]
+-- #acc at * ...     -- taking one argument of any type[pause]
+-- #acc at * -> last -- aggregated by *last* (?)
+--
+%]
+
+[slide][%last%]
+- [%last%] is a commutative, binary, multi-valued operation defined on (moment, value) pairs [pause]
+- it returns whichever pair happens later, or both if they are incomparable
+- suppose we know that 0 < t1 < 1 and 0 < t2 < 1. then
+
+todo:
+
+last (0, a) (t1, b) = {(t1, b)}
+last (t1, b) (t2, c) = {(t1, b), (t2, c)}
+last (last (t1, b) (t2, c)) (1, d) = {(1, d)}
 
 [slide][%Aggregation: Last Position%]
 [code][%
--- Directive: `at` is a binary predicate, aggregated by `last`
-#acc at _ -> last
+#acc at * -> last
 
--- We use this to move `me` around...
-step L, +at me -> L
-[pause]
--- and this to observe.
-look, at me -> L, ^print L
-[pause]
 ~game
   ( ~step here );
   ( ~look );
   ( ~step there );
   ( ~look );
 [pause]
+-- We use `step` to move `me` around...
+step L, +at me -> L
+[pause]
+-- and `look` to observe its current location.
+look, at me -> L, ~print L
 %][timeline]
 
 [slide][%Choices%]
-- The purpose of a Turn program is to construct a choice set; it's a function from past decisions to future choices.
-- The choice set is represented by a query; the query returns all the valid choices.
+- The purpose of a Turn program is to construct choice sets: a program defines a function from past decisions to current choices. [pause]
+- The choice set is represented by a query. The query matches the set of valid choices.
 
 [slide][%Choices%]
 [code][%

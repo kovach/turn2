@@ -56,6 +56,9 @@ const tabBtnEditor = document.getElementById("tab-editor") as HTMLButtonElement;
 const tabBtnTimeline = document.getElementById("tab-timeline") as HTMLButtonElement;
 const orientHEl = document.getElementById("timeline-orient-h") as HTMLButtonElement;
 const orientVEl = document.getElementById("timeline-orient-v") as HTMLButtonElement;
+const laneCompactEl = document.getElementById("timeline-lane-compact") as HTMLButtonElement;
+const laneNestedEl = document.getElementById("timeline-lane-nested") as HTMLButtonElement;
+const laneTreeEl = document.getElementById("timeline-lane-tree") as HTMLButtonElement;
 
 const GAS = 100;
 const TUPLE_GAS = 3000;
@@ -242,16 +245,31 @@ try {
   if (v === "vertical" || v === "horizontal") timelineOrient = v;
 } catch { /* ignore */ }
 
+const LANE_KEY = "v2-timeline-lane-mode";
+let timelineLaneMode: "compact" | "nested" | "tree" = "tree";
+try {
+  const v = sessionStorage.getItem(LANE_KEY);
+  if (v === "compact" || v === "nested" || v === "tree") timelineLaneMode = v;
+} catch { /* ignore */ }
+
 function refreshOrientButtons(): void {
   orientHEl.classList.toggle("active", timelineOrient === "horizontal");
   orientVEl.classList.toggle("active", timelineOrient === "vertical");
 }
 refreshOrientButtons();
 
+function refreshLaneButtons(): void {
+  laneCompactEl.classList.toggle("active", timelineLaneMode === "compact");
+  laneNestedEl.classList.toggle("active", timelineLaneMode === "nested");
+  laneTreeEl.classList.toggle("active", timelineLaneMode === "tree");
+}
+refreshLaneButtons();
+
 function renderTimelineTab(store: Store): void {
   const out = renderTimeline(store, {
     hideInternal: hideInternalEl.checked,
     orientation: timelineOrient,
+    laneMode: timelineLaneMode,
   });
   timelineMainEl.replaceChildren(out.main);
   timelineSidebarEl.replaceChildren(out.sidebar);
@@ -268,6 +286,17 @@ function setOrient(o: "horizontal" | "vertical"): void {
 }
 orientHEl.addEventListener("click", () => setOrient("horizontal"));
 orientVEl.addEventListener("click", () => setOrient("vertical"));
+
+function setLaneMode(m: "compact" | "nested" | "tree"): void {
+  if (timelineLaneMode === m) return;
+  timelineLaneMode = m;
+  refreshLaneButtons();
+  try { sessionStorage.setItem(LANE_KEY, m); } catch { /* ignore */ }
+  if (lastStore !== null) renderTimelineTab(lastStore);
+}
+laneCompactEl.addEventListener("click", () => setLaneMode("compact"));
+laneNestedEl.addEventListener("click", () => setLaneMode("nested"));
+laneTreeEl.addEventListener("click", () => setLaneMode("tree"));
 
 const TAB_KEY = "v2-active-tab";
 function setActiveTab(name: "editor" | "timeline"): void {

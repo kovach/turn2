@@ -1,4 +1,4 @@
-import type { Block, Doc, ListItem, Slide, Span } from "./types.js";
+import type { Block, Doc, ListItem, Segment, Slide, Span } from "./types.js";
 import { Editor } from "../v2/editor.js";
 import { renderTuples, renderTimelineH } from "../v2/render-output.js";
 import { parse as parseV2 } from "../v2/parse.js";
@@ -15,8 +15,9 @@ type EffectiveSlide = {
 type ActiveBlock = {
   slideIdx: number;
   blockIdx: number;
+  segments: Segment[];
+  codeMaxReveal: number;
   editor: Editor;
-  preEl: HTMLElement;
   containerEl: HTMLElement;
   hosts: { timeline: HTMLElement; tuples: HTMLElement };
   outBox: HTMLElement;
@@ -37,7 +38,7 @@ type RenderHandle = {
   root: HTMLElement;
   mountedSlide: number;
   editMap: Map<string, string>;
-  active: ActiveBlock | null;
+  activeBlocks: ActiveBlock[];
 };
 
 const GAS = 100;
@@ -106,12 +107,9 @@ function renderBlock(b: Block, blockIdx: number): string {
   if (b.kind === "list") {
     return renderListItems(b.items);
   }
-  // code
-  const segs = b.segments.map(s =>
-    `<span class="frag" data-reveal="${s.reveal}">${escapeHtml(s.text)}</span>`
-  ).join("");
+  // code — editor mounts after render; container is the visible frame.
   const opts = b.opts.length > 0 ? ` data-opts="${b.opts.join(",")}"` : "";
-  return `<div class="block code" data-block-idx="${blockIdx}"${opts}><pre class="code-display">${segs}</pre></div>`;
+  return `<div class="block code" data-block-idx="${blockIdx}"${opts}></div>`;
 }
 
 function renderSlide(eff: EffectiveSlide, reveal: number): string {
@@ -167,7 +165,7 @@ export function mount(root: HTMLElement, doc: Doc): RenderHandle {
     root.innerHTML = `<div class="empty">no slides</div>`;
     return {
       doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
-      mountedSlide: -1, editMap: new Map(), active: null,
+      mountedSlide: -1, editMap: new Map(), activeBlocks: [],
     };
   }
   const init = readUrlHash();
@@ -177,7 +175,7 @@ export function mount(root: HTMLElement, doc: Doc): RenderHandle {
   };
   const handle: RenderHandle = {
     doc, effectiveSlides, state, root,
-    mountedSlide: -1, editMap: new Map(), active: null,
+    mountedSlide: -1, editMap: new Map(), activeBlocks: [],
   };
   renderCurrent(handle);
   attachKeyHandler(handle);
@@ -203,7 +201,7 @@ function renderCurrent(h: RenderHandle) {
   h.state.reveal = clamp(h.state.reveal, 1, eff.slide.overlayCount);
 
   if (h.mountedSlide !== h.state.slide) {
-    teardownActive(h);
+    teardownAll(h);
     h.root.innerHTML = renderSlide(eff, h.state.reveal);
     h.mountedSlide = h.state.slide;
     if (eff.kind === "title") {
@@ -212,53 +210,66 @@ function renderCurrent(h: RenderHandle) {
       if (authorEl) authorEl.textContent = h.doc.metadata.author ?? "";
       if (dateEl) dateEl.textContent = h.doc.metadata.date ?? "";
     }
+    mountCodeBlocks(h);
   }
 
   const slideEl = h.root.querySelector<HTMLElement>(".slide");
   if (slideEl) applyReveal(slideEl, h.state.reveal);
-  reconcileCodeBlock(h);
+  applyCodeReveal(h);
   updateUrlHash(h.state);
-}
-
-function reconcileCodeBlock(h: RenderHandle) {
-  const eff = h.effectiveSlides[h.state.slide]!;
-  if (eff.kind !== "content") return;
-  const slide = eff.slide;
-  const blockIdx = slide.blocks.findIndex(b => b.kind === "code");
-  if (blockIdx < 0) return;
-  const block = slide.blocks[blockIdx]!;
-  if (block.kind !== "code") return;
-  // Mount once every segment of the code block is revealed, even if the
-  // slide has further [pause]s after the block.
-  const codeMaxReveal = block.segments.reduce((m, s) => Math.max(m, s.reveal), 1);
-  const fullyShown = h.state.reveal >= codeMaxReveal;
-
-  if (fullyShown && !h.active) {
-    mountActive(h, blockIdx);
-  } else if (!fullyShown && h.active) {
-    teardownActive(h);
-  }
 }
 
 function editKey(slideIdx: number, blockIdx: number): string {
   return `${slideIdx}/${blockIdx}`;
 }
 
-function mountActive(h: RenderHandle, blockIdx: number) {
-  const slide = h.effectiveSlides[h.state.slide]!.slide;
-  const block = slide.blocks[blockIdx];
-  if (!block || block.kind !== "code") return;
+function revealedText(segments: Segment[], reveal: number): string {
+  let out = "";
+  for (const s of segments) if (s.reveal <= reveal) out += s.text;
+  return out;
+}
+
+function applyCodeReveal(h: RenderHandle) {
+  for (const a of h.activeBlocks) {
+    const next = revealedText(a.segments, h.state.reveal);
+    if (a.editor.value === next) continue;
+    a.editor.value = next;
+    // Programmatic value writes don't fire `input`, so re-evaluate
+    // synchronously rather than waiting for the debounced onChange.
+    if (a.debounceTimer !== null) {
+      clearTimeout(a.debounceTimer);
+      a.debounceTimer = null;
+    }
+    runAndRender(next, a);
+  }
+}
+
+function mountCodeBlocks(h: RenderHandle) {
+  const eff = h.effectiveSlides[h.state.slide]!;
+  if (eff.kind !== "content") return;
+  const slide = eff.slide;
+  for (let blockIdx = 0; blockIdx < slide.blocks.length; blockIdx++) {
+    const block = slide.blocks[blockIdx]!;
+    if (block.kind !== "code") continue;
+    mountActive(h, blockIdx, block);
+  }
+}
+
+function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
+  if (block.kind !== "code") return;
   const containerEl = h.root.querySelector<HTMLElement>(`.block.code[data-block-idx="${blockIdx}"]`);
   if (!containerEl) return;
-  const preEl = containerEl.querySelector<HTMLElement>(".code-display");
-  if (!preEl) return;
 
+  const codeMaxReveal = block.segments.reduce((m, s) => Math.max(m, s.reveal), 1);
   const key = editKey(h.state.slide, blockIdx);
-  const initial = h.editMap.get(key) ?? block.segments.map(s => s.text).join("");
+  const fullText = block.segments.map(s => s.text).join("");
+  // editMap holds user edits made after the block was fully revealed;
+  // before that, the value is a function of (segments, reveal).
+  const initial = h.editMap.get(key)
+    ?? (h.state.reveal >= codeMaxReveal ? fullText : revealedText(block.segments, h.state.reveal));
   const hostBox = document.createElement("div");
   hostBox.className = "pres-editor-host";
-  containerEl.insertBefore(hostBox, preEl);
-  preEl.style.display = "none";
+  containerEl.appendChild(hostBox);
 
   const tuplesHost = document.createElement("div");
   tuplesHost.className = "pres-output-tuples";
@@ -317,8 +328,9 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   const active: ActiveBlock = {
     slideIdx: h.state.slide,
     blockIdx,
+    segments: block.segments,
+    codeMaxReveal,
     editor: null!,
-    preEl,
     containerEl,
     hosts: { timeline: timelineHost, tuples: tuplesHost },
     outBox,
@@ -339,7 +351,11 @@ function mountActive(h: RenderHandle, blockIdx: number) {
     saveBackend: "none",
     autoGrow: true,
     onChange: (value: string) => {
-      h.editMap.set(key, value);
+      // Only persist edits once the block is fully revealed; partial-reveal
+      // text is reveal-driven and would otherwise poison editMap.
+      if (h.state.reveal >= active.codeMaxReveal) {
+        h.editMap.set(key, value);
+      }
       if (active.debounceTimer !== null) clearTimeout(active.debounceTimer);
       active.debounceTimer = setTimeout(() => {
         active.debounceTimer = null;
@@ -349,7 +365,7 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   });
   active.editor = editor;
   hostBox.appendChild(toolbar);
-  h.active = active;
+  h.activeBlocks.push(active);
 
   // Render the seeded empty store so a parse-on-load failure still
   // shows a populated (empty) db/timeline, not bare divs.
@@ -359,21 +375,23 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   runOnce(initial);
 }
 
-function teardownActive(h: RenderHandle) {
-  const a = h.active;
-  if (!a) return;
-  // Snapshot current text in case debounce hasn't fired.
-  h.editMap.set(editKey(a.slideIdx, a.blockIdx), a.editor.value);
-  if (a.debounceTimer !== null) clearTimeout(a.debounceTimer);
-  a.editor.destroy();
-  // Remove output box (sibling of preEl).
-  const outBox = a.containerEl.querySelector<HTMLElement>(".pres-output");
-  if (outBox) outBox.remove();
-  // Remove editor host box.
-  const hostBox = a.containerEl.querySelector<HTMLElement>(".pres-editor-host");
-  if (hostBox) hostBox.remove();
-  a.preEl.style.display = "";
-  h.active = null;
+function teardownAll(h: RenderHandle) {
+  for (const a of h.activeBlocks) {
+    // Snapshot current text in case debounce hasn't fired — but only if the
+    // block was fully revealed at the time the user typed.
+    if (h.state.reveal >= a.codeMaxReveal) {
+      h.editMap.set(editKey(a.slideIdx, a.blockIdx), a.editor.value);
+    }
+    if (a.debounceTimer !== null) clearTimeout(a.debounceTimer);
+    a.editor.destroy();
+    const outBox = a.containerEl.querySelector<HTMLElement>(".pres-output");
+    if (outBox) outBox.remove();
+    const errStrip = a.containerEl.querySelector<HTMLElement>(".pres-eval-error");
+    if (errStrip) errStrip.remove();
+    const hostBox = a.containerEl.querySelector<HTMLElement>(".pres-editor-host");
+    if (hostBox) hostBox.remove();
+  }
+  h.activeBlocks = [];
 }
 
 function runAndRender(source: string, active: ActiveBlock): void {
@@ -420,8 +438,8 @@ function attachKeyHandler(h: RenderHandle) {
     h.state.reveal = h.effectiveSlides[h.state.slide]!.slide.overlayCount;
     renderCurrent(h);
   };
-  const toggleTimeline = () => { if (h.active) h.active.toggle("timeline"); };
-  const toggleTuples = () => { if (h.active) h.active.toggle("tuples"); };
+  const toggleTimeline = () => { for (const a of h.activeBlocks) a.toggle("timeline"); };
+  const toggleTuples = () => { for (const a of h.activeBlocks) a.toggle("tuples"); };
 
   const bindings: Record<string, () => void> = {
     "ArrowRight": () => nextReveal(h),

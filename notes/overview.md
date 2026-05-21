@@ -1,4 +1,28 @@
+# timeline: weakened lane-sharing rule
+plan: plans/v2-timeline-weakened-lane-sharing.md
+
+relax "same lane = same containment parent" to "a.rTok ≤ b.lTok in the moment partial order"
+for lane-mates. siblings of different parents can share a lane when temporally disjoint;
+yields denser pictures, especially in tree mode (e.g. print here/print there merge).
+
+# timeline: nested lane layout
+plan: plans/v2-timeline-nested-lanes.md
+
+new lane-assignment mode for episode bars: arrange by containment hierarchy (leaves
+on lane 0, parents above, `~game` outermost) so the program structure is visible in
+the picture. coexists with the current greedy minimum-lane mode via a `laneMode` opt.
+
+# pres: always-mounted editor for code blocks
+plan: plans/v2-pres-editor-always-mounted.md
+
+replace the initial `<pre>` rendering of a code block with an editor from slide-entry
+so the only thing that changes on slide advance is the editor's value; drops the
+pre→editor transition and the duplicated visual style between the two.
+
 # editor line number gutter
+plan: plans/v2-editor-gutter.md
+
+- for now, the gutter will only display line numbers in a color slightly different than main text
 
 # pres: show last run if text invalid
 plan: plans/v2-pres-stale-db-on-error.md
@@ -16,6 +40,10 @@ plan: plans/v2-timeline-variable-columns.md
 - how do we measure the text width definitively (without assuming a static width)?
 
 # 26/05/21
+todo:
+- get demo website on internet
+- publish WIP slides/blog?
+
 # standalone slides
 plan: plans/v2-pres-standalone.md
 
@@ -25,6 +53,7 @@ this is a minimal change: all we want to do is embed the original slide source a
 we can do parsing and rendering at load time, just like now
 
 # 26/05/19
+
 # temporal issues around choices and constraints
 ## moment LUB
 plan: plans/v2-moment-lub.md
@@ -34,7 +63,7 @@ given a set of moments S and a store:
 - compute the minimal elements of U
 - if the result set is a singleton {LUB}, define that to be the least upper bound of S
 
-##
+note: incomplete
 
 # fix choice issue
 plan: plans/v2-earliest-tier-choices.md
@@ -42,6 +71,7 @@ currently all choices are being proffered at once, not just the earliest compone
 
 # 26/05/18
 
+# slide software
 plan: plans/presentation-software.md
 
 let's build some simple presentation software here.
@@ -270,7 +300,8 @@ notes/turn-program-1.t
 
 # 26/05/8
 - let's start recording the date in-file
-- note: after format edit, might have positioned this wrong by one or two plans
+- date entries might have some notes like this, or todos
+- note [26/05/21]: after format edit, might have positioned this wrong by one or two plans
 
 # rule name parsing
 plan: plans/rule-name-parsing.md
