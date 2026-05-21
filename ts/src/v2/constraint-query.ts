@@ -21,7 +21,8 @@ import type { BlockedChoose, ComponentOptions } from "./types.js";
 import { refTagOf } from "../hashcons.js";
 import {
   candidatesByHead,
-  intervalsOverlap,
+  intervalContains,
+  leastUpperBound,
   tokenOf,
   type Store,
 } from "./store.js";
@@ -98,12 +99,11 @@ interface ConstrainRow {
   wrapped: Atom;
   // Active tokens this row touches.
   touched: Set<number>;
-  // The constrain row's own stored interval. Candidates for this row's
-  // wrapped atom are filtered to tuples whose interval overlaps [l, r]
-  // (plain) or contains [l, r] (agg) — each row in a component anchors its
-  // own query independently.
+  // The constrain row's stored left endpoint. Used to compute the
+  // component's canonical moment `M = lub(row.l for row in comp)`; the
+  // row's own right endpoint is not consulted (the component evaluates
+  // against `M` rather than per-row intervals).
   l: Term;
-  r: Term;
 }
 
 function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow[] {
@@ -118,7 +118,7 @@ function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow
       if (wrapped === null) continue;
       const touched = activeTokensIn(wrapped, store, activeSet);
       if (touched.size === 0) continue;
-      out.push({ rowIndex: idx, kind, wrapped, touched, l: t.l, r: t.r });
+      out.push({ rowIndex: idx, kind, wrapped, touched, l: t.l });
     }
   }
   return out;
@@ -197,6 +197,18 @@ function runComponent(
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
 
+  // Canonical moment M: LUB of all row left endpoints. The moment graph
+  // is a lattice (see notes/moment-insertion.md), so M is guaranteed
+  // non-null whenever the component has ≥1 row. A zero-row component is
+  // unreachable: empty-fringe in computeComponents intercepts it.
+  if (comp.rows.length === 0) {
+    throw new Error("runComponent: zero-row component (should be caught by empty-fringe)");
+  }
+  const M = leastUpperBound(store, comp.rows.map((r) => r.l));
+  if (M === null) {
+    throw new Error("runComponent: moment graph invariant violated — expected lattice");
+  }
+
   const seen = new Set<string>();
   const options: Term[][] = [];
 
@@ -224,7 +236,7 @@ function runComponent(
     const headTerm = row.wrapped.terms[0];
     if (headTerm === undefined || headTerm.tag !== "Symbol") return;
     if (row.kind === "agg") {
-      runAggRow(row, sub, go, rowIdx, store, activeSet, schema);
+      runAggRow(row, sub, go, rowIdx, store, activeSet, schema, M);
       return;
     }
     const arity = row.wrapped.terms.length;
@@ -234,7 +246,7 @@ function runComponent(
       // pattern (extracted from the _constrain row) doesn't. Match the
       // user-facing prefix and ignore the trailing id.
       if (cand.atom.terms.length !== arity + 1) continue;
-      if (!intervalsOverlap(store, row.l, row.r, cand.l, cand.r)) continue;
+      if (!intervalContains(store, cand.l, cand.r, M, M)) continue;
       const trial = new Map(sub);
       let ok = true;
       for (let i = 0; i < arity; i++) {
@@ -265,6 +277,7 @@ function runAggRow(
   store: Store,
   activeSet: Set<number>,
   schema: Map<string, string>,
+  M: Term,
 ): void {
   const wrapped = row.wrapped;
   const arity = wrapped.terms.length;
@@ -277,7 +290,7 @@ function runAggRow(
   }
   aggTerms.push(SYM_FREE); // weight position always free
   const aggPattern: Atom = { terms: aggTerms };
-  const results = aggregateOver(store, aggPattern, row.l, row.r, schema);
+  const results = aggregateOver(store, aggPattern, M, M, schema);
   for (const res of results) {
     const trial = new Map(sub);
     let ok = true;

@@ -1,3 +1,13 @@
+# choice component evaluation
+plan: plans/v2-choice-component-evaluation.md
+note: notes/moment-insertion.md
+
+- use the moment-lub function to compute a canonical moment associated with a choice component
+- specifically, compute the lub M of all the left endpoints of all the constrain/constrain-agg tuples in the component
+- instead of evaluating each constrain wrt its own interval, evaluate wrt M:
+  - constrain tuples are restricted to tuples that contain M
+  - constrain aggregate tuples are restricted to tuples that contain M
+
 # timeline: weakened lane-sharing rule
 plan: plans/v2-timeline-weakened-lane-sharing.md
 
@@ -43,6 +53,8 @@ plan: plans/v2-timeline-variable-columns.md
 todo:
 - get demo website on internet
 - publish WIP slides/blog?
+  - control passing slide
+  - final slide (choice gui?)
 
 # standalone slides
 plan: plans/v2-pres-standalone.md
