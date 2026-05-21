@@ -1,4 +1,5 @@
-# 26/05/21
+# editor line number gutter
+
 # pres: show last run if text invalid
 plan: plans/v2-pres-stale-db-on-error.md
 
@@ -14,7 +15,7 @@ plan: plans/v2-timeline-variable-columns.md
   no text, and increase the spacing if necessary for long text labels
 - how do we measure the text width definitively (without assuming a static width)?
 
-# 26/05/19
+# 26/05/21
 # standalone slides
 plan: plans/v2-pres-standalone.md
 
@@ -23,7 +24,7 @@ foo.pres -> foo.html.
 this is a minimal change: all we want to do is embed the original slide source as a string inside `foo.html`
 we can do parsing and rendering at load time, just like now
 
-# 26/05/18
+# 26/05/19
 # temporal issues around choices and constraints
 ## moment LUB
 plan: plans/v2-moment-lub.md
@@ -39,7 +40,8 @@ given a set of moments S and a store:
 plan: plans/v2-earliest-tier-choices.md
 currently all choices are being proffered at once, not just the earliest component(s)
 
-# 26/05/15
+# 26/05/18
+
 plan: plans/presentation-software.md
 
 let's build some simple presentation software here.
@@ -94,12 +96,12 @@ action C     -- that is an action... [pause]
 note: in the course of implementation and plan refinement, syntax changed
 todo: add link to living spec
 
-# 26/05/13
+# 26/05/15
 
 # expand liveness
 see ts/src/v2/expand-liveness.ts
 
-# 26/05/11
+# 26/05/13
 todo:
   - default display
     ! constraints might exist at different points in time
@@ -140,7 +142,7 @@ we should introduce a new temp IR that the parser produces containing dots;
 then we rewrite into the current IR with the fresh variables inserted
 nothing later changes
 
-# 26/05/10
+# 26/05/11
 
 # move decompose first, fix lingering rule expansion issues
 plan: plans/v2-decompose-first-pipeline.md
@@ -148,7 +150,7 @@ supersedes
   plans/v2-consumer-prefix-elision.md
   plans/v2-prefix-expansion.md
 
-# 26/05/9
+# 26/05/10
 
 # v2 explicit anchor manipulations in IR
 plan: plans/v2-explicit-anchor-ir.md
@@ -220,8 +222,7 @@ waiting
 # v2 tuple/source links
 plan: plans/v2-source-output-linking.md
 
-# 26/05/8
-^ let's start recording the date in-file
+# 26/05/9
 
 # v2 design notes
 see notes/v2-design.md (living document for cross-file v2 invariants)
@@ -266,6 +267,10 @@ there is substantial conceptual overlap with the existing language and editing t
 
 see this program for a tutorial:
 notes/turn-program-1.t
+
+# 26/05/8
+- let's start recording the date in-file
+- note: after format edit, might have positioned this wrong by one or two plans
 
 # rule name parsing
 plan: plans/rule-name-parsing.md
@@ -882,3 +887,9 @@ now we implement handling of the `?` `Ask` literal type, which takes user input
   - if N is a `?` node, remember it as the last `?` node clicked
   - if N is a `+` node and most recent `?` is M, then assert a tuple `click M N`, where M and N stand for the id's of the nodes
     - assert this new tuple by appending it to the list of input patterns
+
+# beginning of document
+- each new change appended to top
+- some lines indicate date (so, changes at or after that date appear earlier in the doc)
+  - started adding inline dates at 26/05/8.
+- used sonnet 4.5 up until ~ 26/04/20, then switched to opus 4.7

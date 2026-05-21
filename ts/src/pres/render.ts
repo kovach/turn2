@@ -3,6 +3,7 @@ import { Editor } from "../v2/editor.js";
 import { renderTuples, renderTimelineH } from "../v2/render-output.js";
 import { parse as parseV2 } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
+import { createStore, type Store } from "../v2/store.js";
 
 type State = { slide: number; reveal: number };
 
@@ -18,9 +19,15 @@ type ActiveBlock = {
   preEl: HTMLElement;
   containerEl: HTMLElement;
   hosts: { timeline: HTMLElement; tuples: HTMLElement };
+  outBox: HTMLElement;
+  errorStrip: HTMLElement;
   enabled: { timeline: boolean; tuples: boolean };
   toggle: (which: "tuples" | "timeline") => void;
   debounceTimer: ReturnType<typeof setTimeout> | null;
+  // Most recent fixpoint result that parsed + ran to completion. Seeded
+  // with an empty store so the very first render (even on a parse error
+  // in the seed text) flows through the normal path.
+  lastValidStore: Store;
 };
 
 type RenderHandle = {
@@ -263,6 +270,13 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   outBox.appendChild(timelineHost);
   containerEl.appendChild(outBox);
 
+  // Error strip sits AFTER outBox so toggling it doesn't shift the
+  // db/timeline up and down.
+  const errorStrip = document.createElement("div");
+  errorStrip.className = "pres-eval-error";
+  errorStrip.style.display = "none";
+  containerEl.appendChild(errorStrip);
+
   const enabled = {
     tuples: block.opts.includes("tuples"),
     timeline: block.opts.includes("timeline"),
@@ -282,7 +296,9 @@ function mountActive(h: RenderHandle, blockIdx: number) {
     enabled[which] = !enabled[which];
     for (const r of refreshers) r();
     applyVisibility();
-    if (enabled[which]) runOnce(editor.value);
+    // Re-render the most recent valid store into the newly visible
+    // host; avoids re-evaluating a (possibly broken) current source.
+    if (enabled[which]) renderIntoHosts(active.lastValidStore, { timeline: timelineHost, tuples: tuplesHost }, enabled);
   };
   const mkToggle = (label: string, which: "tuples" | "timeline") => {
     const btn = document.createElement("button");
@@ -305,13 +321,16 @@ function mountActive(h: RenderHandle, blockIdx: number) {
     preEl,
     containerEl,
     hosts: { timeline: timelineHost, tuples: tuplesHost },
+    outBox,
+    errorStrip,
     enabled,
     toggle: toggleFn,
     debounceTimer: null,
+    lastValidStore: createStore(),
   };
 
   const runOnce = (source: string) => {
-    runAndRender(source, { timeline: timelineHost, tuples: tuplesHost }, enabled);
+    runAndRender(source, active);
   };
 
   const editor = new Editor({
@@ -331,6 +350,10 @@ function mountActive(h: RenderHandle, blockIdx: number) {
   active.editor = editor;
   hostBox.appendChild(toolbar);
   h.active = active;
+
+  // Render the seeded empty store so a parse-on-load failure still
+  // shows a populated (empty) db/timeline, not bare divs.
+  renderIntoHosts(active.lastValidStore, active.hosts, enabled);
 
   // Initial run with the seed text.
   runOnce(initial);
@@ -353,33 +376,41 @@ function teardownActive(h: RenderHandle) {
   h.active = null;
 }
 
-function runAndRender(
-  source: string,
-  hosts: { timeline: HTMLElement; tuples: HTMLElement },
-  enabled: { timeline: boolean; tuples: boolean },
-): void {
+function runAndRender(source: string, active: ActiveBlock): void {
   const parsed = parseV2(source);
   if ("message" in parsed) {
-    showError(hosts, enabled, `parse error line ${parsed.line}: ${parsed.message}`);
+    showError(active, `parse error line ${parsed.line}: ${parsed.message}`);
     return;
   }
   const { store, status } = runFixpoint(parsed, GAS, TUPLE_GAS);
   if (status.kind === "gas") {
-    showError(hosts, enabled, `gas exceeded (${GAS} iterations)`);
+    showError(active, `gas exceeded (${GAS} iterations)`);
     return;
   }
+  clearError(active);
+  active.lastValidStore = store;
+  renderIntoHosts(store, active.hosts, active.enabled);
+}
+
+function renderIntoHosts(
+  store: Store,
+  hosts: { timeline: HTMLElement; tuples: HTMLElement },
+  enabled: { timeline: boolean; tuples: boolean },
+): void {
   if (enabled.timeline) renderTimelineH(hosts.timeline, store);
   if (enabled.tuples) renderTuples(hosts.tuples, store, { temporal: true });
 }
 
-function showError(
-  hosts: { timeline: HTMLElement; tuples: HTMLElement },
-  enabled: { timeline: boolean; tuples: boolean },
-  msg: string,
-): void {
-  const html = `<div class="pres-eval-error">${escapeHtml(msg)}</div>`;
-  if (enabled.timeline) hosts.timeline.innerHTML = html;
-  if (enabled.tuples) hosts.tuples.innerHTML = html;
+function showError(active: ActiveBlock, msg: string): void {
+  active.errorStrip.textContent = msg;
+  active.errorStrip.style.display = "";
+  active.outBox.classList.add("stale");
+}
+
+function clearError(active: ActiveBlock): void {
+  active.errorStrip.textContent = "";
+  active.errorStrip.style.display = "none";
+  active.outBox.classList.remove("stale");
 }
 
 function attachKeyHandler(h: RenderHandle) {
