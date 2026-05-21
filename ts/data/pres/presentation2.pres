@@ -105,8 +105,13 @@ choose-card
 [slide][%Composable Choice%]
 Other rules, besides the one that introduces a choice, can refine it:
 [code][%
--- if "Earthquake" is active:
---   when choosing a card, it must be *sturdy* [pause]
+choose-card
+  ?Card      -- introduces *choice variable*
+  ~it Card   -- allows other queries to grab it
+  !card Card -- asserts that any valid decision must be a `card`
+[pause]
+-- If *Earthquake* is active:
+--   when choosing a card, it must be *sturdy*. [pause]
 
 earthquake, choose-card, it C
   !sturdy C
@@ -121,7 +126,7 @@ There might be multiple ways for a card to be *sturdy*:
 +sturdy shelter  -- it is a fact that Shelter is sturdy
 [pause]
 -- "If at least two cards have been
--- played this turn, Trading Post is sturdy
+-- played this turn, *Trading Post* is sturdy
 turn
   ( play-card _, play-card-count -> N, le 2 N )
   ^sturdy trading-post

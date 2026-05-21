@@ -23,10 +23,28 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 export type Orientation = "horizontal" | "vertical";
 
+// Font constants — used both for SVG <text> attributes and for
+// canvas-based width measurement so the two cannot drift apart.
+const FONT_FAMILY = "monospace";
+const BAR_LABEL_PX = 11;
+const FACT_LABEL_PX = 11;
+const END_TICK_PX = 10;
+
+export type Measurer = (text: string, fontPx: number) => number;
+
+let _measureCtx: CanvasRenderingContext2D | null = null;
+function defaultMeasurer(text: string, fontPx: number): number {
+  if (_measureCtx === null) {
+    _measureCtx = document.createElement("canvas").getContext("2d")!;
+  }
+  _measureCtx.font = `${fontPx}px ${FONT_FAMILY}`;
+  return _measureCtx.measureText(text).width;
+}
+
 export interface TimelineOpts {
   hideInternal: boolean;
   orientation: Orientation;
-  colWidth: number;            // pixels per rank step along the time axis
+  minColWidth: number;         // floor for per-rank-step width along the time axis
   laneHeight: number;          // bar thickness in cross axis (horizontal) /
                                // bar width in cross axis (vertical)
   factLabelHeight: number;     // per-row gap on the fact stack
@@ -38,7 +56,7 @@ export interface TimelineOpts {
 export const DEFAULT_OPTS: TimelineOpts = {
   hideInternal: true,
   orientation: "horizontal",
-  colWidth: 140,
+  minColWidth: 32,
   laneHeight: 26,
   factLabelHeight: 16,
   factLabelMaxRows: 8,
@@ -88,6 +106,10 @@ export interface TimelineLayout {
   // Max number of bars sharing a single starting rank — drives vertical
   // mode's per-rank-step sizing so stacked labels fit.
   maxStartGroupSize: number;
+  // Per-rank-step widths in pixels; length === maxRank. Step r is the
+  // gap between rank r and rank r+1. Sized to fit bar/fact/end-tick
+  // labels measured via the canvas measurer.
+  colWidths: number[];
   sidebar: SidebarSection[];
 }
 
@@ -111,7 +133,11 @@ function isInternalHead(name: string | null): boolean {
 
 // --- Layout (orientation-agnostic) ---
 
-export function layoutTimeline(store: Store, opts: TimelineOpts): TimelineLayout {
+export function layoutTimeline(
+  store: Store,
+  opts: TimelineOpts,
+  measure: Measurer = defaultMeasurer,
+): TimelineLayout {
   const moments = new Map<number, MomentNode>();
   const sidebarTuples: { idx: number; head: string }[] = [];
   const mainTuples: number[] = [];
@@ -332,6 +358,54 @@ export function layoutTimeline(store: Store, opts: TimelineOpts): TimelineLayout
 
   const laneCount = laneEnds.length;
 
+  // --- Per-rank-step widths (horizontal mode sizing) ---
+  // Step r is the gap between rank r and rank r+1. We compute a lower
+  // bound from local contributors (fact labels, end ticks) first, floor
+  // by `minColWidth`, then walk multi-step bars from shortest span to
+  // longest and top up the last step of each bar whose cumulative span
+  // can't fit its label. Vertical mode ignores this array; computing
+  // it unconditionally keeps the layout function orientation-agnostic.
+  const colWidths: number[] = new Array(Math.max(0, maxRank)).fill(0);
+  const BAR_LABEL_PAD = 12;   // 6px on each end inside a bar
+  const FACT_LABEL_PAD_L = 4;
+  const FACT_LABEL_PAD_R = 8;
+
+  for (const f of facts) {
+    const r = moments.get(f.lTok)!.rank;
+    if (r >= maxRank) continue;
+    const w = FACT_LABEL_PAD_L + measure(f.label, FACT_LABEL_PX) + FACT_LABEL_PAD_R;
+    if (w > colWidths[r]!) colWidths[r] = w;
+  }
+  if (maxRank >= 1) {
+    // bot/top tick labels are centered on their rank's x; each consumes
+    // half its width into the adjacent step.
+    const botHalf = measure("bot", END_TICK_PX) / 2;
+    const topHalf = measure("top", END_TICK_PX) / 2;
+    if (botHalf > colWidths[0]!) colWidths[0] = botHalf;
+    if (topHalf > colWidths[maxRank - 1]!) colWidths[maxRank - 1] = topHalf;
+  }
+  for (let r = 0; r < maxRank; r++) {
+    if (colWidths[r]! < opts.minColWidth) colWidths[r] = opts.minColWidth;
+  }
+
+  // Bar pass: enforce sum(colWidths[lRank..rRank-1]) >= label + pad.
+  // Sort by span ascending so shorter bars settle first; longer bars
+  // see the accumulated state and only top up what's still missing.
+  const barOrder = bars.slice().sort((a, b) => {
+    const sa = moments.get(a.rTok)!.rank - moments.get(a.lTok)!.rank;
+    const sb = moments.get(b.rTok)!.rank - moments.get(b.lTok)!.rank;
+    return sa - sb;
+  });
+  for (const b of barOrder) {
+    const lR = moments.get(b.lTok)!.rank;
+    const rR = moments.get(b.rTok)!.rank;
+    if (rR <= lR) continue;
+    const need = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
+    let have = 0;
+    for (let r = lR; r < rR; r++) have += colWidths[r]!;
+    if (need > have) colWidths[rR - 1]! += (need - have);
+  }
+
   // Strip the helper `lRank` field used during layout.
   const finalBars: Bar[] = bars.map((b) => ({
     tupleIndex: b.tupleIndex,
@@ -339,7 +413,7 @@ export function layoutTimeline(store: Store, opts: TimelineOpts): TimelineLayout
     lane: b.lane, label: b.label, full: b.full,
     startGroupRow: b.startGroupRow,
   }));
-  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, sidebar };
+  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, colWidths, sidebar };
 }
 
 function truncate(s: string, n: number): string {
@@ -372,16 +446,20 @@ interface Projector {
 }
 
 function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
-  const { margin, colWidth, laneHeight, factLabelHeight } = opts;
+  const { margin, laneHeight, factLabelHeight } = opts;
   const barH = laneHeight - 6;
   const barInset = 4; // gap between spine and the nearest bar lane
 
   if (opts.orientation === "horizontal") {
     const spineY = margin + layout.laneCount * laneHeight + laneHeight;
     const factAreaH = layout.factRowCount * factLabelHeight;
-    const width = margin * 2 + (layout.maxRank + 1) * colWidth;
+    // Prefix-sum the per-step widths into rank x-coordinates.
+    const xs: number[] = new Array(layout.maxRank + 1);
+    xs[0] = margin;
+    for (let r = 0; r < layout.maxRank; r++) xs[r + 1] = xs[r]! + layout.colWidths[r]!;
+    const width = xs[layout.maxRank]! + margin;
     const height = spineY + laneHeight + factAreaH + margin;
-    const xOf = (rank: number) => margin + rank * colWidth;
+    const xOf = (rank: number) => xs[rank]!;
     return {
       width, height,
       momentPos: (rank) => ({ x: xOf(rank), y: spineY }),
@@ -529,8 +607,8 @@ export function renderTimeline(
       txt.setAttribute("y", String(tp.y));
       txt.setAttribute("text-anchor", tp.anchor);
       txt.setAttribute("fill", "#888");
-      txt.setAttribute("font-size", "10");
-      txt.setAttribute("font-family", "monospace");
+      txt.setAttribute("font-size", String(END_TICK_PX));
+      txt.setAttribute("font-family", FONT_FAMILY);
       txt.textContent = isBot ? "bot" : "top";
       svg.appendChild(txt);
     }
@@ -559,8 +637,8 @@ export function renderTimeline(
     label.setAttribute("x", String(lp.x));
     label.setAttribute("y", String(lp.y));
     label.setAttribute("fill", "#d4d4d4");
-    label.setAttribute("font-size", "11");
-    label.setAttribute("font-family", "monospace");
+    label.setAttribute("font-size", String(BAR_LABEL_PX));
+    label.setAttribute("font-family", FONT_FAMILY);
     if (o.orientation === "vertical") label.setAttribute("text-anchor", "middle");
     label.textContent = b.label;
     svg.appendChild(label);
@@ -592,8 +670,8 @@ export function renderTimeline(
       label.setAttribute("x", String(lp.x));
       label.setAttribute("y", String(lp.y));
       label.setAttribute("fill", "currentColor");
-      label.setAttribute("font-size", "11");
-      label.setAttribute("font-family", "monospace");
+      label.setAttribute("font-size", String(FACT_LABEL_PX));
+      label.setAttribute("font-family", FONT_FAMILY);
       label.classList.add("tl-fact-label");
       label.textContent = f.label;
       svg.appendChild(label);

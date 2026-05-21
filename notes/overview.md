@@ -1,3 +1,7 @@
+# 26/05/21
+# improved horizontal layout
+plan: plans/v2-timeline-variable-columns.md
+
 # 26/05/19
 # standalone slides
 plan: plans/v2-pres-standalone.md
