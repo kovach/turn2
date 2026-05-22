@@ -384,7 +384,7 @@ async function run(): Promise<void> {
   if (status.kind === "active-choices") {
     for (let i = 0; i < status.components.length; i++) {
       const comp = status.components[i]!;
-      infoLines.push(`<b>component ${i + 1}</b> active: ${comp.activeTerms.map((t) => escapeHtml(renderTermShallow(store, t))).join(", ")}`);
+      infoLines.push(`<b>component ${i + 1}</b> active: ${comp.activeTerms.map((t) => escapeHtml(renderTermShallow(store, t))).join(", ")} @ ${escapeHtml(renderTermShallow(store, comp.moment))}`);
       for (const opt of comp.options) {
         const rendered = opt.map((t) => renderTermShallow(store, t)).join(" ");
         const id = `c${clickIdCounter++}`;

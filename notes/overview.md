@@ -1,3 +1,49 @@
+# draggable svg in slides
+plan: plans/v2-pres-svg-draggable.md
+
+changes to pres:
+- syntax for embedding svg graphics:
+  ```
+  [svg][%
+  ...
+  %]
+- direct-manipulation edits to svg source
+  - attach mouse drag handlers to all geometry
+  - translate drag events on geometry to source edits to geometry coordinates
+  - persist changes in memory, since source file cannot be edited by slide software
+
+
+# easier semicolon syntax
+plan: plans/v2-easier-semicolon.md
+
+- change parser so that `... ; ...` -> `(... ); ...`
+- for example:
+  ```
+  foo
+    bar; baz; quux
+  ```
+  ->
+  ```
+  foo
+    ((bar); baz); quux
+  ```
+  or
+  ```
+  foo
+    bar;
+    baz;
+    quux
+  ```
+  ->
+  ```
+  foo
+    ( bar );
+    ( baz );
+    quux
+  ```
+- this effect is local to the line
+
+
 # compound constraints
 plan: plans/v2-compound-constraints.md
 
@@ -45,6 +91,10 @@ plan: plans/v2-is-substitution.md
 todo
 - compound constraints
 - dev server it
+- fix done!
+  - issue with count?
+- handle multiple locations in choice gui
+  not an issue
 
 # default GUI
 plan: plans/v2-default-gui.md

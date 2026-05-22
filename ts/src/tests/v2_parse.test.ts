@@ -448,4 +448,51 @@ assertAlpha(
   console.log("PASS: dot — alpha-equivalence helper rejects mismatches");
 }
 
+// Bare-semicolon syntax: `a; b` wraps the left into a sequence sub.
+assertAlpha(
+  "a; b\n",
+  "(a); b\n",
+  "semi — single",
+);
+assertAlpha(
+  "a; b; c\n",
+  "((a); b); c\n",
+  "semi — chained left-associative",
+);
+// Line-local scoping: first-line content stays outside the wrap.
+assertAlpha(
+  "foo\n  b; c\n",
+  "foo, (b); c\n",
+  "semi — local to current line",
+);
+assertAlpha(
+  "(a; b)\n",
+  "((a); b)\n",
+  "semi — inside parens",
+);
+assertAlpha(
+  "a, b; c\n",
+  "(a, b); c\n",
+  "semi — comma does not reset wrap",
+);
+// Spot-check the produced shape: outer body should have one
+// sequence sub followed by one plain atom.
+{
+  const r = ok("a; b\n").rules[0]!;
+  assert.equal(r.body.length, 2, "semi — body length");
+  assert.equal(r.body[0]!.tag, "Sub");
+  assert.equal((r.body[0] as Extract<RuleAtom, { tag: "Sub" }>).sequence, true);
+  assert.equal(r.body[1]!.tag, "Atom");
+  console.log("PASS: semi — sequence flag set on wrap");
+}
+
+// Errors.
+{
+  assert.match(err("; a\n").message, /no content on this line/);
+  assert.match(err("a; ;\n").message, /no content on this line/);
+  assert.match(err("foo.;\n").message, /';' after '\.'/);
+  assert.match(err("(;)\n").message, /no content on this line/);
+  console.log("PASS: semi — errors");
+}
+
 console.log("ALL v2 parse tests passed");

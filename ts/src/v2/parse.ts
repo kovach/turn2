@@ -19,7 +19,8 @@ type Token =
   | { tag: "equal"; text: string; line: number }
   | { tag: "command"; name: string; argText: string; line: number }
   | { tag: "ruleEnd"; line: number }
-  | { tag: "dot"; line: number };
+  | { tag: "dot"; line: number }
+  | { tag: "semi"; line: number };
 
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
@@ -97,6 +98,15 @@ function tokenize(input: string): Token[] | ParseError {
         atomStart = true;
         continue;
       }
+      if (ch === ";") {
+        // Bare `;` (not `);` — that case is folded into the `close`
+        // token above). Emits a `semi` for parseProgram to wrap the
+        // current line's accumulated items into a sequence sub.
+        tokens.push({ tag: "semi", line: lineno });
+        pos++;
+        atomStart = true;
+        continue;
+      }
       if (ch === ".") {
         // `.` is always a top-level separator: handles spaced `a . b`,
         // leading-dot `.bar` / `.(sub)`, and produces the dot side of
@@ -141,7 +151,7 @@ function tokenize(input: string): Token[] | ParseError {
       let depth = 0;
       while (pos < raw.length) {
         const c = raw[pos]!;
-        if (depth === 0 && (c === "," || c === ")" || c === ".")) break;
+        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";")) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
         pos++;
@@ -245,7 +255,14 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     // Each stack frame is the inner body of the enclosing sub (or the
     // outer rule body at index 0). We also track each open sub so its
     // `sequence` flag and span can be patched at the matching close.
-    const stack: BodyItem[][] = [body];
+    // `wrapStart` marks the items-index where the current line's
+    // content began in this frame; a bare `;` wraps items from
+    // wrapStart..end into a sequence sub. `lastLine` triggers the
+    // wrapStart reset when execution crosses a line boundary.
+    // `needsContent` is true at line-start and immediately after a
+    // semi; it gates errors like `; a`, `a; ;`, `(;)`.
+    type Frame = { items: BodyItem[]; wrapStart: number; lastLine: number; needsContent: boolean };
+    const stack: Frame[] = [{ items: body, wrapStart: 0, lastLine: startLine, needsContent: true }];
     const openSubs: { item: { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span } }[] = [];
     let depth = 0;
 
@@ -259,11 +276,21 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (depth > 0) return { line: tok.line, message: `'#${tok.name}' command not allowed inside a sub-rule` };
         break;
       }
+      // Line-change reset: a `;` only wraps content emitted on the
+      // current line within this frame, so realign wrapStart on every
+      // line boundary.
+      const top = stack[stack.length - 1]!;
+      if (tok.line !== top.lastLine) {
+        top.wrapStart = top.items.length;
+        top.lastLine = tok.line;
+        top.needsContent = true;
+      }
       if (tok.tag === "open") {
         const inner: BodyItem[] = [];
         const subItem = { kind: "sub" as const, inner, sequence: false, span: { line: tok.line } };
-        stack[stack.length - 1]!.push(subItem);
-        stack.push(inner);
+        top.items.push(subItem);
+        top.needsContent = false;
+        stack.push({ items: inner, wrapStart: 0, lastLine: tok.line, needsContent: true });
         openSubs.push({ item: subItem });
         depth++;
         i++;
@@ -278,21 +305,39 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         i++;
         continue;
       }
+      if (tok.tag === "semi") {
+        if (top.needsContent) {
+          return { line: tok.line, message: "';' with no content on this line" };
+        }
+        const last = top.items[top.items.length - 1]!;
+        if (last.kind === "dot") {
+          return { line: tok.line, message: "';' after '.' is not allowed" };
+        }
+        const wrapped = top.items.splice(top.wrapStart, top.items.length - top.wrapStart);
+        top.items.push({ kind: "sub", inner: wrapped, sequence: true, span: { line: tok.line } });
+        // wrapStart stays put: a following `;` on the same line wraps
+        // the new sub plus any items appended after it.
+        top.needsContent = true;
+        i++;
+        continue;
+      }
       if (tok.tag === "dot") {
-        stack[stack.length - 1]!.push({ kind: "dot", line: tok.line });
+        top.items.push({ kind: "dot", line: tok.line });
         i++;
         continue;
       }
       if (tok.tag === "equal") {
         const parsedEq = parseEqualText(tok.text, tok.line);
         if ("message" in parsedEq) return parsedEq;
-        stack[stack.length - 1]!.push({ kind: "atom", atom: parsedEq });
+        top.items.push({ kind: "atom", atom: parsedEq });
+        top.needsContent = false;
         i++;
         continue;
       }
       const parsed = parseAtomText(tok.text, tok.marker, tok.line);
       if ("message" in parsed) return parsed;
-      stack[stack.length - 1]!.push({ kind: "atom", atom: parsed });
+      top.items.push({ kind: "atom", atom: parsed });
+      top.needsContent = false;
       i++;
     }
 
