@@ -12,7 +12,8 @@ export type Slide = {
 export type Block =
   | { kind: "para"; spans: Span[] }
   | { kind: "list"; items: ListItem[] }
-  | { kind: "code"; segments: Segment[]; opts: CodeOpt[] };
+  | { kind: "code"; segments: Segment[]; opts: CodeOpt[] }
+  | { kind: "svg"; body: string; bodyOffset: number; reveal: number; dynamic: boolean };
 
 export type Span = {
   text: string;

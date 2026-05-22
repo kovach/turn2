@@ -17,7 +17,7 @@ async function main() {
   try {
     const src = await load();
     const doc = parse(src);
-    mount(root, doc);
+    mount(root, doc, src);
   } catch (e) {
     root.textContent = `error: ${e instanceof Error ? e.message : String(e)}`;
   }

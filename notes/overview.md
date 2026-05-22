@@ -1,5 +1,6 @@
 # draggable svg in slides
 plan: plans/v2-pres-svg-draggable.md
+status: incomplete demo to show someone claudecode. might be useful after file persistence is implemented
 
 changes to pres:
 - syntax for embedding svg graphics:
@@ -11,6 +12,7 @@ changes to pres:
   - attach mouse drag handlers to all geometry
   - translate drag events on geometry to source edits to geometry coordinates
   - persist changes in memory, since source file cannot be edited by slide software
+
 
 
 # easier semicolon syntax

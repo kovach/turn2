@@ -3,7 +3,7 @@ import type { Block, CodeOpt, Doc, ListItem, Segment, Slide, Span } from "./type
 type Tok =
   | { kind: "text"; text: string }
   | { kind: "inlineCode"; text: string }
-  | { kind: "cmd"; name: string; body: string | null; opts: string[] | null };
+  | { kind: "cmd"; name: string; body: string | null; bodyOffset: number; opts: string[] | null };
 
 function tokenize(src: string): Tok[] {
   const toks: Tok[] = [];
@@ -31,11 +31,13 @@ function tokenize(src: string): Tok[] {
       if (!/^[a-zA-Z][\w-]*$/.test(name)) { textBuf += src[i++]!; continue; }
       let j = end + 1;
       let body: string | null = null;
+      let bodyOffset = -1;
       let opts: string[] | null = null;
       if (src[j] === "[" && src[j + 1] === "%") {
         const b = readBody(src, j);
         if (b === null) { textBuf += src[i++]!; continue; }
         body = b.body;
+        bodyOffset = j + 2;
         j = b.next;
       }
       if (src[j] === "[" && src[j + 1] !== "%") {
@@ -49,7 +51,7 @@ function tokenize(src: string): Tok[] {
         }
       }
       flushText();
-      toks.push({ kind: "cmd", name, body, opts });
+      toks.push({ kind: "cmd", name, body, bodyOffset, opts });
       i = j;
     } else {
       textBuf += src[i++]!;
@@ -397,6 +399,27 @@ export function parse(src: string): Doc {
       }
       c.builder.blocks.push({ kind: "code", segments: shifted, opts });
       c.builder.reveal += addedPauses;
+      continue;
+    }
+    if (tok.name === "svg") {
+      const c = need();
+      if (c.lineBuf.frags.length > 0) {
+        handleLine(c.builder, c.lineBuf.frags, c.lineBuf.text);
+        c.lineBuf = newLineBuf();
+      }
+      flushAll(c.builder);
+      const body = tok.body ?? "";
+      if (body.includes("[%") || body.includes("%]")) {
+        throw new Error(`[svg] body in slide "${c.title}" may not contain nested [% or %]`);
+      }
+      const dynamic = (tok.opts ?? []).includes("dynamic-svg");
+      c.builder.blocks.push({
+        kind: "svg",
+        body,
+        bodyOffset: tok.bodyOffset,
+        reveal: c.builder.reveal,
+        dynamic,
+      });
       continue;
     }
     if (tok.name === "today") {

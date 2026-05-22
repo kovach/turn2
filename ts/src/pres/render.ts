@@ -4,6 +4,10 @@ import { renderTuples, renderTimelineH } from "../v2/render-output.js";
 import { parse as parseV2 } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
 import { createStore, type Store } from "../v2/store.js";
+import {
+  buildSvgIndex, formatCoord, spliceRange, shiftRangesAfter,
+  type SvgIndex, type AttrRange, type ElementEntry,
+} from "./svg-index.js";
 
 type State = { slide: number; reveal: number };
 
@@ -31,6 +35,17 @@ type ActiveBlock = {
   lastValidStore: Store;
 };
 
+type ActiveSvg = {
+  slideIdx: number;
+  blockIdx: number;
+  // Live reference to the Block in effectiveSlides — we mutate its
+  // `body` and `bodyOffset` is also referenced from here. Keeping the
+  // pointer avoids re-locating after edits.
+  block: Extract<Block, { kind: "svg" }>;
+  containerEl: HTMLElement;
+  index: SvgIndex;
+};
+
 type RenderHandle = {
   doc: Doc;
   effectiveSlides: EffectiveSlide[];
@@ -39,6 +54,9 @@ type RenderHandle = {
   mountedSlide: number;
   editMap: Map<string, string>;
   activeBlocks: ActiveBlock[];
+  activeSvgs: ActiveSvg[];
+  // In-memory copy of full .pres source; mutated on drag commit.
+  currentSrc: string;
 };
 
 const GAS = 100;
@@ -107,6 +125,9 @@ function renderBlock(b: Block, blockIdx: number): string {
   if (b.kind === "list") {
     return renderListItems(b.items);
   }
+  if (b.kind === "svg") {
+    return `<div class="block svg frag" data-block-idx="${blockIdx}" data-reveal="${b.reveal}"></div>`;
+  }
   // code — editor mounts after render; container is the visible frame.
   const opts = b.opts.length > 0 ? ` data-opts="${b.opts.join(",")}"` : "";
   return `<div class="block code" data-block-idx="${blockIdx}"${opts}></div>`;
@@ -156,7 +177,7 @@ function readUrlHash(): Partial<State> {
   return { slide: parseInt(m[1]!, 10), reveal: m[2] ? parseInt(m[2], 10) : 1 };
 }
 
-export function mount(root: HTMLElement, doc: Doc): RenderHandle {
+export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderHandle {
   const theme = doc.metadata.theme ?? "light";
   document.body.classList.remove("mode-light", "mode-dark");
   document.body.classList.add(`mode-${theme}`);
@@ -165,7 +186,8 @@ export function mount(root: HTMLElement, doc: Doc): RenderHandle {
     root.innerHTML = `<div class="empty">no slides</div>`;
     return {
       doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
-      mountedSlide: -1, editMap: new Map(), activeBlocks: [],
+      mountedSlide: -1, editMap: new Map(), activeBlocks: [], activeSvgs: [],
+      currentSrc: source,
     };
   }
   const init = readUrlHash();
@@ -175,7 +197,8 @@ export function mount(root: HTMLElement, doc: Doc): RenderHandle {
   };
   const handle: RenderHandle = {
     doc, effectiveSlides, state, root,
-    mountedSlide: -1, editMap: new Map(), activeBlocks: [],
+    mountedSlide: -1, editMap: new Map(), activeBlocks: [], activeSvgs: [],
+    currentSrc: source,
   };
   renderCurrent(handle);
   attachKeyHandler(handle);
@@ -211,6 +234,7 @@ function renderCurrent(h: RenderHandle) {
       if (dateEl) dateEl.textContent = h.doc.metadata.date ?? "";
     }
     mountCodeBlocks(h);
+    mountSvgBlocks(h);
   }
 
   const slideEl = h.root.querySelector<HTMLElement>(".slide");
@@ -375,6 +399,246 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
   runOnce(initial);
 }
 
+function mountSvgBlocks(h: RenderHandle) {
+  const eff = h.effectiveSlides[h.state.slide]!;
+  if (eff.kind !== "content") return;
+  const slide = eff.slide;
+  for (let blockIdx = 0; blockIdx < slide.blocks.length; blockIdx++) {
+    const block = slide.blocks[blockIdx]!;
+    if (block.kind !== "svg") continue;
+    mountSvgBlock(h, blockIdx, block);
+  }
+}
+
+function mountSvgBlock(
+  h: RenderHandle,
+  blockIdx: number,
+  block: Extract<Block, { kind: "svg" }>,
+) {
+  const containerEl = h.root.querySelector<HTMLElement>(
+    `.block.svg[data-block-idx="${blockIdx}"]`,
+  );
+  if (!containerEl) return;
+
+  const index = buildSvgIndex(block.body);
+  if (!index) {
+    containerEl.textContent = `svg parse error`;
+    return;
+  }
+  containerEl.innerHTML = "";
+  containerEl.appendChild(index.root);
+
+  const active: ActiveSvg = {
+    slideIdx: h.state.slide, blockIdx, block, containerEl, index,
+  };
+  h.activeSvgs.push(active);
+
+  if (block.dynamic) {
+    for (const entry of index.elements) attachHandle(h, active, entry);
+  }
+}
+
+// Compute the translate origin for a draggable element (where to put
+// its drag handle, and which attributes move when dragged).
+function translateOrigin(entry: ElementEntry): { x: number; y: number } | null {
+  const v = (attr: string): number | null => {
+    const r = entry.ranges.get(attr);
+    if (!r) return null;
+    // Read off the live DOM attribute (this is what the renderer is
+    // showing; ranges are source-side and stay in sync).
+    const s = entry.domEl.getAttribute(attr);
+    if (s === null) return null;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  };
+  switch (entry.tag) {
+    case "circle": case "ellipse": {
+      const cx = v("cx"), cy = v("cy");
+      if (cx === null || cy === null) return null;
+      return { x: cx, y: cy };
+    }
+    case "rect": {
+      const x = v("x"), y = v("y");
+      if (x === null || y === null) return null;
+      return { x, y };
+    }
+    case "line": {
+      const x1 = v("x1"), y1 = v("y1");
+      if (x1 === null || y1 === null) return null;
+      return { x: x1, y: y1 };
+    }
+    case "text": {
+      const x = v("x"), y = v("y");
+      if (x === null || y === null) return null;
+      return { x, y };
+    }
+  }
+}
+
+// Which attribute pairs translate together (x-attr, y-attr).
+function translatePairs(entry: ElementEntry): Array<[string, string]> {
+  switch (entry.tag) {
+    case "circle": case "ellipse": return [["cx", "cy"]];
+    case "rect": return [["x", "y"]];
+    case "text": return [["x", "y"]];
+    case "line": return [["x1", "y1"], ["x2", "y2"]];
+  }
+}
+
+const HANDLE_RADIUS_PX = 6;
+
+function attachHandle(h: RenderHandle, active: ActiveSvg, entry: ElementEntry) {
+  const origin = translateOrigin(entry);
+  if (origin === null) return;
+  const pairs = translatePairs(entry);
+  // Only attach if every translating attribute has a range we can write.
+  for (const [ax, ay] of pairs) {
+    if (!entry.ranges.has(ax) || !entry.ranges.has(ay)) return;
+  }
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const handle = document.createElementNS(svgNS, "circle");
+  handle.setAttribute("cx", String(origin.x));
+  handle.setAttribute("cy", String(origin.y));
+  handle.setAttribute("r", String(HANDLE_RADIUS_PX));
+  handle.setAttribute("class", "svg-handle");
+  handle.setAttribute("fill", "rgba(60,120,255,0.35)");
+  handle.setAttribute("stroke", "rgba(30,80,200,0.9)");
+  handle.setAttribute("stroke-width", "1");
+  (handle.style as CSSStyleDeclaration).cursor = "grab";
+  // Make handle radius approximately constant in screen px regardless
+  // of viewBox scaling. Browsers ignore this if no viewBox; that's fine.
+  handle.setAttribute("vector-effect", "non-scaling-stroke");
+  active.index.root.appendChild(handle);
+
+  type DragState = {
+    pointerId: number;
+    startClient: { x: number; y: number };
+    startCtm: DOMMatrix;
+    startValues: Map<string, number>;
+  };
+  let drag: DragState | null = null;
+
+  const screenToLocalDelta = (clientDx: number, clientDy: number, ctm: DOMMatrix) => {
+    // Inverse of CTM applied to the *delta* — the translation part of
+    // CTM cancels out for deltas, so we only need the linear part.
+    const inv = ctm.inverse();
+    const dx = inv.a * clientDx + inv.c * clientDy;
+    const dy = inv.b * clientDx + inv.d * clientDy;
+    return { dx, dy };
+  };
+
+  handle.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    handle.setPointerCapture(ev.pointerId);
+    (handle.style as CSSStyleDeclaration).cursor = "grabbing";
+    const ctm = active.index.root.getScreenCTM();
+    if (!ctm) return;
+    const startValues = new Map<string, number>();
+    for (const [ax, ay] of pairs) {
+      startValues.set(ax, parseFloat(entry.domEl.getAttribute(ax)!));
+      startValues.set(ay, parseFloat(entry.domEl.getAttribute(ay)!));
+    }
+    drag = {
+      pointerId: ev.pointerId,
+      startClient: { x: ev.clientX, y: ev.clientY },
+      startCtm: ctm,
+      startValues,
+    };
+  });
+
+  handle.addEventListener("pointermove", (ev) => {
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    const { dx, dy } = screenToLocalDelta(
+      ev.clientX - drag.startClient.x,
+      ev.clientY - drag.startClient.y,
+      drag.startCtm,
+    );
+    for (const [ax, ay] of pairs) {
+      const nx = drag.startValues.get(ax)! + dx;
+      const ny = drag.startValues.get(ay)! + dy;
+      entry.domEl.setAttribute(ax, formatCoord(nx));
+      entry.domEl.setAttribute(ay, formatCoord(ny));
+    }
+    // Sync the handle to the new translate origin.
+    const o = translateOrigin(entry);
+    if (o) {
+      handle.setAttribute("cx", String(o.x));
+      handle.setAttribute("cy", String(o.y));
+    }
+  });
+
+  const finish = (ev: PointerEvent) => {
+    if (!drag || ev.pointerId !== drag.pointerId) return;
+    try { handle.releasePointerCapture(ev.pointerId); } catch {}
+    (handle.style as CSSStyleDeclaration).cursor = "grab";
+    // Commit: splice each updated attribute back into the source. We
+    // sort ranges descending by start so earlier splices don't shift
+    // later ones (and we update SvgIndex per splice for the same
+    // reason).
+    const touched: string[] = [];
+    for (const [ax, ay] of pairs) { touched.push(ax, ay); }
+    const rangesToCommit: Array<{ attr: string; range: AttrRange; newVal: string }> = [];
+    for (const attr of touched) {
+      const range = entry.ranges.get(attr)!;
+      const newVal = entry.domEl.getAttribute(attr)!;
+      rangesToCommit.push({ attr, range, newVal });
+    }
+    rangesToCommit.sort((a, b) => b.range.start - a.range.start);
+    for (const c of rangesToCommit) {
+      commitOne(h, active, c.range, c.newVal);
+    }
+    drag = null;
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+}
+
+function allRangesInIndex(index: SvgIndex): AttrRange[] {
+  const out: AttrRange[] = [];
+  for (const e of index.elements) for (const r of e.ranges.values()) out.push(r);
+  return out;
+}
+
+function commitOne(
+  h: RenderHandle,
+  active: ActiveSvg,
+  range: AttrRange,
+  newVal: string,
+) {
+  const block = active.block;
+  // 1. Splice the block body.
+  const { body: newBody, delta } = spliceRange(block.body, range, newVal);
+  block.body = newBody;
+  // 2. Splice the full source at block.bodyOffset + range.start.
+  const absStart = block.bodyOffset + range.start;
+  const absEnd = block.bodyOffset + range.end;
+  h.currentSrc =
+    h.currentSrc.slice(0, absStart) + newVal + h.currentSrc.slice(absEnd);
+  // 3. Shift later ranges in this svg index.
+  shiftRangesAfter(allRangesInIndex(active.index), range, newVal.length);
+  // 4. Shift later svg blocks' bodyOffsets on the SAME slide. (Blocks
+  // on other slides will be re-checked next time they mount; their
+  // bodyOffset points into currentSrc which has now shifted.)
+  for (const otherSvg of h.activeSvgs) {
+    if (otherSvg === active) continue;
+    if (otherSvg.block.bodyOffset > block.bodyOffset) {
+      otherSvg.block.bodyOffset += delta;
+    }
+  }
+  // 5. Also shift bodyOffsets for any non-mounted svg blocks that come
+  // after this one in the source. Walk effectiveSlides.
+  for (const eff of h.effectiveSlides) {
+    if (eff.kind !== "content") continue;
+    for (const b of eff.slide.blocks) {
+      if (b.kind !== "svg") continue;
+      if (b === block) continue;
+      if (b.bodyOffset > block.bodyOffset) b.bodyOffset += delta;
+    }
+  }
+}
+
 function teardownAll(h: RenderHandle) {
   for (const a of h.activeBlocks) {
     // Snapshot current text in case debounce hasn't fired — but only if the
@@ -392,6 +656,10 @@ function teardownAll(h: RenderHandle) {
     if (hostBox) hostBox.remove();
   }
   h.activeBlocks = [];
+  for (const a of h.activeSvgs) {
+    a.containerEl.innerHTML = "";
+  }
+  h.activeSvgs = [];
 }
 
 function runAndRender(source: string, active: ActiveBlock): void {
