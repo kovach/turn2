@@ -32,11 +32,12 @@ export type MatchConstraint = "any" | "delta" | "old";
 //                by the parser when a default-marker atom carries a
 //                trailing `-> weight`. splitRule slices the body at the
 //                producer Emit's position.
-//   constrain-aggregate -> like constrain, but the wrapped row is
-//                (_constrain-agg atom) and the constraint-query enumerator
-//                folds candidates via the relation's schema aggregator
-//                instead of structurally unifying against one tuple at a
-//                time. Set by the parser when `!` carries a `-> weight`.
+//
+// All `!` source — single-atom (`!foo` / `!foo -> Z`) and compound
+// (`!(a, b -> Y)`) — is canonicalized at parse to marker `constrain`
+// with a `subAtoms` list of length ≥ 1. There is no separate
+// `constrain-aggregate` marker; per-sub-atom kind lives inside
+// `subAtoms[i].kind`. See plans/v2-compound-constraints.md.
 export type Marker =
   | "match"
   | "episode"
@@ -44,8 +45,16 @@ export type Marker =
   | "anchor"
   | "ask"
   | "constrain"
-  | "aggregate"
-  | "constrain-aggregate";
+  | "aggregate";
+
+// A single sub-atom inside a `!(...)` block. `kind: "agg"` means the
+// user wrote `head t1 ... -> weight`; the weight Term is folded into
+// the last position of `atom.terms` (matching `_do-agg`'s layout) so
+// downstream code can treat the trailing slot as the weight position.
+export interface SubConstrain {
+  kind: "plain" | "agg";
+  atom: Atom;
+}
 
 export type RuleAtom =
   // ----- Pre-expand only -----
@@ -61,6 +70,10 @@ export type RuleAtom =
       // that aggregates; consumed by `splitRule`. On an assert it's stored
       // in a trailing slot.
       weight?: Term;
+      // Set iff `marker === "constrain"`. Length ≥ 1. The `atom` field is
+      // unused in that case (kept undefined-shape compatible by the parser
+      // for type-shape purposes only).
+      subAtoms?: SubConstrain[];
       // Literal moment terms threaded by `splitRule`'s prefix-elision into
       // a consumer-side match so it sees only the producer's tuple. The
       // anchor decomposition pass turns these into `Equal` atoms.

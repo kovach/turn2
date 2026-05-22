@@ -37,8 +37,9 @@ function optionSet(store: Store, options: Term[][]): Set<string> {
   return new Set(options.map((opt) => opt.map((t) => renderTerm(store, t)).join(",")));
 }
 
-// 1) `! foo C -> w` parses to a constrain-aggregate marker and emits a
-//    `_constrain-agg` row, not `_constrain`.
+// 1) `! foo C -> w` lowers to a single-element compound `_constrain` row
+//    whose inner sub is wrapped as `(*c-agg ...)`. There's no separate
+//    `_constrain-agg` row head anymore (see plans/v2-compound-constraints.md).
 {
   const src = `
 #acc score key -> sum
@@ -49,11 +50,11 @@ a
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  const cs = tuples.filter((t) => t.startsWith("_constrain-agg"));
-  const plain = tuples.filter((t) => t.startsWith("_constrain ") || t === "_constrain");
-  assert.equal(cs.length, 1, `expected 1 _constrain-agg row, got: ${tuples.join(" | ")}`);
-  assert.equal(plain.length, 0, "expected no plain _constrain rows");
-  console.log("PASS: `! ... -> ...` emits _constrain-agg row");
+  const cs = tuples.filter((t) => t.startsWith("_constrain "));
+  assert.equal(cs.length, 1, `expected 1 _constrain row, got: ${tuples.join(" | ")}`);
+  assert.ok(cs[0]!.includes("*c-agg"), `expected '*c-agg' inside row, got: ${cs[0]}`);
+  assert.ok(!cs[0]!.includes("*c-plain"), `did not expect '*c-plain' for an aggregate sub: ${cs[0]}`);
+  console.log("PASS: `! ... -> ...` emits a `(*conj (*c-agg ...))`-wrapped _constrain row");
 }
 
 // 2) Sum aggregation: ? N, ? W, ! score N -> W with grouped sums binds the

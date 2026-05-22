@@ -129,6 +129,16 @@ interface DecState {
   chain: Term[];
   // Names already in `chain`, for O(1) dedup.
   seen: Set<string>;
+  // User-written Variable names that were introduced ONLY inside a
+  // `!(...)` block (as existentials, replaced by `*var` templates).
+  // If a later atom in the same rule references such a name, that's
+  // an error — the existential is opaque outside its block, and the
+  // user almost certainly intends a binding the engine can't provide.
+  existentialNames: Set<string>;
+  // Anonymous wildcard counter for existential rewrites. Anonymous
+  // wildcards inside `!(...)` get a fresh `*var` template each so
+  // multiple `_`s don't collapse into one existential.
+  anonExistCounter: number;
   // Names of chain entries whose contribution to a fresh-* template is
   // load-bearing for per-firing uniqueness — i.e., dropping them would
   // let two distinct firings collide on the emitted row's universal id
@@ -143,12 +153,15 @@ interface DecState {
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
 const SYM_TOP: Term = { tag: "Symbol", name: "top" };
 const SYM_ID: Term = { tag: "Symbol", name: "*id" };
+const SYM_VAR: Term = { tag: "Symbol", name: "*var" };
 const SYM_MOM: Term = { tag: "Symbol", name: "*mom" };
 const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
 const SYM_CHAIN: Term = { tag: "Symbol", name: "*chain" };
+const SYM_CONJ: Term = { tag: "Symbol", name: "*conj" };
+const SYM_C_PLAIN: Term = { tag: "Symbol", name: "*c-plain" };
+const SYM_C_AGG: Term = { tag: "Symbol", name: "*c-agg" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
-const SYM_CONSTRAIN_AGG_ROW: Term = { tag: "Symbol", name: "_constrain-agg" };
 const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
 const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
 const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
@@ -164,6 +177,8 @@ function decomposeRule(rule: Rule): { rule: Rule; essential: Set<string> } {
     chain: [],
     seen: new Set(),
     essential: new Set(),
+    existentialNames: new Set(),
+    anonExistCounter: 0,
   };
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
   return { rule: { ...rule, body: state.out }, essential: state.essential };
@@ -219,6 +234,17 @@ function freshIdTemplate(state: DecState, lexPos: number, varName: string): Term
   return chainTemplateWithHead(state, lexPos, SYM_ID, variableToSymbol({ tag: "Variable", name: varName }));
 }
 
+// `freshVarTerm(varName)` template for an existential inside a `!(...)`
+// block: `(*var rule lexPos (*chain ...) <:varName>)`. Same shape as
+// `*id` (so it's a stable per-firing-unique hashcons token), with the
+// distinguishing head `*var`. The constraint-query evaluator
+// recognizes `*var`-headed terms as fresh existentials — they bind
+// like active terms within one row's matchTerm threading but never
+// surface in the option tuples emitted to the player.
+function freshVarTemplate(state: DecState, lexPos: number, varName: string): Term {
+  return chainTemplateWithHead(state, lexPos, SYM_VAR, variableToSymbol({ tag: "Variable", name: varName }));
+}
+
 // `freshChooseId` template: `(*choose rule lexPos (*chain ...))`
 function freshChooseTemplate(state: DecState, lexPos: number): Term {
   return chainTemplateWithHead(state, lexPos, SYM_CHOOSE);
@@ -232,6 +258,12 @@ function freshMomTemplate(state: DecState, lexPos: number, side: "l" | "r"): Ter
 function noteVar(state: DecState, name: string): void {
   if (name === "_") return;
   if (state.seen.has(name)) return;
+  if (state.existentialNames.has(name)) {
+    throw new Error(
+      `rule '${state.ruleName}': variable '${name}' was introduced only inside a '!(...)' block ` +
+      `(as an existential) and cannot be referenced outside that block`,
+    );
+  }
   state.seen.add(name);
   state.chain.push({ tag: "Variable", name });
   state.essential.add(name);
@@ -492,6 +524,76 @@ function decomposeAggregate(
   return { XL: lVar, XR: rVar };
 }
 
+// Build the wrapped row atom for a `!` source-atom. Always shaped as
+// `(_constrain (*conj sub1 ... subN))` where each `subi` is
+// `(*c-plain (head t1 ...))` or `(*c-agg (head t1 ... weight))`.
+// Free user-Variable names (not in `state.seen` at block entry) are
+// rewritten to per-block existential `*var` templates. Anonymous
+// wildcards get a fresh `*var` template each. Bound variables are
+// left as Variables (the trail substitutes them at Emit-intern time).
+function buildConstrainRowAtom(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  k: number,
+): Atom {
+  const subAtoms = a.subAtoms;
+  if (subAtoms === undefined || subAtoms.length === 0) {
+    throw new Error("internal: constrain RuleAtom missing subAtoms");
+  }
+  // Snapshot which user-Variable names are already bound at block entry.
+  const prefixSeen = new Set(state.seen);
+  // One `*var` template per name within this block. Two occurrences of
+  // the same free var across sub-atoms share — that's the conjunctive
+  // join. Two different `!(...)` blocks in the same rule get distinct
+  // templates because they have different `lexPos`.
+  const blockExist = new Map<string, Term>();
+  const blockNames = new Set<string>(); // names consumed by this block
+
+  function rewrite(t: Term): Term {
+    if (t.tag === "Variable") {
+      if (t.name === "_") {
+        // Anonymous wildcard: one fresh template per occurrence.
+        const n = state.anonExistCounter++;
+        return freshVarTemplate(state, k, `_w${n}`);
+      }
+      if (prefixSeen.has(t.name)) return t; // bound by prefix — let trail substitute
+      let tpl = blockExist.get(t.name);
+      if (tpl === undefined) {
+        tpl = freshVarTemplate(state, k, t.name);
+        blockExist.set(t.name, tpl);
+      }
+      blockNames.add(t.name);
+      return tpl;
+    }
+    if (t.tag === "Wildcard") {
+      const n = state.anonExistCounter++;
+      return freshVarTemplate(state, k, `_w${n}`);
+    }
+    if (t.tag === "Atom" || t.tag === "Id") {
+      return { tag: t.tag, atom: { terms: t.atom.terms.map(rewrite) } };
+    }
+    return t;
+  }
+
+  const subTerms: Term[] = [SYM_CONJ];
+  for (const sub of subAtoms) {
+    const inner: Atom = { terms: sub.atom.terms.map(rewrite) };
+    const wrapHead = sub.kind === "agg" ? SYM_C_AGG : SYM_C_PLAIN;
+    subTerms.push({ tag: "Id", atom: { terms: [wrapHead, { tag: "Atom", atom: inner }] } });
+  }
+  const conj: Term = { tag: "Id", atom: { terms: subTerms } };
+
+  // Mark this block's existential-only names. Later atoms that
+  // reference them will throw via `noteVar`. If the name was already
+  // in `seen` at block entry, it's an ordinary bound var, not an
+  // existential — don't mark it.
+  for (const n of blockNames) {
+    if (!state.seen.has(n)) state.existentialNames.add(n);
+  }
+
+  return { terms: [SYM_CONSTRAIN_ROW, conj] };
+}
+
 function decomposeEmit(
   a: Extract<RuleAtom, { tag: "Atom" }>,
   state: DecState,
@@ -514,8 +616,7 @@ function decomposeEmit(
   switch (a.marker) {
     case "fact":
     case "ask":
-    case "constrain":
-    case "constrain-aggregate": {
+    case "constrain": {
       // l = fresh moment, r = top.
       const momL = freshMomTemplate(state, k, "l");
       state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
@@ -552,45 +653,41 @@ function decomposeEmit(
       throw new Error(`internal: unexpected marker ${(a as { marker: string }).marker}`);
   }
 
-  // Now build the atom to emit. Variables in the user atom that aren't yet
-  // bound get pre-bound via Equals to fresh-id templates; Wildcards are
-  // substituted inline.
-  let userAtomTerms: Term[] = [];
-  for (const t of a.atom.terms) {
-    userAtomTerms.push(emitBindingsAndRewrite(t, state, k, a.span));
-  }
-  let weight = a.weight;
-  if (weight !== undefined) {
-    weight = emitBindingsAndRewrite(weight, state, k, a.span);
-  }
-  const userAtom: Atom = { terms: weight !== undefined ? [...userAtomTerms, weight] : userAtomTerms };
-
   let rowAtom: Atom;
-  if (a.marker === "ask") {
-    // (_choose chooseId (userAtom))
-    const chooseTpl = freshChooseTemplate(state, k);
-    const cidName = `_cid_${k}`;
-    const chooseVar: Term = { tag: "Variable", name: cidName };
-    state.out.push({ tag: "Equal", lhs: chooseVar, rhs: chooseTpl, span: a.span });
-    state.seen.add(cidName);
-    // Note: chooseVar is synthetic; we don't add it to chain (it's not a
-    // user var, and downstream chain templates don't need it).
-    const wrapped: Term = { tag: "Atom", atom: userAtom };
-    rowAtom = { terms: [SYM_CHOOSE_ROW, chooseVar, wrapped] };
-  } else if (a.marker === "constrain") {
-    const wrapped: Term = { tag: "Atom", atom: userAtom };
-    rowAtom = { terms: [SYM_CONSTRAIN_ROW, wrapped] };
-  } else if (a.marker === "constrain-aggregate") {
-    // userAtom already includes the trailing weight position (decomposeEmit
-    // appends `weight` to userAtomTerms above). The wrapped pattern's
-    // layout matches `_do-agg`'s: [head, k1..kK, weight]. The constraint-
-    // query enumerator rewrites active-token positions + the weight slot
-    // to `_free` at evaluation time, then folds via the relation's schema
-    // aggregator.
-    const wrapped: Term = { tag: "Atom", atom: userAtom };
-    rowAtom = { terms: [SYM_CONSTRAIN_AGG_ROW, wrapped] };
+  if (a.marker === "constrain") {
+    // Compound constrain. `subAtoms` is set by the parser for every
+    // `!` form (single-atom shorthand is canonicalized to a one-element
+    // list). Free user-Variable names inside the block become per-block
+    // existentials (`*var` templates) rather than fresh-id'd via Equal.
+    rowAtom = buildConstrainRowAtom(a, state, k);
   } else {
-    rowAtom = userAtom;
+    // Build the atom to emit. Variables in the user atom that aren't yet
+    // bound get pre-bound via Equals to fresh-id templates; Wildcards are
+    // substituted inline.
+    let userAtomTerms: Term[] = [];
+    for (const t of a.atom.terms) {
+      userAtomTerms.push(emitBindingsAndRewrite(t, state, k, a.span));
+    }
+    let weight = a.weight;
+    if (weight !== undefined) {
+      weight = emitBindingsAndRewrite(weight, state, k, a.span);
+    }
+    const userAtom: Atom = { terms: weight !== undefined ? [...userAtomTerms, weight] : userAtomTerms };
+
+    if (a.marker === "ask") {
+      // (_choose chooseId (userAtom))
+      const chooseTpl = freshChooseTemplate(state, k);
+      const cidName = `_cid_${k}`;
+      const chooseVar: Term = { tag: "Variable", name: cidName };
+      state.out.push({ tag: "Equal", lhs: chooseVar, rhs: chooseTpl, span: a.span });
+      state.seen.add(cidName);
+      // Note: chooseVar is synthetic; we don't add it to chain (it's not a
+      // user var, and downstream chain templates don't need it).
+      const wrapped: Term = { tag: "Atom", atom: userAtom };
+      rowAtom = { terms: [SYM_CHOOSE_ROW, chooseVar, wrapped] };
+    } else {
+      rowAtom = userAtom;
+    }
   }
 
   // Universal id slot + paired Match. The id slot tags every emitted tuple

@@ -23,9 +23,11 @@ setup
   +pair e a
   ~mk-slot in-play
 
-mk X, +item X, +icon X
+mk X, +item X
++icon X
 
-mk-slot X, +icon X, +slot X
+mk-slot X, +slot X
++icon X
 
 #def choose-item
 turn

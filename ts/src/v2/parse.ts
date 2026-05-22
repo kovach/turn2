@@ -5,7 +5,7 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "../types.js";
-import type { Marker, Program, Rule, RuleAtom, SchemaDecl } from "./types.js";
+import type { Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
 
 export interface ParseError {
   line: number;
@@ -354,7 +354,13 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
     }
     const a = it.atom;
     if (a.tag === "Atom") {
-      for (const t of a.atom.terms) collectVarsInTerm(t, out);
+      if (a.subAtoms !== undefined) {
+        for (const s of a.subAtoms) {
+          for (const t of s.atom.terms) collectVarsInTerm(t, out);
+        }
+      } else {
+        for (const t of a.atom.terms) collectVarsInTerm(t, out);
+      }
       if (a.weight !== undefined) collectVarsInTerm(a.weight, out);
       if (a.lLit !== undefined) collectVarsInTerm(a.lLit, out);
       if (a.rLit !== undefined) collectVarsInTerm(a.rLit, out);
@@ -553,6 +559,13 @@ function parseEqualText(text: string, line: number): RuleAtom | ParseError {
 }
 
 function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | ParseError {
+  // `!(...)` compound constrain (with optional whitespace before `(`).
+  // The body is either `(sub, sub, ...)` for a compound, or a single
+  // atom shape. Single-atom `!foo` / `!foo -> Z` is canonicalized into a
+  // one-element `subAtoms` list so the IR shape is uniform downstream.
+  if (marker === "constrain") {
+    return parseConstrainBody(text, line);
+  }
   // Optional trailing `-> term` weight. Top-level arrow only (depth 0).
   const arrow = findTopArrow(text);
   let head: string;
@@ -575,7 +588,7 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   const atom: Atom = { terms };
   // Head syms starting with `*` are reserved for compiler-generated identity
   // terms (e.g. `*id`, `*mom`, `*choose`). Engine-emitted predicates like
-  // `_choose` / `_constrain` / `_constrain-agg` / `_do-agg` / `_agg-result` are reserved by the
+  // `_choose` / `_constrain` / `_do-agg` / `_agg-result` are reserved by the
   // general `_`-prefix rule (such tokens parse as Variables, not Symbols, so
   // they cannot appear as a Symbol head from user source).
   const headTerm = atom.terms[0];
@@ -586,9 +599,109 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   // is an aggregate, not a match.
   let outMarker: Marker = marker;
   if (marker === "match" && weight !== undefined) outMarker = "aggregate";
-  if (marker === "constrain" && weight !== undefined) outMarker = "constrain-aggregate";
   const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line } };
   if (weight !== undefined) out.weight = weight;
+  return out;
+}
+
+// Parse a `!` body (text already stripped of the leading `!`). May be:
+//   single-atom plain: `foo X Y`
+//   single-atom agg:   `foo X -> W`
+//   compound:          `(sub, sub, ...)` where each sub is one of the above
+function parseConstrainBody(text: string, line: number): RuleAtom | ParseError {
+  const trimmed = text.trim();
+  const subs: SubConstrain[] = [];
+  if (trimmed.startsWith("(")) {
+    // Outer parens. Reject `!(...) -> w` — outer weight is undefined.
+    if (findTopArrow(trimmed) >= 0) {
+      return { line, message: "'!(...)' block cannot carry an outer '-> weight'" };
+    }
+    if (!trimmed.endsWith(")")) {
+      return { line, message: "'!(...)' block has unbalanced parens" };
+    }
+    const inner = trimmed.slice(1, -1);
+    const pieces = splitTopLevelCommas(inner);
+    if (pieces.length === 0 || pieces.every((p) => p.trim().length === 0)) {
+      return { line, message: "'!(...)' must contain at least one sub-atom" };
+    }
+    for (const piece of pieces) {
+      const sub = parseConstrainSubAtom(piece.trim(), line);
+      if ("message" in sub) return sub;
+      subs.push(sub);
+    }
+  } else {
+    const sub = parseConstrainSubAtom(trimmed, line);
+    if ("message" in sub) return sub;
+    subs.push(sub);
+  }
+  // The Atom variant requires an `atom` field; downstream code that
+  // handles constrain reads `subAtoms` exclusively. Use the first sub's
+  // atom as a placeholder so the field is well-formed.
+  return {
+    tag: "Atom",
+    marker: "constrain",
+    atom: subs[0]!.atom,
+    subAtoms: subs,
+    span: { line },
+  };
+}
+
+// Parse one sub-atom inside `!(...)` (or the entire body of a
+// single-atom `!`). Accepts only the plain or aggregate shape; no
+// markers, no equality, no nested parens-list.
+function parseConstrainSubAtom(text: string, line: number): SubConstrain | ParseError {
+  if (text.length === 0) return { line, message: "empty sub-atom inside '!(...)'" };
+  // Reject embedded markers / equalities by checking the first char.
+  const m = text[0]!;
+  if (isMarkerChar(m) || m === "=") {
+    return { line, message: "sub-atom inside '!(...)' cannot carry a marker or '='" };
+  }
+  if (m === "(") {
+    return { line, message: "sub-atom inside '!(...)' cannot be a parenthesised block" };
+  }
+  const arrow = findTopArrow(text);
+  let headText: string;
+  let weight: Term | undefined;
+  if (arrow >= 0) {
+    headText = text.slice(0, arrow).trim();
+    const tail = text.slice(arrow + 2).trim();
+    if (tail.length === 0) return { line, message: "missing weight term after '->'" };
+    const tailTerms = parseTerms(tokenizeTermText(tail), line);
+    if ("message" in tailTerms) return tailTerms;
+    if (tailTerms.length !== 1) return { line, message: "weight must be a single term" };
+    weight = tailTerms[0]!;
+  } else {
+    headText = text;
+  }
+  const headTerms = parseTerms(tokenizeTermText(headText), line);
+  if ("message" in headTerms) return headTerms;
+  if (headTerms.length === 0) return { line, message: "sub-atom is empty" };
+  const headTerm = headTerms[0]!;
+  if (headTerm.tag === "Symbol" && headTerm.name.startsWith("*")) {
+    return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
+  }
+  if (weight !== undefined) {
+    return { kind: "agg", atom: { terms: [...headTerms, weight] } };
+  }
+  return { kind: "plain", atom: { terms: headTerms } };
+}
+
+// Split `text` on top-level commas (paren-depth 0). Returns the pieces,
+// not stripped.
+function splitTopLevelCommas(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === "," && depth === 0) {
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(text.slice(start));
   return out;
 }
 

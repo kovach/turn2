@@ -45,6 +45,11 @@ interface ChoiceContext {
   // so unrelated `is foo bar` rows don't pollute the map. Used by
   // substResolved to rewrite a constrain row's wrapped atom before query.
   boundValues: Map<number, Term>;
+  // Existential `*var` template tokens collected across all constrain
+  // rows in this round. Treated as fresh variables for matching purposes
+  // (bind via `sub` like active terms) but never projected into the
+  // emitted option tuples.
+  existSet: Set<number>;
 }
 
 function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceContext {
@@ -96,13 +101,27 @@ function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceCont
       termByTok.set(tok, a);
     }
   }
-  return { resolved, activeSet, termByTok, boundValues };
+  return { resolved, activeSet, termByTok, boundValues, existSet: new Set() };
 }
 
 // True if `t` is a fresh-id template — a Ref/Atom/Id whose head Symbol
 // is `*id` or `*choose`. These are the only terms that can legitimately
 // be a key in the substitution map.
 function isFreshIdTemplate(t: Term, store: Store): boolean {
+  return termHeadIsOneOf(t, store, ID_HEADS);
+}
+
+// True if `t` is a `*var`-headed template (an existential introduced by
+// a `!(...)` block). Existentials are treated as fresh variables when
+// matching but never appear in the user-visible option tuples.
+function isFreshVarTemplate(t: Term, store: Store): boolean {
+  return termHeadIsOneOf(t, store, VAR_HEADS);
+}
+
+const ID_HEADS = new Set(["*id", "*choose"]);
+const VAR_HEADS = new Set(["*var"]);
+
+function termHeadIsOneOf(t: Term, store: Store, names: Set<string>): boolean {
   let head: Term | undefined;
   if (t.tag === "Ref") {
     const body = store.hash.refToAtom.get(t.id);
@@ -111,7 +130,7 @@ function isFreshIdTemplate(t: Term, store: Store): boolean {
     head = t.atom.terms[0];
   }
   if (head?.tag !== "Symbol") return false;
-  return head.name === "*id" || head.name === "*choose";
+  return names.has(head.name);
 }
 
 // Recursively rewrite `t` by replacing any leaf whose token is a key in
@@ -172,12 +191,106 @@ function substResolvedAtom(a: Atom, bound: Map<number, Term>, store: Store): Ato
 // is a regular Atom) and report the set of unresolved active-term tokens it
 // touches. Ids are opaque: a Ref whose body was hashconsed as `Id`, or a
 // literal `Id` term, is checked for active-term identity but never unfolded.
-function activeTokensIn(atom: Atom, store: Store, activeSet: Set<number>): Set<number> {
-  const out = new Set<number>();
+
+interface ConstrainSub {
+  // "plain": match candidates one tuple at a time by structural
+  // unification against the sub-atom. "agg": fold candidates via the
+  // relation's schema aggregator. The choice component moment `M`
+  // (see `choiceComponentMoment`) gates which candidates are visible
+  // in either case.
+  kind: "plain" | "agg";
+  // The sub-atom's regular Atom (head + key positions; for `agg`, last
+  // position is the weight slot, matching `_do-agg`'s layout).
+  atom: Atom;
+}
+
+interface ConstrainRow {
+  rowIndex: number;
+  // Sub-atoms inside the row's `(*conj ...)` wrapper. Length ≥ 1.
+  subs: ConstrainSub[];
+  // Active tokens this row touches (unioned across subs, against the
+  // post-`is`-substitution sub atoms).
+  touched: Set<number>;
+  // The constrain row's stored left endpoint. Used to compute the
+  // choice component moment `M = lub(row.l for row in comp)`; the row's
+  // own right endpoint is not consulted (the component evaluates against
+  // `M` rather than per-row intervals).
+  l: Term;
+}
+
+function gatherConstrainRows(
+  store: Store,
+  activeSet: Set<number>,
+  boundValues: Map<number, Term>,
+  existSet: Set<number>,
+): ConstrainRow[] {
+  const out: ConstrainRow[] = [];
+  for (const idx of candidatesByHead(store, "_constrain")) {
+    const t = store.tuples[idx]!;
+    const wrappedTerm = t.atom.terms[1];
+    if (wrappedTerm === undefined) continue;
+    // The wrapped term is a `(*conj sub1 ... subN)` Id container.
+    // Each `subi` is `(*c-plain (inner))` or `(*c-agg (inner))`.
+    const conjAtom = unwrapAtom(wrappedTerm, store);
+    if (conjAtom === null) continue;
+    const conjHead = conjAtom.terms[0];
+    if (conjHead === undefined || conjHead.tag !== "Symbol" || conjHead.name !== "*conj") continue;
+    const subs: ConstrainSub[] = [];
+    const touched = new Set<number>();
+    for (let i = 1; i < conjAtom.terms.length; i++) {
+      const sw = conjAtom.terms[i]!;
+      const swAtom = unwrapAtom(sw, store);
+      if (swAtom === null) continue;
+      const swHead = swAtom.terms[0];
+      if (swHead === undefined || swHead.tag !== "Symbol") continue;
+      const kind: "plain" | "agg" =
+        swHead.name === "*c-agg" ? "agg" :
+        swHead.name === "*c-plain" ? "plain" : "plain";
+      const innerTerm = swAtom.terms[1];
+      if (innerTerm === undefined) continue;
+      const rawInner = unwrapAtom(innerTerm, store);
+      if (rawInner === null) continue;
+      const inner = boundValues.size === 0
+        ? rawInner
+        : substResolvedAtom(rawInner, boundValues, store);
+      // Find active and existential (`*var`) tokens inside the sub-atom.
+      collectActiveAndExistTokens(inner, store, activeSet, touched, existSet);
+      subs.push({ kind, atom: inner });
+    }
+    if (subs.length === 0) continue;
+    if (touched.size === 0) continue;
+    out.push({ rowIndex: idx, subs, touched, l: t.l });
+  }
+  return out;
+}
+
+function unwrapAtom(term: Term, store: Store): Atom | null {
+  if (term.tag === "Ref") {
+    const a = store.hash.refToAtom.get(term.id);
+    return a ?? null;
+  }
+  if (term.tag === "Atom" || term.tag === "Id") return term.atom;
+  return null;
+}
+
+// Walk `atom` recursively (through Refs whose body is a regular Atom,
+// not through Id-tagged opaque ids). Add active-term tokens to
+// `touched`; add `*var`-template tokens to `existOut`.
+function collectActiveAndExistTokens(
+  atom: Atom,
+  store: Store,
+  activeSet: Set<number>,
+  touched: Set<number>,
+  existOut: Set<number>,
+): void {
   function walk(term: Term): void {
     const tok = tokenOf(store, term);
     if (activeSet.has(tok)) {
-      out.add(tok);
+      touched.add(tok);
+      return;
+    }
+    if (isFreshVarTemplate(term, store)) {
+      existOut.add(tok);
       return;
     }
     if (term.tag === "Ref") {
@@ -192,65 +305,6 @@ function activeTokensIn(atom: Atom, store: Store, activeSet: Set<number>): Set<n
     }
   }
   for (const t of atom.terms) walk(t);
-  return out;
-}
-
-interface ConstrainRow {
-  rowIndex: number;
-  // "plain": match candidates one tuple at a time by structural
-  // unification against the wrapped atom. "agg": fold candidates via the
-  // relation's schema aggregator (no `_do-agg`/`_agg-result` rows are
-  // inserted into the store). In both cases the choice component moment
-  // `M` (see `choiceComponentMoment`) gates which candidates are visible:
-  // plain rows require `cand` to contain `M`; agg rows aggregate over
-  // contributions whose interval contains `M`.
-  kind: "plain" | "agg";
-  // The wrapped atom inside the constrain row's terms[1].
-  wrapped: Atom;
-  // Active tokens this row touches.
-  touched: Set<number>;
-  // The constrain row's stored left endpoint. Used to compute the
-  // choice component moment `M = lub(row.l for row in comp)`; the row's
-  // own right endpoint is not consulted (the component evaluates against
-  // `M` rather than per-row intervals).
-  l: Term;
-}
-
-function gatherConstrainRows(
-  store: Store,
-  activeSet: Set<number>,
-  boundValues: Map<number, Term>,
-): ConstrainRow[] {
-  const out: ConstrainRow[] = [];
-  for (const head of ["_constrain", "_constrain-agg"] as const) {
-    const kind = head === "_constrain" ? "plain" : "agg";
-    for (const idx of candidatesByHead(store, head)) {
-      const t = store.tuples[idx]!;
-      const wrappedTerm = t.atom.terms[1];
-      if (wrappedTerm === undefined) continue;
-      const rawWrapped = unwrapAtom(wrappedTerm, store);
-      if (rawWrapped === null) continue;
-      // Substitute bound active terms (from `is` rows) before downstream
-      // processing. `touched` is computed against the *substituted* atom;
-      // resolved tokens are no longer present, only unresolved ones remain.
-      const wrapped = boundValues.size === 0
-        ? rawWrapped
-        : substResolvedAtom(rawWrapped, boundValues, store);
-      const touched = activeTokensIn(wrapped, store, activeSet);
-      if (touched.size === 0) continue;
-      out.push({ rowIndex: idx, kind, wrapped, touched, l: t.l });
-    }
-  }
-  return out;
-}
-
-function unwrapAtom(term: Term, store: Store): Atom | null {
-  if (term.tag === "Ref") {
-    const a = store.hash.refToAtom.get(term.id);
-    return a ?? null;
-  }
-  if (term.tag === "Atom" || term.tag === "Id") return term.atom;
-  return null;
 }
 
 interface RawComponent {
@@ -329,6 +383,7 @@ function runComponent(
   store: Store,
   comp: RawComponent,
   activeSet: Set<number>,
+  existSet: Set<number>,
   termByTok: Map<number, Term>,
   schema: Map<string, string>,
 ): ComponentOptions {
@@ -357,35 +412,55 @@ function runComponent(
     options.push(tup);
   }
 
+  // `slotSet` unifies active and existential tokens for the purposes
+  // of structural unification: both behave as fresh variables that bind
+  // in `sub`. Existentials don't appear in `activeKeys`, so they never
+  // surface in the emitted options.
+  const slotSet = unionSets(activeSet, existSet);
+
   function go(rowIdx: number, sub: Map<number, Term>): void {
     if (rowIdx === comp.rows.length) {
       emit(sub);
       return;
     }
     const row = comp.rows[rowIdx]!;
-    const headTerm = row.wrapped.terms[0];
-    if (headTerm === undefined || headTerm.tag !== "Symbol") return;
-    if (row.kind === "agg") {
-      runAggRow(row, sub, go, rowIdx, store, activeSet, schema, M);
+    goRow(row, 0, sub, (sub2) => go(rowIdx + 1, sub2));
+  }
+
+  function goRow(
+    row: ConstrainRow,
+    ai: number,
+    sub: Map<number, Term>,
+    after: (sub: Map<number, Term>) => void,
+  ): void {
+    if (ai === row.subs.length) {
+      after(sub);
       return;
     }
-    const arity = row.wrapped.terms.length;
+    const s = row.subs[ai]!;
+    const headTerm = s.atom.terms[0];
+    if (headTerm === undefined || headTerm.tag !== "Symbol") return;
+    if (s.kind === "agg") {
+      runAggSub(s, sub, store, slotSet, schema, M, (sub2) => goRow(row, ai + 1, sub2, after));
+      return;
+    }
+    const arity = s.atom.terms.length;
     for (const cidx of candidatesByHead(store, headTerm.name)) {
       const cand = store.tuples[cidx]!;
-      // Stored candidates carry the universal trailing id slot; the wrapped
-      // pattern (extracted from the _constrain row) doesn't. Match the
-      // user-facing prefix and ignore the trailing id.
+      // Stored candidates carry the universal trailing id slot; the
+      // sub-atom doesn't. Match the user-facing prefix and ignore the
+      // trailing id.
       if (cand.atom.terms.length !== arity + 1) continue;
       if (!intervalContains(store, cand.l, cand.r, M, M)) continue;
       const trial = new Map(sub);
       let ok = true;
       for (let i = 0; i < arity; i++) {
-        if (!matchTerm(row.wrapped.terms[i]!, cand.atom.terms[i]!, trial, store, activeSet)) {
+        if (!matchTerm(s.atom.terms[i]!, cand.atom.terms[i]!, trial, store, slotSet)) {
           ok = false;
           break;
         }
       }
-      if (ok) go(rowIdx + 1, trial);
+      if (ok) goRow(row, ai + 1, trial, after);
     }
   }
 
@@ -393,30 +468,37 @@ function runComponent(
   return { activeTerms, options, moment: M };
 }
 
-// Evaluate one `_constrain-agg` row. Build an agg-pattern from `row.wrapped`
-// by rewriting active-token positions and the weight slot to `_free`, run
-// `aggregateOver`, then for each resulting group unify the original wrapped
-// pattern back against the group's filled terms + aggregated weight via
-// `matchTerm` (active tokens act as substitution slots, others demand
-// hashcons-token equality). Recurse to the next row per successful unify.
-function runAggRow(
-  row: ConstrainRow,
+function unionSets(a: Set<number>, b: Set<number>): Set<number> {
+  if (b.size === 0) return a;
+  if (a.size === 0) return b;
+  const out = new Set<number>(a);
+  for (const x of b) out.add(x);
+  return out;
+}
+
+// Evaluate one aggregate sub-atom. Same shape as the legacy
+// `runAggRow`, but scoped to a single sub (the row's other subs are
+// handled by `goRow`'s outer recursion). The pattern's last position
+// is the weight slot; key positions that are active or existential
+// tokens become `_free` so `aggregateOver` aggregates across all
+// possible bindings.
+function runAggSub(
+  s: ConstrainSub,
   sub: Map<number, Term>,
-  go: (rowIdx: number, sub: Map<number, Term>) => void,
-  rowIdx: number,
   store: Store,
-  activeSet: Set<number>,
+  slotSet: Set<number>,
   schema: Map<string, string>,
   M: Term,
+  after: (sub: Map<number, Term>) => void,
 ): void {
-  const wrapped = row.wrapped;
-  const arity = wrapped.terms.length;
+  const atom = s.atom;
+  const arity = atom.terms.length;
   if (arity < 2) return;
   const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
-  const aggTerms: Term[] = [wrapped.terms[0]!];
+  const aggTerms: Term[] = [atom.terms[0]!];
   for (let i = 1; i < arity - 1; i++) {
-    const t = wrapped.terms[i]!;
-    aggTerms.push(activeSet.has(tokenOf(store, t)) ? SYM_FREE : t);
+    const t = atom.terms[i]!;
+    aggTerms.push(slotSet.has(tokenOf(store, t)) ? SYM_FREE : t);
   }
   aggTerms.push(SYM_FREE); // weight position always free
   const aggPattern: Atom = { terms: aggTerms };
@@ -424,18 +506,15 @@ function runAggRow(
   for (const res of results) {
     const trial = new Map(sub);
     let ok = true;
-    // res.filledTerms has length arity-1 (head + keys). Unify each key
-    // position against the original wrapped pattern's term.
     for (let i = 1; i < arity - 1; i++) {
-      if (!matchTerm(wrapped.terms[i]!, res.filledTerms[i]!, trial, store, activeSet)) {
+      if (!matchTerm(atom.terms[i]!, res.filledTerms[i]!, trial, store, slotSet)) {
         ok = false;
         break;
       }
     }
     if (!ok) continue;
-    // Unify the weight slot.
-    if (!matchTerm(wrapped.terms[arity - 1]!, res.weight, trial, store, activeSet)) continue;
-    go(rowIdx + 1, trial);
+    if (!matchTerm(atom.terms[arity - 1]!, res.weight, trial, store, slotSet)) continue;
+    after(trial);
   }
 }
 
@@ -482,16 +561,17 @@ export function computeComponents(
   store: Store,
   blocked: BlockedChoose[],
   schema: Map<string, string>,
-  // Restrict surfaced components to those reachable (via shared `_constrain`
-  // / `_constrain-agg` rows) from these seed choose rows. The closure pulls
-  // in entangled non-seed chooses; other blocked chooses stay blocked and
+  // Restrict surfaced components to those reachable (via shared
+  // `_constrain` rows) from these seed choose rows. The closure pulls in
+  // entangled non-seed chooses; other blocked chooses stay blocked and
   // re-surface on a subsequent fixpoint round.
   seedChoices: BlockedChoose[],
 ): ComputeComponentsResult {
-  const { activeSet, termByTok, boundValues } = gatherChoiceContext(store, blocked);
+  const ctx = gatherChoiceContext(store, blocked);
+  const { activeSet, termByTok, boundValues, existSet } = ctx;
   if (activeSet.size === 0) return { kind: "ok", components: [], surfaced: [] };
 
-  const allRows = gatherConstrainRows(store, activeSet, boundValues);
+  const allRows = gatherConstrainRows(store, activeSet, boundValues, existSet);
 
   // BFS from seed active tokens over the bipartite (token ↔ constrain-row)
   // graph: a row is reachable iff it touches a reachable token; touching a
@@ -547,6 +627,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, closedActive, termByTok, schema));
+  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, schema));
   return { kind: "ok", components: out, surfaced };
 }
