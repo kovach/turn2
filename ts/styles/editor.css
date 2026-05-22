@@ -1,0 +1,40 @@
+/* Shared editor styles for index-v2 and index-pres. Hosts customize via
+ * CSS variables (typically set on .editor-wrap or its container):
+ *
+ *   --editor-font-size          default 14px
+ *   --editor-line-height        default 1.6
+ *   --editor-gutter-pad         default 12px 6px 12px 10px
+ *   --editor-textarea-pad-left  default 4px
+ *   --editor-gutter-fg          default rgba(0,0,0,0.35)
+ *   --editor-gutter-bg          default transparent
+ *   --editor-gutter-border      default rgba(0,0,0,0.2)
+ *
+ * Structural rules (flex layout, gutter alignment, right border, monospace
+ * font, no-wrap textarea) live here so both hosts stay in sync. */
+
+.editor-wrap { display: flex; align-items: stretch; }
+.editor-wrap .editor-textarea {
+  flex: 1 1 auto;
+  width: auto;
+  padding-left: var(--editor-textarea-pad-left, 8px);
+  font-family: monospace;
+  font-size: var(--editor-font-size, 14px);
+  line-height: var(--editor-line-height, 1.6);
+  tab-size: 2;
+  white-space: pre;
+}
+.editor-gutter {
+  flex: 0 0 auto;
+  user-select: none;
+  text-align: right;
+  padding: var(--editor-gutter-pad, 12px 6px 12px 10px);
+  font-family: monospace;
+  font-size: var(--editor-font-size, 14px);
+  line-height: var(--editor-line-height, 1.6);
+  color: var(--editor-gutter-fg, rgba(0,0,0,0.35));
+  background: var(--editor-gutter-bg, transparent);
+  overflow: hidden;
+  white-space: pre;
+  border-right: 1px solid var(--editor-gutter-border, rgba(0,0,0,0.2));
+}
+.editor-gutter > div { min-width: 2ch; }
