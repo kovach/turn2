@@ -20,7 +20,7 @@ html.mode-dark  .ttt-mark-o { color: #f87171; }
 `;
 
 export function create(api) {
-  const { peek, addStyles } = api;
+  const { peek, addStyles, tokensEq } = api;
   addStyles(CSS);
 
   function termsOf(term, store) {
@@ -35,13 +35,6 @@ export function create(api) {
     if (ts[0]?.tag !== "Symbol" || ts[0].name !== "s") return null;
     const inner = peanoToInt(ts[1], store);
     return inner === null ? null : inner + 1;
-  }
-
-  // Token equality: hashconsed Refs share id; Symbols share name.
-  function tokensEq(a, b, store) {
-    if (a.tag === "Ref" && b.tag === "Ref") return a.id === b.id;
-    if (a.tag === "Symbol" && b.tag === "Symbol") return a.name === b.name;
-    return false;
   }
 
   function extractBoard(store) {

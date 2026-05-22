@@ -21,6 +21,8 @@ import type { BlockedChoose, ComponentOptions } from "./types.js";
 import { refTagOf } from "../hashcons.js";
 import {
   candidatesByHead,
+  intern,
+  internAtom,
   intervalContains,
   leastUpperBound,
   tokenOf,
@@ -38,16 +40,52 @@ interface ChoiceContext {
   resolved: Set<number>;
   activeSet: Set<number>;
   termByTok: Map<number, Term>;
+  // tokenOf(activeTerm) -> bound value, transitive-closed over `is` rows.
+  // Restricted to keys that are active-term tokens from some BlockedChoose,
+  // so unrelated `is foo bar` rows don't pollute the map. Used by
+  // substResolved to rewrite a constrain row's wrapped atom before query.
+  boundValues: Map<number, Term>;
 }
 
 function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceContext {
   const resolved = new Set<number>();
+  const rawBound = new Map<number, Term>();
   for (const idx of candidatesByHead(store, "is")) {
     const t = store.tuples[idx]!;
     const T = t.atom.terms[1];
-    if (T === undefined) continue;
-    resolved.add(tokenOf(store, T));
+    const V = t.atom.terms[2];
+    if (T === undefined || V === undefined) continue;
+    const k = tokenOf(store, T);
+    resolved.add(k);
+    // Only fresh-id templates (`*id` / `*choose`-headed) participate in
+    // the substitution map. A user's domain-level `is foo bar` row
+    // doesn't get to rewrite arbitrary symbols inside constrain
+    // patterns. Note we can't restrict to BlockedChoose's active terms
+    // here — partial binding can fully resolve one _choose row while
+    // another _constrain row still references the same id template, so
+    // the substitution must be available across all rows.
+    if (isFreshIdTemplate(T, store)) rawBound.set(k, V);
   }
+
+  // Transitive closure: if rawBound[k] = v and tokenOf(v) is itself a
+  // key, chase deeper. Iteratively flatten each entry, detecting cycles
+  // via a per-entry visited set.
+  const boundValues = new Map<number, Term>();
+  for (const [k, v0] of rawBound) {
+    let v = v0;
+    const seen = new Set<number>([k]);
+    while (true) {
+      const vk = tokenOf(store, v);
+      if (!rawBound.has(vk)) break;
+      if (seen.has(vk)) {
+        throw new Error("gatherChoiceContext: cycle in `is` substitution");
+      }
+      seen.add(vk);
+      v = rawBound.get(vk)!;
+    }
+    boundValues.set(k, v);
+  }
+
   const activeSet = new Set<number>();
   const termByTok = new Map<number, Term>();
   for (const c of blocked) {
@@ -58,7 +96,76 @@ function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceCont
       termByTok.set(tok, a);
     }
   }
-  return { resolved, activeSet, termByTok };
+  return { resolved, activeSet, termByTok, boundValues };
+}
+
+// True if `t` is a fresh-id template — a Ref/Atom/Id whose head Symbol
+// is `*id` or `*choose`. These are the only terms that can legitimately
+// be a key in the substitution map.
+function isFreshIdTemplate(t: Term, store: Store): boolean {
+  let head: Term | undefined;
+  if (t.tag === "Ref") {
+    const body = store.hash.refToAtom.get(t.id);
+    head = body?.terms[0];
+  } else if (t.tag === "Atom" || t.tag === "Id") {
+    head = t.atom.terms[0];
+  }
+  if (head?.tag !== "Symbol") return false;
+  return head.name === "*id" || head.name === "*choose";
+}
+
+// Recursively rewrite `t` by replacing any leaf whose token is a key in
+// `bound` with the bound value. Compound subterms whose contents change
+// are rebuilt and re-interned via `internAtom`. Id-tagged literals/Refs
+// are checked at the top by the `bound` lookup; if not bound, they're
+// returned as-is (their bodies are opaque, per the v2 id-opacity
+// invariant — see notes/v2-design.md). This means: if a substitution
+// candidate lives nested *inside* an Id body, it stays untouched. In
+// practice, active-term tokens occur only at top-level positions of a
+// constrain row's wrapped atom or as direct children of a regular Atom,
+// so the opacity boundary doesn't matter.
+function substResolved(t: Term, bound: Map<number, Term>, store: Store): Term {
+  const tok = tokenOf(store, t);
+  const hit = bound.get(tok);
+  if (hit !== undefined) return hit;
+  if (t.tag === "Atom") {
+    let changed = false;
+    const next: Term[] = [];
+    for (const sub of t.atom.terms) {
+      const r = substResolved(sub, bound, store);
+      if (r !== sub) changed = true;
+      next.push(r);
+    }
+    if (!changed) return t;
+    return intern(store, { tag: "Atom", atom: internAtom(store, { terms: next }) });
+  }
+  if (t.tag === "Ref") {
+    if (refTagOf(store.hash, t.id) === "Id") return t;
+    const body = store.hash.refToAtom.get(t.id);
+    if (body === undefined) return t;
+    let changed = false;
+    const next: Term[] = [];
+    for (const sub of body.terms) {
+      const r = substResolved(sub, bound, store);
+      if (r !== sub) changed = true;
+      next.push(r);
+    }
+    if (!changed) return t;
+    return intern(store, { tag: "Atom", atom: internAtom(store, { terms: next }) });
+  }
+  return t;
+}
+
+function substResolvedAtom(a: Atom, bound: Map<number, Term>, store: Store): Atom {
+  let changed = false;
+  const next: Term[] = [];
+  for (const t of a.terms) {
+    const r = substResolved(t, bound, store);
+    if (r !== t) changed = true;
+    next.push(r);
+  }
+  if (!changed) return a;
+  return internAtom(store, { terms: next });
 }
 
 // Walk every nested term inside `atom` recursively (through Refs whose body
@@ -109,7 +216,11 @@ interface ConstrainRow {
   l: Term;
 }
 
-function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow[] {
+function gatherConstrainRows(
+  store: Store,
+  activeSet: Set<number>,
+  boundValues: Map<number, Term>,
+): ConstrainRow[] {
   const out: ConstrainRow[] = [];
   for (const head of ["_constrain", "_constrain-agg"] as const) {
     const kind = head === "_constrain" ? "plain" : "agg";
@@ -117,8 +228,14 @@ function gatherConstrainRows(store: Store, activeSet: Set<number>): ConstrainRow
       const t = store.tuples[idx]!;
       const wrappedTerm = t.atom.terms[1];
       if (wrappedTerm === undefined) continue;
-      const wrapped = unwrapAtom(wrappedTerm, store);
-      if (wrapped === null) continue;
+      const rawWrapped = unwrapAtom(wrappedTerm, store);
+      if (rawWrapped === null) continue;
+      // Substitute bound active terms (from `is` rows) before downstream
+      // processing. `touched` is computed against the *substituted* atom;
+      // resolved tokens are no longer present, only unresolved ones remain.
+      const wrapped = boundValues.size === 0
+        ? rawWrapped
+        : substResolvedAtom(rawWrapped, boundValues, store);
       const touched = activeTokensIn(wrapped, store, activeSet);
       if (touched.size === 0) continue;
       out.push({ rowIndex: idx, kind, wrapped, touched, l: t.l });
@@ -273,7 +390,7 @@ function runComponent(
   }
 
   go(0, new Map());
-  return { activeTerms, options };
+  return { activeTerms, options, moment: M };
 }
 
 // Evaluate one `_constrain-agg` row. Build an agg-pattern from `row.wrapped`
@@ -371,10 +488,10 @@ export function computeComponents(
   // re-surface on a subsequent fixpoint round.
   seedChoices: BlockedChoose[],
 ): ComputeComponentsResult {
-  const { activeSet, termByTok } = gatherChoiceContext(store, blocked);
+  const { activeSet, termByTok, boundValues } = gatherChoiceContext(store, blocked);
   if (activeSet.size === 0) return { kind: "ok", components: [], surfaced: [] };
 
-  const allRows = gatherConstrainRows(store, activeSet);
+  const allRows = gatherConstrainRows(store, activeSet, boundValues);
 
   // BFS from seed active tokens over the bipartite (token ↔ constrain-row)
   // graph: a row is reachable iff it touches a reachable token; touching a

@@ -24,7 +24,14 @@
 
 import type { Atom, Term } from "../types.js";
 import { expandTerm, refTagOf } from "../hashcons.js";
-import type { Store } from "./store.js";
+import { tokenOf, type Store } from "./store.js";
+
+// Token-level equality: two terms are equal iff their hashcons tokens agree.
+// Hashconsed Refs share id, Symbols share name, compound Atom/Id literals
+// share token via the store's intern table.
+export function tokensEq(a: Term, b: Term, store: Store): boolean {
+  return tokenOf(store, a) === tokenOf(store, b);
+}
 
 // Render an `Id`-tagged literal opaquely without descending into its body.
 // Shows the head symbol if available so debug output remains useful.

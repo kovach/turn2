@@ -82,4 +82,3 @@ filled (cell (s (s z)) z) M
 filled (cell (s z) (s z)) M
 filled (cell z (s (s z))) M
 + won M diag2
-

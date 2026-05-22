@@ -1,3 +1,39 @@
+# is-substitution during constraint queries
+plan: plans/v2-is-substitution.md
+
+- partial commits (binding some active terms of a multi-slot component) currently leave the
+  component in a dead state — the constraint query matches the original `*id` template
+  literally instead of the bound value. fix: gather `is X V` rows into a substitution map
+  and rewrite each constrain row's wrapped atom before querying.
+
+# 26/05/22
+
+# default GUI
+plan: plans/v2-default-gui.md
+
+- we began a related plan several changes ago. the idea is roughly the same, but the details of that plan are stale
+- core idea:
+  - a program may generate elements of an `icon X` relation and `#acc at * -> last` relation
+    - wrt a particular moment M, we can render the db state guided by these relations:
+      - if `icon X` holds, we should generate a div I and associate it with X.
+      - if `at X -> Y` holds at M, and we have icon IX for X and icon IY for Y, then IX should be a child element of IY
+    - the rendering will be guided by our need to solicit choices from the player
+      - suppose that one choice component C is active, and its choice component moment is M
+        - the component has some set of activeTerms; render an icon for each of them
+        - render the db wrt M
+        - if icon I corresponds to X, and X is a valid value for one of the active choice variables, highlight I
+        - if I is clicked, then:
+          - if it corresponds unambiguously to a single active choice term, bind it to that term
+          - if it ambiguously corresponds, then apply a different highlight to I, then highlight the set of possible active terms
+            - after the user clicks one, bind it
+          - if I is clicked again without being bound, unselect it
+      - suppose more generally that several choice components C_1..C_n are active
+        - render icon groups for each component
+        - pick arbitrarily C_1 (at moment M1) to be *selected*; highlight its group
+        - render the state at M1
+        - same as above; handle all actions wrt C_1
+        - if the user clicks a different choice component group C_i, activate it. update the state rendering wrt M_i
+
 # choice component evaluation
 plan: plans/v2-choice-component-evaluation.md
 note: notes/moment-insertion.md
@@ -154,7 +190,7 @@ plan: plans/v2-rule-names.md
 
 # default display
 plan: plans/v2-default-display.md
-status: blocked on design
+status: superseded by plans/v2-default-gui.md
 
 sketch a plan for a "default display" that works for any program.
   we'll use a special `icon` predicate to mark terms that want a visual representation.
@@ -333,7 +369,7 @@ plan: plans/rule-name-parsing.md
 
 # static dispatch
 plan: plans/static-dispatch.md
-status: waiting
+status: abandoned
 
 # new flat relational IR
 plan: plans/flat-relational-ir.md
@@ -351,7 +387,7 @@ plan: plans/flat-relational-ir.md
 
 # reifying choice option tuples
 plan: plans/reify-choice-options.md
-status: pending refactorings to simplify. abandoned
+status: abandoned
 
 - instead of evaluating choice "components" outside of the fixpoint loop,
   materialize the option query as a pattern and evaluate it "normally"

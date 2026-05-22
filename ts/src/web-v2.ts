@@ -5,13 +5,14 @@
 
 import { parse } from "./v2/parse.js";
 import { runFixpoint } from "./v2/fixpoint.js";
-import { renderTerm, renderTermShallow, compressRefs } from "./v2/print.js";
+import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
 import { renderTimeline } from "./v2/timeline.js";
 import { renderTuples } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import type { Atom, Term } from "./types.js";
 import type { Store } from "./v2/store.js";
 import type { ComponentOptions, Rule, RuleAtom } from "./v2/types.js";
+import { createDefaultDisplay } from "./v2/default-display.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
 // `activeTerms[i]` should bind to `optionTuple[i]`. `handleClick` reifies
@@ -30,6 +31,12 @@ interface DisplayApi {
   // One-level peek for Refs; mirrors the v1 helper.
   peek(term: Term, store: Store): Atom | null;
   renderTerm: (store: Store, t: Term) => string;
+  tokensEq: (a: Term, b: Term, store: Store) => boolean;
+  // Commit a click intent directly. Modules that re-render their own DOM
+  // (e.g. on internal selection changes) use this instead of populating the
+  // `clicks` map, since post-construction wiring can't reach newly built
+  // nodes.
+  commit: (intent: ClickIntent) => void;
 }
 
 interface DisplayModule {
@@ -164,7 +171,7 @@ function peek(term: Term, store: Store): Atom | null {
   return null;
 }
 
-const displayApi: DisplayApi = { addStyles, peek, renderTerm };
+const displayApi: DisplayApi = { addStyles, peek, renderTerm, tokensEq, commit: handleClick };
 
 // `-- display: <file>` from the leading `--`-only block, mirroring v1's
 // `/ display: <file>` frontmatter convention.
@@ -182,9 +189,10 @@ function parseDisplayDirective(source: string): string | null {
 
 async function loadDisplay(name: string | null): Promise<DisplayModule | null> {
   if (!name) {
-    currentDisplayModule = null;
+    if (currentDisplayName === null && currentDisplayModule) return currentDisplayModule;
+    currentDisplayModule = createDefaultDisplay(displayApi) as DisplayModule;
     currentDisplayName = null;
-    return null;
+    return currentDisplayModule;
   }
   if (name === currentDisplayName && currentDisplayModule) return currentDisplayModule;
   try {

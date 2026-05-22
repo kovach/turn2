@@ -315,4 +315,60 @@ b, it C, !at C -> a
   console.log("PASS: without `!thing C` the choice has no options");
 }
 
+// 10) Partial bind in a two-active-term component. After committing one
+//     slot via `is`, the surviving slot's options should be filtered
+//     against the bound value (engine substitutes `idA -> c1` into the
+//     `(pair idA idB)` wrapped atom before querying).
+{
+  const src = `
++ pair c1 c2
++ pair c1 c3
++ pair c2 c4
++ turn
+
+turn
+? A
+? B
+! pair A B
+`;
+  const r1 = runFixpoint(ok(src));
+  assert.equal(r1.status.kind, "active-choices", `phase1 status: ${r1.status.kind}`);
+  if (r1.status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(r1.status.components.length, 1, "phase1: 1 entangled component");
+  const comp1 = r1.status.components[0]!;
+  assert.equal(comp1.activeTerms.length, 2, "phase1: 2 active terms");
+  const opts1 = comp1.options
+    .map((opt) => `${renderTerm(r1.store, opt[0]!)},${renderTerm(r1.store, opt[1]!)}`)
+    .sort();
+  assert.deepEqual(opts1, ["c1,c2", "c1,c3", "c2,c4"], `phase1 options: ${opts1.join(" | ")}`);
+
+  // Identify which active term is A vs B by inspecting their `:varName`
+  // tail symbol (see freshIdTemplate / variableToSymbol — last term is
+  // `:A` or `:B`).
+  function varNameOf(term: Term, store: Store): string {
+    const t = expandTerm(term, store.hash);
+    if (t.tag !== "Atom" && t.tag !== "Id") return "?";
+    const last = t.atom.terms[t.atom.terms.length - 1];
+    if (last?.tag !== "Symbol") return "?";
+    return last.name.startsWith(":") ? last.name.slice(1) : last.name;
+  }
+  const aTerm = comp1.activeTerms.find((t) => varNameOf(t, r1.store) === "A");
+  assert(aTerm !== undefined, "phase1: expected an active term tagged :A");
+
+  // Bind A=c1. Surviving slot B should see options {c2, c3} (the two
+  // pair tuples whose first arg is c1).
+  const aText = renderTerm(r1.store, aTerm);
+  const src2 = src + `\n^ is ${aText} c1\n`;
+  const r2 = runFixpoint(ok(src2));
+  assert.equal(r2.status.kind, "active-choices", `phase2 status: ${r2.status.kind}`);
+  if (r2.status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(r2.status.components.length, 1, "phase2: 1 component remains");
+  const comp2 = r2.status.components[0]!;
+  assert.equal(comp2.activeTerms.length, 1, "phase2: 1 active term (B)");
+  assert.equal(varNameOf(comp2.activeTerms[0]!, r2.store), "B", "phase2: surviving slot is B");
+  const opts2 = comp2.options.map((opt) => renderTerm(r2.store, opt[0]!)).sort();
+  assert.deepEqual(opts2, ["c2", "c3"], `phase2 options: ${opts2.join(",")}`);
+  console.log("PASS: partial bind substitutes resolved active term into surviving slot's query");
+}
+
 console.log("ALL v2 choice tests passed");

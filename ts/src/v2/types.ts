@@ -210,6 +210,9 @@ export type FixpointStatus =
 export interface ComponentOptions {
   activeTerms: Term[];
   options: Term[][];
+  // Choice component moment: the lub of all the constrain rows' left
+  // endpoints. The display uses it to restrict `icon`/`at` rows.
+  moment: Term;
 }
 
 // A choose row whose wrapped atom contains at least one unresolved active
