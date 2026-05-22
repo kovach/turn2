@@ -20,6 +20,7 @@ import type { Atom, Term } from "../types.js";
 import type { Store } from "./store.js";
 import type { ComponentOptions } from "./types.js";
 import { candidatesByHead, intervalContains, tokenOf } from "./store.js";
+import { aggregateOver } from "./scheduler.js";
 
 interface ClickIntent {
   activeTerms: Term[];
@@ -36,6 +37,7 @@ interface DisplayApi {
 
 interface DisplayCallContext {
   components: ComponentOptions[];
+  schema: Map<string, string>;
 }
 
 interface DisplayModule {
@@ -48,13 +50,15 @@ interface DisplayModule {
 const CSS = `
 .dd-root { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 8px; }
 .dd-groups { display: flex; flex-direction: column; gap: 4px; }
-.dd-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
-.dd-group.selected { background: var(--hover); border-color: var(--syn-head); }
+.dd-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 6px; border: 2px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
+.dd-group.selected { background: var(--hover); }
+.dd-group.selected.singleton { border-color: var(--syn-head); }
+.dd-group.selected.multi { border-color: var(--syn-ref); }
 .dd-group-label { color: var(--fg-mute2); }
 .dd-chip { padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-2); font-family: monospace; color: var(--syn-var); }
 .dd-chip.matchable { background: var(--bg-3); border-color: var(--syn-head); color: var(--syn-head); cursor: pointer; }
-.dd-icons { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border: 1px dashed var(--border); border-radius: 4px; min-width: 200px; }
-.dd-icon { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-2); font-family: monospace; font-size: 13px; display: flex; flex-direction: column; gap: 4px; color: var(--fg); }
+.dd-icons { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; min-width: 200px; font-size: 16px; }
+.dd-icon { padding: 6px 10px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg-2); font-family: monospace; font-size: 16px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
 .dd-icon-children { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 6px; }
 .dd-icon.clickable { cursor: pointer; border-color: var(--syn-head); }
 .dd-icon.ambiguous { cursor: pointer; border-color: var(--syn-ref); }
@@ -111,15 +115,18 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     return names.join(", ");
   }
 
-  function selectedMoment(ctx: DisplayCallContext, store: Store): Term | null {
-    if (ctx.components.length === 0) return null;
+  // The moment at which to interpret `icon` / `at` rows. While choices are
+  // active, this is the selected component's choice-component moment.
+  // After all choices are made (no active components), pass `store.top` —
+  // it contains every interval, so the filter is effectively "everything
+  // visible at the end of the program".
+  function renderMoment(ctx: DisplayCallContext, store: Store): Term {
     const c = ctx.components[state.selectedIdx];
-    return c ? c.moment : null;
+    return c ? c.moment : store.top;
   }
 
-  // Collect `icon T` rows whose interval contains M (or all rows if M is
-  // null, i.e. no active choice). Dedup by term token.
-  function collectIcons(store: Store, M: Term | null): IconNode[] {
+  // Collect `icon T` rows whose interval contains M. Dedup by term token.
+  function collectIcons(store: Store, M: Term): IconNode[] {
     const seen = new Map<number, IconNode>();
     const order: IconNode[] = [];
     for (const idx of candidatesByHead(store, "icon")) {
@@ -127,7 +134,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       const ts = t.atom.terms;
       // [head, T, id]
       if (ts.length !== 3) continue;
-      if (M !== null && !intervalContains(store, t.l, t.r, M, M)) continue;
+      if (!intervalContains(store, t.l, t.r, M, M)) continue;
       const term = ts[1]!;
       const key = tokenOf(store, term);
       if (seen.has(key)) continue;
@@ -145,28 +152,49 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
   function collectAt(
     store: Store,
-    M: Term | null,
+    M: Term,
     iconKeys: Set<number>,
+    schema: Map<string, string>,
   ): { childToParents: Map<number, number[]>; orphans: Term[] } {
     const childToParents = new Map<number, number[]>();
     const orphans: Term[] = [];
-    for (const idx of candidatesByHead(store, "at")) {
-      const t = store.tuples[idx]!;
-      const ts = t.atom.terms;
-      // [head, X, L, id]
-      if (ts.length !== 4) continue;
-      if (M !== null && !intervalContains(store, t.l, t.r, M, M)) continue;
-      const X = ts[1]!, L = ts[2]!;
+
+    function record(X: Term, L: Term): void {
       const xk = tokenOf(store, X);
       const lk = tokenOf(store, L);
-      if (!iconKeys.has(xk)) continue; // X must itself be an icon
-      if (!iconKeys.has(lk)) {
-        orphans.push(L);
-        continue;
-      }
+      if (!iconKeys.has(xk)) return;
+      if (!iconKeys.has(lk)) { orphans.push(L); return; }
       let arr = childToParents.get(xk);
       if (arr === undefined) { arr = []; childToParents.set(xk, arr); }
       if (!arr.includes(lk)) arr.push(lk);
+    }
+
+    if (schema.has("at")) {
+      // `#acc at * -> <aggregator>`: use aggregateOver so e.g. `last`
+      // collapses multiple `+at X -> Y` contributions into one parent
+      // per icon. Pattern: `(at _free _free)` — group key is the X
+      // slot, weight is the target L.
+      const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
+      const aggPattern: Atom = { terms: [{ tag: "Symbol", name: "at" }, SYM_FREE, SYM_FREE] };
+      const results = aggregateOver(store, aggPattern, M, M, schema);
+      for (const r of results) {
+        // filledTerms = [head, X], weight = L.
+        const X = r.filledTerms[1];
+        const L = r.weight;
+        if (X === undefined) continue;
+        record(X, L);
+      }
+    } else {
+      // No schema for `at`: fall back to raw iteration. Each `+at`
+      // contribution is taken at face value.
+      for (const idx of candidatesByHead(store, "at")) {
+        const t = store.tuples[idx]!;
+        const ts = t.atom.terms;
+        // [head, X, L, id]
+        if (ts.length !== 4) continue;
+        if (!intervalContains(store, t.l, t.r, M, M)) continue;
+        record(ts[1]!, ts[2]!);
+      }
     }
     return { childToParents, orphans };
   }
@@ -305,7 +333,8 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         el.classList.add("clickable");
         const slot = cands[0]!;
         attachHotHandlers(el);
-        el.addEventListener("click", () => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
           const intent = commitSlot(comp, slot, icon.term, store);
           if (intent) api.commit(intent);
         });
@@ -313,7 +342,8 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         el.classList.add("ambiguous");
         if (isPending) el.classList.add("pending");
         attachHotHandlers(el);
-        el.addEventListener("click", () => {
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
           state.pending = state.pending === icon.termKey ? null : icon.termKey;
           rerender();
         });
@@ -344,7 +374,14 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     for (let i = 0; i < ctx.components.length; i++) {
       const comp = ctx.components[i]!;
       const row = document.createElement("div");
-      row.className = "dd-group" + (i === state.selectedIdx ? " selected" : "");
+      const isSelected = i === state.selectedIdx;
+      const isSingleton = comp.options.length === 1;
+      const classes = ["dd-group"];
+      if (isSelected) {
+        classes.push("selected");
+        classes.push(isSingleton ? "singleton" : "multi");
+      }
+      row.className = classes.join(" ");
       const lab = document.createElement("span");
       lab.className = "dd-group-label";
       lab.textContent = `${ruleNamesOf(comp, store)} |`;
@@ -374,11 +411,20 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         }
         row.appendChild(chip);
       }
-      if (i !== state.selectedIdx) {
+      if (!isSelected) {
         row.addEventListener("click", () => {
           state.selectedIdx = i;
           state.pending = null;
           rerender();
+        });
+      } else if (isSingleton) {
+        // Selected group with exactly one option row: click commits the
+        // whole row, binding every active term in this component at once.
+        row.addEventListener("click", () => {
+          api.commit({
+            activeTerms: comp.activeTerms,
+            optionTuple: comp.options[0]!,
+          });
         });
       }
       wrap.appendChild(row);
@@ -393,10 +439,10 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     rerender: () => void,
   ): void {
     container.innerHTML = "";
-    const M = selectedMoment(ctx, store);
+    const M = renderMoment(ctx, store);
     const icons = collectIcons(store, M);
     const iconKeys = new Set(icons.map((i) => i.termKey));
-    const { childToParents, orphans } = collectAt(store, M, iconKeys);
+    const { childToParents, orphans } = collectAt(store, M, iconKeys, ctx.schema);
     const { roots, childrenOf, cycleWarning } = buildIconTree(icons, childToParents);
 
     const groups = renderGroups(ctx, store, rerender);

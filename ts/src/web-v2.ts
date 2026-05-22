@@ -24,6 +24,7 @@ interface ClickIntent {
 
 interface DisplayCallContext {
   components: ComponentOptions[];
+  schema: Map<string, string>;
 }
 
 interface DisplayApi {
@@ -412,6 +413,7 @@ async function run(): Promise<void> {
   if (display && status.kind !== "empty-fringe-error") {
     const ctx: DisplayCallContext = {
       components: status.kind === "active-choices" ? status.components : [],
+      schema: parsed.schema,
     };
     try {
       const out = display.render(store, ctx);
@@ -455,7 +457,6 @@ function updateCursorLine(): void {
   sourceCursorLineEl.textContent = `L${line}:${col}`;
   currentLine = line;
   highlightDbFromSource();
-  updateSymbolHighlights();
 }
 
 // --- Source ↔ output linking ---
@@ -472,102 +473,6 @@ let positiveLines: Set<number> = new Set();
 const sourceLineHighlightEl = document.createElement("div");
 sourceLineHighlightEl.className = "source-line-highlight";
 sourceEl.parentElement!.insertBefore(sourceLineHighlightEl, sourceEl);
-
-const symbolOverlayEl = document.createElement("div");
-symbolOverlayEl.className = "source-symbol-overlay";
-sourceEl.parentElement!.insertBefore(symbolOverlayEl, sourceEl);
-
-// Split source into tokens delimited by whitespace, parens, comma, dot,
-// semicolon. Strip a leading atom-marker char (`-~+^!?=`) so e.g. `+card`,
-// `~card`, `card` all match each other. Skip variables (start with uppercase
-// or `_`) and wildcards.
-function scanSymbolTokens(text: string): Array<{ start: number; end: number; name: string }> {
-  const out: Array<{ start: number; end: number; name: string }> = [];
-  const isSep = (c: string) =>
-    c === " " || c === "\t" || c === "\n" || c === "\r" ||
-    c === "(" || c === ")" || c === "," || c === "." || c === ";";
-  let i = 0;
-  while (i < text.length) {
-    if (isSep(text[i]!)) { i++; continue; }
-    let j = i;
-    while (j < text.length && !isSep(text[j]!)) j++;
-    let s = i;
-    const marker = text[s]!;
-    if (marker === "-" || marker === "~" || marker === "+" || marker === "^" ||
-        marker === "!" || marker === "?" || marker === "=") {
-      if (j - s > 1) s++;
-    }
-    const name = text.slice(s, j);
-    const c0 = name[0];
-    if (c0 !== undefined && c0 !== "_" && !(c0 >= "A" && c0 <= "Z")) {
-      out.push({ start: s, end: j, name });
-    }
-    i = j;
-  }
-  return out;
-}
-
-let symbolTokens: Array<{ start: number; end: number; name: string }> = [];
-let symbolTokensFor: string | null = null;
-
-function ensureSymbolTokens(): void {
-  if (symbolTokensFor === sourceEl.value) return;
-  symbolTokens = scanSymbolTokens(sourceEl.value);
-  symbolTokensFor = sourceEl.value;
-}
-
-function syncOverlayBox(): void {
-  symbolOverlayEl.style.top = `${sourceEl.offsetTop}px`;
-  symbolOverlayEl.style.left = `${sourceEl.offsetLeft}px`;
-  symbolOverlayEl.style.width = `${sourceEl.offsetWidth}px`;
-  symbolOverlayEl.style.height = `${sourceEl.offsetHeight}px`;
-}
-
-function updateSymbolHighlights(): void {
-  syncOverlayBox();
-  ensureSymbolTokens();
-  const pos = sourceEl.selectionStart;
-  const hasSelection = sourceEl.selectionStart !== sourceEl.selectionEnd;
-  let target: string | null = null;
-  let cursorTokenStart = -1;
-  if (!hasSelection) {
-    for (const t of symbolTokens) {
-      if (pos >= t.start && pos <= t.end) {
-        target = t.name;
-        cursorTokenStart = t.start;
-        break;
-      }
-    }
-  }
-  if (target === null) {
-    symbolOverlayEl.textContent = "";
-    return;
-  }
-  const value = sourceEl.value;
-  const matches = symbolTokens.filter((t) => t.name === target && t.start !== cursorTokenStart);
-  if (matches.length === 0) {
-    symbolOverlayEl.textContent = "";
-    return;
-  }
-  let html = "";
-  let i = 0;
-  for (const m of matches) {
-    if (m.start > i) html += escapeHtml(value.slice(i, m.start));
-    html += `<mark>${escapeHtml(value.slice(m.start, m.end))}</mark>`;
-    i = m.end;
-  }
-  if (i < value.length) html += escapeHtml(value.slice(i));
-  symbolOverlayEl.innerHTML = html;
-  symbolOverlayEl.scrollTop = sourceEl.scrollTop;
-  symbolOverlayEl.scrollLeft = sourceEl.scrollLeft;
-}
-
-sourceEl.addEventListener("scroll", () => {
-  symbolOverlayEl.scrollTop = sourceEl.scrollTop;
-  symbolOverlayEl.scrollLeft = sourceEl.scrollLeft;
-});
-
-window.addEventListener("resize", () => updateSymbolHighlights());
 
 function getLineMetrics(): { lineHeight: number; paddingTop: number } {
   const style = getComputedStyle(sourceEl);

@@ -15,10 +15,12 @@ const __dirname = dirname(__filename);
 const TS_ROOT = resolve(__dirname, "..", "..");
 const TEMPLATE_PATH = resolve(TS_ROOT, "index-pres.html");
 const ENTRY_PATH = resolve(TS_ROOT, "src", "pres", "main.ts");
+const EDITOR_CSS_PATH = resolve(TS_ROOT, "styles", "editor.css");
 
 const TEMPLATE_SCRIPT_TAG = `<script type="module" src="/src/pres/main.js"></script>`;
 const TEMPLATE_BODY_TAG = `<body class="mode-light">`;
 const TEMPLATE_TITLE_TAG = `<title>Presentation</title>`;
+const TEMPLATE_EDITOR_CSS_LINK = `<link rel="stylesheet" href="/styles/editor.css" />`;
 
 function todayStr(): string {
   const d = new Date();
@@ -92,6 +94,7 @@ export function buildStandaloneHtml(
   rawSource: string,
   template: string,
   bundleJs: string,
+  editorCss: string,
   today: string,
 ): string {
   const frozenSource = rawSource.replace(/\[today\]/g, today);
@@ -99,7 +102,8 @@ export function buildStandaloneHtml(
   const injected =
     `<template id="pres-src">${escapeForTemplate(frozenSource)}</template>\n` +
     `  <script type="module">${bundleJs}</script>`;
-  let out = substituteOnce(template, TEMPLATE_SCRIPT_TAG, injected);
+  let out = substituteOnce(template, TEMPLATE_EDITOR_CSS_LINK, `<style>\n${editorCss}\n  </style>`);
+  out = substituteOnce(out, TEMPLATE_SCRIPT_TAG, injected);
   if (meta.theme === "dark") {
     out = substituteOnce(out, TEMPLATE_BODY_TAG, `<body class="mode-dark">`);
   }
@@ -122,8 +126,9 @@ async function main() {
 
   const rawSource = await readFile(inputPath, "utf8");
   const template = await readFile(TEMPLATE_PATH, "utf8");
+  const editorCss = await readFile(EDITOR_CSS_PATH, "utf8");
   const bundleJs = await bundle();
-  const out = buildStandaloneHtml(rawSource, template, bundleJs, todayStr());
+  const out = buildStandaloneHtml(rawSource, template, bundleJs, editorCss, todayStr());
   await writeFile(outputPath, out, "utf8");
   console.log(`wrote ${outputPath} (${out.length.toLocaleString()} bytes)`);
 }

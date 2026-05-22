@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Presentation</title>
+  <link rel="stylesheet" href="/styles/editor.css" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -30,12 +31,23 @@
     body.mode-light .pres-toggle.active { background: #e8e8e0; color: #222; border-color: #b5b5ac; }
     body.mode-dark  .pres-toggle { color: #aaa; border: 1px solid #333; }
     body.mode-dark  .pres-toggle.active { background: #2a2a2a; color: #e8e8e8; border-color: #555; }
-    .pres-editor-host .editor-textarea { width: 100%; padding: 14px 16px; font-family: monospace; font-size: 16px; line-height: 1.45; border: none; outline: none; background: transparent; color: inherit; tab-size: 2; white-space: pre; display: block; }
-    .pres-editor-host .editor-wrap { display: flex; align-items: stretch; }
-    .pres-editor-host .editor-wrap .editor-textarea { flex: 1 1 auto; width: auto; }
-    .pres-editor-host .editor-gutter { flex: 0 0 auto; user-select: none; text-align: right; padding: 14px 6px 14px 12px; font-family: monospace; font-size: 16px; line-height: 1.45; color: var(--editor-gutter-fg, rgba(0,0,0,0.35)); overflow: hidden; white-space: pre; }
-    body.mode-dark .pres-editor-host .editor-gutter { color: var(--editor-gutter-fg, rgba(255,255,255,0.4)); }
-    .pres-editor-host .editor-gutter > div { min-width: 2ch; }
+    /* Editor structural rules come from /styles/editor.css. Host overrides: */
+    .pres-editor-host .editor-wrap {
+      --editor-font-size: 16px;
+      --editor-line-height: 1.45;
+      --editor-gutter-pad: 14px 6px 14px 12px;
+      --editor-gutter-fg: rgba(0,0,0,0.35);
+      --editor-gutter-border: rgba(0,0,0,0.2);
+    }
+    .pres-editor-host .editor-textarea {
+      border: none; outline: none; background: transparent;
+      color: inherit; display: block;
+      padding-top: 14px; padding-right: 16px; padding-bottom: 14px;
+    }
+    body.mode-dark .pres-editor-host .editor-wrap {
+      --editor-gutter-fg: rgba(255,255,255,0.4);
+      --editor-gutter-border: rgba(255,255,255,0.25);
+    }
     .pres-output { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid rgba(0,0,0,0.08); }
     .pres-output-tuples { font-family: monospace; font-size: 13px; line-height: 1.45; white-space: pre; overflow-x: auto; }
     .pres-output-timeline { overflow-x: auto; }

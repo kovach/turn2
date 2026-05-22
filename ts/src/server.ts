@@ -168,6 +168,20 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (pathname.startsWith("/styles/")) {
+    const file = pathname.slice("/styles/".length);
+    if (file.includes("..") || file.includes("/") || !file.endsWith(".css")) {
+      res.writeHead(400); res.end("Invalid path");
+      return;
+    }
+    try {
+      const content = fs.readFileSync(path.join(ROOT, "styles", file));
+      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8" });
+      res.end(content);
+    } catch { res.writeHead(404); res.end("Not found"); }
+    return;
+  }
+
   if (pathname.startsWith("/src/")) {
     const file = pathname.slice(5);
     try {

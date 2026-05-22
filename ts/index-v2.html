@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Slide v2</title>
+  <link rel="stylesheet" href="/styles/editor.css" />
   <style>
     /* Theme palette */
     html.mode-dark {
@@ -36,11 +37,21 @@
     .workspace { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
     .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .pane-label { padding: 5px 12px; font-size: 11px; color: var(--fg-faint); background: var(--bg-2); border-bottom: 1px solid var(--border-2); letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
-    textarea { flex: 1; background: var(--bg); color: var(--fg); border: none; outline: none; padding: 12px; font-family: monospace; font-size: 14px; line-height: 1.6; resize: none; tab-size: 2; white-space: pre; }
-    .editor-wrap { display: flex; align-items: stretch; flex: 1; min-height: 0; background: var(--bg); }
-    .editor-wrap .editor-textarea, .editor-wrap textarea { flex: 1 1 auto; }
-    .editor-gutter { flex: 0 0 auto; user-select: none; text-align: right; padding: 12px 6px 12px 10px; font-family: monospace; font-size: 14px; line-height: 1.6; color: var(--editor-gutter-fg, var(--fg-faint)); overflow: hidden; white-space: pre; background: var(--bg); }
-    .editor-gutter > div { min-width: 2ch; }
+    /* Editor structural rules come from /styles/editor.css. Host overrides are
+     * set on .editors (not .editor-wrap) so the source-symbol-overlay sibling
+     * inherits the same values. */
+    .editors {
+      --editor-gutter-pad: 12px 6px 12px 10px;
+      --editor-gutter-fg: var(--fg-faint);
+      --editor-gutter-bg: var(--bg);
+      --editor-gutter-border: var(--fg-faint);
+    }
+    .editor-wrap { flex: 1; min-height: 0; background: var(--bg); }
+    .editor-wrap .editor-textarea {
+      background: var(--bg); color: var(--fg);
+      border: none; outline: none; resize: none;
+      padding-top: 12px; padding-right: 12px; padding-bottom: 12px;
+    }
     .editors { display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; }
     .right-column { display: flex; flex-direction: column; min-height: 0; }
     .display-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
@@ -94,24 +105,6 @@
     }
     .editors .pane { background: var(--bg); }
     .editors textarea { background: transparent; position: relative; z-index: 2; }
-    .source-symbol-overlay {
-      position: absolute;
-      padding: 12px;
-      font-family: monospace;
-      font-size: 14px;
-      line-height: 1.6;
-      tab-size: 2;
-      white-space: pre;
-      color: transparent;
-      pointer-events: none;
-      overflow: hidden;
-      z-index: 0;
-    }
-    .source-symbol-overlay mark {
-      background-color: rgba(255, 200, 0, 0.30);
-      color: transparent;
-      border-radius: 2px;
-    }
   </style>
   <script>
     (function() {

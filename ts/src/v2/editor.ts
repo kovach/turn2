@@ -29,6 +29,7 @@ export class Editor {
     if (opts.existing) {
       this.ta = opts.existing;
       this.adopted = true;
+      this.ta.classList.add("editor-textarea");
       if (opts.initial !== undefined) this.ta.value = opts.initial;
       const parent = this.ta.parentNode;
       if (!parent) throw new Error("Editor: existing textarea has no parent");
