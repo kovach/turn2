@@ -108,7 +108,7 @@
   </style>
   <script>
     (function() {
-      var saved = "dark";
+      var saved = "light";
       try { var s = localStorage.getItem("v2-theme"); if (s === "light" || s === "dark") saved = s; } catch (e) {}
       document.documentElement.classList.add("mode-" + saved);
     })();
