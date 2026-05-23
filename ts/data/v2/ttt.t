@@ -31,7 +31,7 @@ cell R C, turn
 fills (cell R C) -> z
 ^eligible (cell R C)
 
--- ?C: C is a choice to be m ade
+-- ?C: C is a choice to be made
 -- ~choice C: other rules refer to it this way
 -- !eligible C: C must be *eligible* at the time it is chosen
 turn
