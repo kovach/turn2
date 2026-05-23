@@ -738,6 +738,17 @@ function attachKeyHandler(h: RenderHandle) {
     fn();
     ev.preventDefault();
   });
+
+  const isCoarsePointer = () => window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  h.root.addEventListener("click", ev => {
+    if (!isCoarsePointer()) return;
+    const target = ev.target as Element | null;
+    if (!target) return;
+    // Don't hijack interactions with editors, draggable SVG geometry, or form controls.
+    if (target.closest(".block.code, .block.svg, textarea, input, button, a, [contenteditable=\"true\"]")) return;
+    if (ev.clientX < window.innerWidth / 2) prevReveal(h);
+    else nextReveal(h);
+  });
 }
 
 function nextReveal(h: RenderHandle) {
