@@ -363,4 +363,87 @@ look
   console.log("PASS: aggregate tier respects prior order");
 }
 
+// 14) bool aggregate: assertion present -> query yields 1.
+{
+  const src = `
+#acc p -> bool
+
++p a -> 1
+p a -> 1
++ok-present
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("ok-present"), `expected 'ok-present', got: ${tuples.join(" | ")}`);
+  console.log("PASS: bool aggregate present -> 1");
+}
+
+// 15) bool aggregate: no assertion -> query `-> 0` succeeds.
+{
+  const src = `
+#acc p -> bool
+
+p a -> 0
++ok-absent
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("ok-absent"), `expected 'ok-absent', got: ${tuples.join(" | ")}`);
+  console.log("PASS: bool aggregate absent -> 0");
+}
+
+// 16) bool aggregate: free variable binds to the result.
+{
+  const src = `
+#acc p -> bool
+
++p a -> 1
+p a -> X
++saw-present X
+
+p b -> Y
++saw-absent Y
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("saw-present 1"), `expected 'saw-present 1', got: ${tuples.join(" | ")}`);
+  assert(tuples.includes("saw-absent 0"), `expected 'saw-absent 0', got: ${tuples.join(" | ")}`);
+  console.log("PASS: bool aggregate free variable binds 0/1");
+}
+
+// 17) bool aggregate: idempotent — many asserts still yield 1, not a count.
+{
+  const src = `
+#acc p -> bool
+
++p a -> 1
++p a -> 1
++p a -> 1
+p a -> X
++got X
+`;
+  const { store } = runFixpoint(ok(src));
+  const tuples = listTuples(store);
+  assert(tuples.includes("got 1"), `expected 'got 1', got: ${tuples.join(" | ")}`);
+  console.log("PASS: bool aggregate idempotent");
+}
+
+// 18) bool aggregate parse errors.
+{
+  const cases: { src: string; needle: string }[] = [
+    { src: "#acc p -> bool\n+p a -> 0\n", needle: "reserved for queries" },
+    { src: "#acc p -> bool\n+p a -> 2\n", needle: "must be literal '1'" },
+    { src: "#acc p -> bool\np a -> 2\n+x\n", needle: "query weight must be" },
+  ];
+  for (const c of cases) {
+    const r = parse(c.src);
+    assert("message" in r, `expected parse error for: ${c.src}`);
+    assert(
+      (r as { message: string }).message.includes(c.needle),
+      `expected message to include '${c.needle}', got: ${(r as { message: string }).message}`,
+    );
+  }
+  console.log("PASS: bool aggregate parse errors");
+}
+
 console.log("ALL v2 eval tests passed");

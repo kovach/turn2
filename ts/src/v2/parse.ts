@@ -6,6 +6,7 @@
 
 import type { Atom, Term, Span } from "../types.js";
 import type { Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import { aggregators } from "../aggregators.js";
 
 export interface ParseError {
   line: number;
@@ -362,7 +363,76 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const nameErr = resolveRuleNames(rules);
   if (nameErr !== null) return nameErr;
 
+  const boolErr = validateBoolWeights(rules, schema);
+  if (boolErr !== null) return boolErr;
+
   return { rules, schema };
+}
+
+// Enforce surface restrictions for relations declared `-> bool`:
+// assertions must be literal `-> 1`; queries must be `-> 0` / `-> 1`
+// / a Variable. See plans/v2-bool-aggregate.md.
+function validateBoolWeights(rules: Rule[], schema: Map<string, string>): ParseError | null {
+  for (const r of rules) {
+    const err = walkBoolValidate(r.body, schema);
+    if (err !== null) return err;
+  }
+  return null;
+}
+
+function walkBoolValidate(body: RuleAtom[], schema: Map<string, string>): ParseError | null {
+  for (const a of body) {
+    if (a.tag === "Sub") {
+      const err = walkBoolValidate(a.body, schema);
+      if (err !== null) return err;
+      continue;
+    }
+    if (a.tag !== "Atom") continue;
+    if (a.subAtoms !== undefined) {
+      // `!(...)` block. Plain sub-atoms have no weight; agg sub-atoms
+      // carry weight in the trailing term slot — treat as queries.
+      for (const sub of a.subAtoms) {
+        if (sub.kind !== "agg") continue;
+        const head = sub.atom.terms[0];
+        if (head === undefined || head.tag !== "Symbol") continue;
+        if (schema.get(head.name) !== "bool") continue;
+        const w = sub.atom.terms[sub.atom.terms.length - 1]!;
+        const err = checkBoolQueryWeight(w, head.name, a.span.line);
+        if (err !== null) return err;
+      }
+      continue;
+    }
+    if (a.weight === undefined) continue;
+    const head = a.atom.terms[0];
+    if (head === undefined || head.tag !== "Symbol") continue;
+    if (schema.get(head.name) !== "bool") continue;
+    if (a.marker === "aggregate") {
+      const err = checkBoolQueryWeight(a.weight, head.name, a.span.line);
+      if (err !== null) return err;
+    } else {
+      // Assertion side: fact / episode / anchor / ask. Must be literal `1`.
+      const w = a.weight;
+      if (w.tag !== "Symbol" || w.name !== "1") {
+        if (w.tag === "Symbol" && w.name === "0") {
+          return { line: a.span.line, message: `bool relation '${head.name}' cannot be asserted as 0; '-> 0' is reserved for queries` };
+        }
+        return { line: a.span.line, message: `bool relation '${head.name}' assertion weight must be literal '1' (got '${describeTerm(w)}')` };
+      }
+    }
+  }
+  return null;
+}
+
+function checkBoolQueryWeight(w: Term, relName: string, line: number): ParseError | null {
+  if (w.tag === "Variable") return null;
+  if (w.tag === "Symbol" && (w.name === "0" || w.name === "1")) return null;
+  return { line, message: `bool relation '${relName}' query weight must be '0', '1', or a variable (got '${describeTerm(w)}')` };
+}
+
+function describeTerm(t: Term): string {
+  if (t.tag === "Symbol") return t.name;
+  if (t.tag === "Variable") return t.name;
+  return t.tag;
 }
 
 function resolveRuleNames(rules: Rule[]): ParseError | null {
@@ -584,7 +654,7 @@ function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {
   const tailTokens = tokenizeTermText(tail);
   if (tailTokens.length !== 1) return { line, message: "schema aggregator must be a single token" };
   const aggregator = tailTokens[0]!;
-  if (!(aggregator === "sum" || aggregator === "count" || aggregator === "last")) {
+  if (!aggregators.has(aggregator)) {
     return { line, message: `unknown aggregator '${aggregator}'` };
   }
   return { relation, aggregator, span: { line } };

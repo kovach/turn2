@@ -47,6 +47,14 @@ export const aggregators: Map<string, Aggregator> = new Map([
       commutative: false,
     },
   ],
+  [
+    "bool",
+    {
+      zero: sym("0"),
+      fold: (_acc: Term, _x: Term) => sym("1"),
+      commutative: true,
+    },
+  ],
 ]);
 
 export function getAggregator(name: string): Aggregator {

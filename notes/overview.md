@@ -1,3 +1,33 @@
+# exceptions
+plan: TODO
+
+*exceptions* are rules that override default behavior in some sense
+```
+```
+- they are implemented as a global program transformation that occurs after the earlier expansion steps
+  ? after or before
+- every positive occurrence of the excepted predicate symbol `p` is rewritten to a fresh `p'`
+- we generate a fresh `p_exn` symbol
+- the exception expression `p -> q` is rewritten to `(p', ^p_exn -> 1)`
+- a new rule `p', p_exn -> 1, ^q` (*exception*)
+- a new rule `p', p_exn -> 0, ^p` (*default*)
+
+questions:
+- we could allow the set of all rules to be ordered, so that rule R later than exception E is not re-written by it
+  - we might not expose this to users, or only through a dedicated syntax
+
+# boolean aggregate
+plan: plans/v2-bool-aggregate.md
+
+- a new aggregation type, `bool`, which produces boolean values `0, 1`
+- declared `#acc p <args> -> bool`
+- fact is asserted `(+|^|~)p Arg -> 1`. asserting `... -> 0` is a syntax error
+- query is written `p Arg -> 1` or `p Arg -> 0`
+- isomorphic to count (count = z vs. count = (s _))
+
+# 26/05/25
+hello from bertinoro!
+
 # draggable svg in slides
 plan: plans/v2-pres-svg-draggable.md
 status: incomplete demo to show someone claudecode. might be useful after file persistence is implemented
@@ -12,8 +42,6 @@ changes to pres:
   - attach mouse drag handlers to all geometry
   - translate drag events on geometry to source edits to geometry coordinates
   - persist changes in memory, since source file cannot be edited by slide software
-
-
 
 # easier semicolon syntax
 plan: plans/v2-easier-semicolon.md

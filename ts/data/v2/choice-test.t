@@ -1,24 +1,15 @@
 #acc at * -> last
 
-~game
-  (~setup);
-  (~turn)
+~game, ( ~setup; ~turn )
 
 setup
-  ~mk a
-  ~mk b
+  ~mk a; ~mk b
   ~mk-slot here
   ~mk-slot there
   ~mk-slot else
-  ~link here there
-  ~link there else
+  ~link here there; ~link there else
   +at a -> here
   +at b -> there
-
-  ~mk rohan
-  ~mk scott
-  +at rohan -> scott
-  ~link else scott
   -- ~mk-slot in-play
 
 link A B
@@ -41,7 +32,7 @@ push
   ~done
 
 game
-  ( turn, (done) ); ~turn
+  turn, (done) ; ~turn
 
 game
   turn;

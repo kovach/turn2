@@ -22,19 +22,18 @@ setup
   n C
   +cell R C
 
-
 -- determine filled cells
-#acc fills -> count
+#acc fills -> bool
 
 -- A cell is eligible to be chosen if it hasn't been filled yet
 cell R C, turn
-fills (cell R C) -> z
+fills (cell R C) -> 0
 ^eligible (cell R C)
 
 -- ?C: C is a choice to be made
 -- ~choice C: other rules refer to it this way
 -- !eligible C: C must be *eligible* at the time it is chosen
-turn
+turn, did-win -> 0
   ?C
   ~choice C
   !eligible C
@@ -48,8 +47,9 @@ is A Cell
   +filled Cell P
   ~did-fill
 
+turn
 filled Cell P
-^fills Cell -> ()
++fills Cell -> 1
 
 -- A turn with at least one filled is finished
 turn, did-fill, ~turn-complete
@@ -59,23 +59,33 @@ game, other P Op
   ( turn, (actor P, turn-complete) );
   ( ~turn, ^actor Op )
 
+turn, did-win -> 1, +hi
+
 -- Win condition
+turn
 filled (cell R z) M
 filled (cell R (s z)) M
 filled (cell R (s (s z))) M
 +won M (row R)
 
+turn
 filled (cell z C) M
 filled (cell (s z) C) M
 filled (cell (s (s z)) C) M
 +won M (col C)
 
+turn
 filled (cell z z) M
 filled (cell (s z) (s z)) M
 filled (cell (s (s z)) (s (s z))) M
 +won M diag1
 
+turn
 filled (cell (s (s z)) z) M
 filled (cell (s z) (s z)) M
 filled (cell z (s (s z))) M
 +won M diag2
+
+#acc did-win -> bool
+
+turn, won _ _, +did-win -> 1
