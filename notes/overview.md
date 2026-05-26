@@ -1,18 +1,32 @@
+
+# 26/05/25
+- try to land exceptions
+- random actor
+- dominion action-phase
+  -
+
 # exceptions
 plan: TODO
 
 *exceptions* are rules that override default behavior in some sense
 ```
+activate.it.is misfits
+  ~choose.it _X, !in-supply _X;
+  is _X X
+  ~play-card.it.^is X
+    {move X _ -> nope}
 ```
-- they are implemented as a global program transformation that occurs after the earlier expansion steps
-  ? after or before
-- every positive occurrence of the excepted predicate symbol `p` is rewritten to a fresh `p'`
+- an exception expression is `{l_atom -> r_atom}`; neither atom has a marker
+- they are implemented as a global program transformation that occurs before any expansion
+- every positive occurrence of the predicate symbol `p` of `l_atom` is rewritten to a fresh `p'`
 - we generate a fresh `p_exn` symbol
-- the exception expression `p -> q` is rewritten to `(p', ^p_exn -> 1)`
-- a new rule `p', p_exn -> 1, ^q` (*exception*)
-- a new rule `p', p_exn -> 0, ^p` (*default*)
+- the exception expression is rewritten to `(l_atom, ^ p_exn -> 1)`
+- a new rule `p', p_exn -> 1, ^ r_atom` (*exception*)
+- a new rule `p', p_exn -> 0, ^ p` (*default*)
 
-questions:
+no other semantics changes: this feature is source-to-source on the rule set
+
+questions (these are considerations for later, not this change):
 - we could allow the set of all rules to be ordered, so that rule R later than exception E is not re-written by it
   - we might not expose this to users, or only through a dedicated syntax
 

@@ -1,19 +1,19 @@
 -- Each turn has three phases: Action, then Buy, then Clean-up
 turn _
-  ( ~action-phase _ );
-  ( ~buy-phase _ );
-  ( ~cleanup-phase _ )
+  ~action-phase _ ;
+  ~buy-phase _ ;
+  ~cleanup-phase _
 
 -- In your Action phase, you can play one Action card from your hand.
 action-phase _
-  ( ~choose-action.it. is A);
-  (   ~play-action.it.^is A )
+  ~choose-action.it. is A ;
+  ~play-action.it.^is A
 
 -- Play has three steps: announce, move into play, follow its instructions.
 play-action.it.is A
-  ( ~announce A );
-  ( ~move A in-play );
-  ( ~activate.^it.^is A) 
+  ~announce A ;
+  ~move A in-play ;
+  ~activate.^it.^is A
 
 -- How to activate an action (two examples)
 
@@ -50,16 +50,21 @@ mk-action Name
   +card:name C Name
   +at C -> you-hand
   +action C
+  +icon C
+  +icon:name C Name
 
 mk-copper Name
   +card C
   +card:name C copper
   +at C -> you-hand
   +treasure C
+  +icon C
 
 setup
   +player you
   +player:hand you you-hand
+  +icon you-hand
+  +icon in-play
   ~mk-action c
   ~mk-action d
   ~mk-action throne-room
@@ -84,4 +89,3 @@ play-action.^it C
 
 #def act-c activate.it.is.card:name c, ~go-c
 #def act-d activate.it.is.card:name d, ~go-d
-

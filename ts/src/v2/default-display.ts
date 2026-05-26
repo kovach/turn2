@@ -125,8 +125,23 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     return c ? c.moment : store.top;
   }
 
+  // Collect `icon:name I N` rows whose interval contains M, indexed by
+  // tokenOf(I). Last writer wins on collision.
+  function collectIconNames(store: Store, M: Term): Map<number, string> {
+    const names = new Map<number, string>();
+    for (const idx of candidatesByHead(store, "icon:name")) {
+      const t = store.tuples[idx]!;
+      const ts = t.atom.terms;
+      // [head, I, N, id]
+      if (ts.length !== 4) continue;
+      if (!intervalContains(store, t.l, t.r, M, M)) continue;
+      names.set(tokenOf(store, ts[1]!), api.renderTerm(store, ts[2]!));
+    }
+    return names;
+  }
+
   // Collect `icon T` rows whose interval contains M. Dedup by term token.
-  function collectIcons(store: Store, M: Term): IconNode[] {
+  function collectIcons(store: Store, M: Term, names: Map<number, string>): IconNode[] {
     const seen = new Map<number, IconNode>();
     const order: IconNode[] = [];
     for (const idx of candidatesByHead(store, "icon")) {
@@ -141,7 +156,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       const node: IconNode = {
         term,
         termKey: key,
-        label: api.renderTerm(store, term),
+        label: names.get(key) ?? api.renderTerm(store, term),
         parents: [],
       };
       seen.set(key, node);
@@ -440,7 +455,8 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
   ): void {
     container.innerHTML = "";
     const M = renderMoment(ctx, store);
-    const icons = collectIcons(store, M);
+    const names = collectIconNames(store, M);
+    const icons = collectIcons(store, M, names);
     const iconKeys = new Set(icons.map((i) => i.termKey));
     const { childToParents, orphans } = collectAt(store, M, iconKeys, ctx.schema);
     const { roots, childrenOf, cycleWarning } = buildIconTree(icons, childToParents);

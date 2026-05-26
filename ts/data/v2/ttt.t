@@ -12,20 +12,18 @@ setup
   +player o
   +other x o
   +other o x
-  +n z
-  +n (s z)
   +n (s (s z))
 
+setup, n (s X), +n X
+
 -- For each pair of numbers, create a cell
-setup
-  n R
-  n C
+setup, n R, n C
   +cell R C
 
 -- determine filled cells
 #acc fills -> bool
 
--- A cell is eligible to be chosen if it hasn't been filled yet
+-- A cell is eligible to be chosen if it hasn't been filled earlier
 cell R C, turn
 fills (cell R C) -> 0
 ^eligible (cell R C)
@@ -33,59 +31,47 @@ fills (cell R C) -> 0
 -- ?C: C is a choice to be made
 -- ~choice C: other rules refer to it this way
 -- !eligible C: C must be *eligible* at the time it is chosen
-turn, did-win -> 0
+turn, (actor P), did-win -> 0
   ?C
   ~choice C
   !eligible C
-
--- The external harness writes `is` rows for each user input
--- This rule observes them and fills the chosen cell
-turn
-actor P
-choice A
-is A Cell
-  +filled Cell P
-  ~did-fill
+  
+  is C Cell    -- The external harness writes `is` rows for each user input
+    +filled Cell P
+    ~did-fill  
 
 turn
-filled Cell P
-+fills Cell -> 1
+  filled Cell P
+  +fills Cell -> 1
 
 -- A turn with at least one filled is finished
 turn, did-fill, ~turn-complete
 
 -- After turn is complete, the other player's turn begins
 game, other P Op
-  ( turn, (actor P, turn-complete) );
+  ( turn, (actor P), (turn-complete) );
   ( ~turn, ^actor Op )
 
-turn, did-win -> 1, +hi
+-- Directions and Adjacency
+-- (excessively general; could use to implement go-moku, etc)
+#def dx setup, n (s X), n Y, +vector X Y (s X) Y dx
+#def dy setup, n X, n (s Y), +vector X Y X (s Y) dy
+#def dxy setup, n (s X), n (s Y), +vector X Y (s X) (s Y) dxy
+#def dxy' setup, n (s X), n (s Y), +vector X (s Y) (s X) Y dxy'
+
+setup
+  vector X1 Y1 X2 Y2 Dir,
+  +adj (cell X1 Y1) (cell X2 Y2) Dir
 
 -- Win condition
 turn
-filled (cell R z) M
-filled (cell R (s z)) M
-filled (cell R (s (s z))) M
-+won M (row R)
+  filled A M
+  adj A B D
+  filled B M
+  adj B C D
+  filled C M
+  ~won M D
 
-turn
-filled (cell z C) M
-filled (cell (s z) C) M
-filled (cell (s (s z)) C) M
-+won M (col C)
-
-turn
-filled (cell z z) M
-filled (cell (s z) (s z)) M
-filled (cell (s (s z)) (s (s z))) M
-+won M diag1
-
-turn
-filled (cell (s (s z)) z) M
-filled (cell (s z) (s z)) M
-filled (cell z (s (s z))) M
-+won M diag2
-
+-- needed for negation
 #acc did-win -> bool
-
-turn, won _ _, +did-win -> 1
+turn, (won _ _), +did-win -> 1

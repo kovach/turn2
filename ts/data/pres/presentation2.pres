@@ -6,8 +6,16 @@
 %]
 
 [slide][%Purpose%]
-- Turn is for describing situations.
-- It weaves queries, action, and choice together.
+- Turn is for defining situations.
+- It weaves queries, action, and choice together over time
+
+[slide][%Why a Language%]
+- Old definitions should rarely need to change to accommodate new ones
+  - new attributes of old entities
+  - new behaviors within old ones
+  - *avoid fixed local structure*
+- Matching the efficiency of natural language
+  - *avoid encodings
 
 [slide][%Atoms%]
 The basic constituent of a situation is called a *tuple* or *atom*
@@ -72,39 +80,58 @@ turn T
 [pause]
 The two phases do not overlap, but we can still match this situation after it happened and respond.
 
-[slide][%"Co-routines"%]
+[slide][%"Co-routines" everywhere%]
+*When you activate *dream*, gain a power.
+If you forget dream, play the gained power.[pause]
 [code][%
-%][timeline]
+activate It, card:name It dream
+  ~gain-power
+    (gain New)
+    (forget It)
+  ~play-power New
+[pause]
+gain-power
+  ~forget-power;
+  ~choose-new-power
+[pause]
+forget-power
+  ? P, ~forget P, !power P
+[pause]
+choose-new-power
+  ? P, +gain P, !power P
+%]
+[pause]
+- [%activate%] treats [%forget%] and [%gain%] like return values, but they don't need to be declared as such. [pause]
+- execution of [%activate%] "pauses" while rules matching [%gain-power%] resolve [pause]
+  - a prefix of the rule asserts [%gain-power%]; then a suffix matches that tuple along with [%gain%] and [%forget%] before "continuing" [pause]
+  - *these things are all semantically datalog rules*
 
 [slide][%Aggregates%]
-- An tuple sees every tuple that fully contains it.
-- We use this idea to implement aggregates: we can collapse a pile of atoms down to one.
-- Aggregates happen at some interval of time, and only aggregate tuples seen at that interval.[pause]
+- We often need to reduce over a relation
+  - (*your score is the sum of ...*, *if you gained no cards this turn, ...*)
+- Aggregates are demand-driven and calculated at some interval [pause]
 - *We use aggregates to implement state.*
 
 [slide][%Where am I?%]
 - Answer: wherever you last put me.[pause]
 
+- variables and physical tokens are logically equivalent
+  - a variable is a slot that provides access to the value it was most recently set to
+  - a token is an entity that is located at the place it was most recently moved [pause]
+
 [code][%
 #acc at * -> last
+
 -- Explanation:[pause]
 -- #acc ...          -- Directive declaring an accumulated relation[pause]
 -- #acc at ...       -- named *at*[pause]
 -- #acc at * ...     -- taking one argument of any type[pause]
 -- #acc at * -> last -- aggregated by *last* (?)
---
 %]
 
 [slide][%last%]
-- [%last%] is a commutative, binary, multi-valued operation defined on (moment, value) pairs [pause]
-- it returns whichever pair happens later, or both if they are incomparable
-- suppose we know that 0 < t1 < 1 and 0 < t2 < 1. then
-
-todo:
-
-last (0, a) (t1, b) = {(t1, b)}
-last (t1, b) (t2, c) = {(t1, b), (t2, c)}
-last (last (t1, b) (t2, c)) (1, d) = {(1, d)}
+- [%last(a, b) := b%]
+- last is applied to values in temporal order, so it evaluates to the most recent one
 
 [slide][%Aggregation: Last Position%]
 [code][%
@@ -124,19 +151,21 @@ look, at me -> L, ~print L
 %][timeline]
 
 [slide][%Choices%]
-- The purpose of a Turn program is to construct choice sets: a program defines a function from past decisions to current choices. [pause]
-- The choice set is represented by a query. The query matches the set of valid choices.
+- A rule set is compiled into a monotone logic program.
+- Given a set of past decision tuples, this LP computes a set of choices to be made.
+- The choice set is represented by a query.
+  - The query, evaluated at the right *now*, matches valid choices.
 
 [slide][%Choices%]
 [code][%
 choose-card
   ?Card      -- introduces *choice variable*
-  ~it Card   -- allows other queries to grab it
+  ~it Card   -- a handle for other queries to grab onto
   !card Card -- asserts that any valid decision must be a `card`
 %]
 
 [slide][%Composable Choice%]
-Other rules, besides the one that introduces a choice, can refine it:
+Other rules can independently refine the choice:
 [code][%
 choose-card
   ?Card      -- introduces *choice variable*
