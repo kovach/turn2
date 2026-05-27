@@ -6,8 +6,11 @@ turn _
 
 -- In your Action phase, you can play one Action card from your hand.
 action-phase _
-  ~choose-action.it. is A ;
-  ~play-action.it.^is A
+  ~do-action
+
+do-action
+  ~choose-action.it.is A ;
+  ~play-action.it.^is A ;
 
 -- Play has three steps: announce, move into play, follow its instructions.
 play-action.it.is A
@@ -31,7 +34,7 @@ activate.it.is.card:name village
   ( ~gain-card );
   ( ~gain-action );
   ( ~gain-action )
-
+  
 
 -- The Rest --
 
@@ -59,6 +62,7 @@ mk-copper Name
   +at C -> you-hand
   +treasure C
   +icon C
+  +icon:name C copper
 
 setup
   +player you
@@ -70,6 +74,15 @@ setup
   ~mk-action throne-room
   ~mk-action village
   ~mk-copper cop
+  ~mk-bool
+
+mk-bool
+  +bool 1
+  +bool 0
+  +icon 1
+  +icon:name 1 do
+  +icon 0
+  +icon:name 0 do-not
 
 -- your-hand refers to the hand of the active player this turn
 turn.actor.player:hand.^your-hand
@@ -89,3 +102,11 @@ play-action.^it C
 
 #def act-c activate.it.is.card:name c, ~go-c
 #def act-d activate.it.is.card:name d, ~go-d
+
+gain-action, ~action-token
+
+action-token
+  ? X
+  ! bool X
+  is X 1
+  ~do-action

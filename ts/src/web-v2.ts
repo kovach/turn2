@@ -334,9 +334,14 @@ function handleClick(intent: ClickIntent): void {
   const text = "\n\n" + lines.join("\n");
   // Append to the textarea via execCommand so the existing "input" listener
   // fires and triggers the debounced run + PUT.
+  const prevStart = sourceEl.selectionStart;
+  const prevEnd = sourceEl.selectionEnd;
   sourceEl.focus();
   sourceEl.setSelectionRange(sourceEl.value.length, sourceEl.value.length);
   document.execCommand("insertText", false, text);
+  // Restore the caret to where it was; the insert was at the end, so the
+  // original offsets are unaffected.
+  sourceEl.setSelectionRange(prevStart, prevEnd);
 }
 
 async function run(): Promise<void> {

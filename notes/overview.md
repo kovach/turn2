@@ -1,12 +1,18 @@
-
+# 26/05/26
 # 26/05/25
-- try to land exceptions
-- random actor
-- dominion action-phase
-  -
+todo
+- actors
+  - random
+  ? arbitrary
+- dominion
+  fix gain-action timing
+- choice widget on slides
+- progress on exceptions
+? views on codebase
+  - all rules referring to `p`
 
 # exceptions
-plan: TODO
+plan: plans/v2-exceptions.md
 
 *exceptions* are rules that override default behavior in some sense
 ```
@@ -14,17 +20,38 @@ activate.it.is misfits
   ~choose.it _X, !in-supply _X;
   is _X X
   ~play-card.it.^is X
-    {move X _ -> nope}
+    {move X _ => nope}
 ```
-- an exception expression is `{l_atom -> r_atom}`; neither atom has a marker
+- an exception expression is `{p t1..tn => q s1..sm}`; neither atom has a marker
+  - any free variables in the `si` terms are bound by the `ti` terms
 - they are implemented as a global program transformation that occurs before any expansion
-- every positive occurrence of the predicate symbol `p` of `l_atom` is rewritten to a fresh `p'`
-- we generate a fresh `p_exn` symbol
-- the exception expression is rewritten to `(l_atom, ^ p_exn -> 1)`
-- a new rule `p', p_exn -> 1, ^ r_atom` (*exception*)
-- a new rule `p', p_exn -> 0, ^ p` (*default*)
+- every positive occurrence of the predicate symbol `p` is rewritten to a fresh `p'`
+- we generate a fresh `p_exn` symbol and a declaration `#acc p_exn => bool`
+- the exception expression is rewritten to `(l_atom, ^ p_exn -> 1)` (within the rule it occurs in)
+- a new rule `p' t1..tn, p_exn -> 1, ^ q s1..sm` (*exception*)
+- a new rule `p' V1..Vn, p_exn -> 0, ^ p V1..Vn` (*default*)
+  - the `Vi` are fresh variables; the default rule matches any tuple, not just the ones matching the terms used in the exception case
+- the generated rule names should be derived from the source rule name:
+  ```
+  #def f ... { ... } ...
+  ```
+  generates three rules, whose names are as if they were declared:
+  ```
+  #def f ...
+  #def f_exn ...
+  #def f_default ...
+  ```
 
 no other semantics changes: this feature is source-to-source on the rule set
+
+## multiple exceptions on `p`
+
+multiple exceptions are handled trivially by applying the previous logic in sequence:
+- we assume that the set of rules containing exceptions is totally ordered
+- if we have `{p => q}` followed by `{p => r}`, we apply the transformation for `p => q` first; in particular, this generates a default case which asserts `p`
+- then when handling `p => r`, these generated rules are rewritten as described
+
+## issues for later
 
 questions (these are considerations for later, not this change):
 - we could allow the set of all rules to be ordered, so that rule R later than exception E is not re-written by it

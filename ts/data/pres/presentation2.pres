@@ -81,6 +81,19 @@ turn T
 The two phases do not overlap, but we can still match this situation after it happened and respond.
 
 [slide][%"Co-routines" everywhere%]
+- a rule is a sequence of matches or assertions:
+  - [%r := (m | a)*%] ... [pause]
+- but the structure of this equivalent regex is more important:
+  - [%r := (m* a)*%] ...[pause]
+- because we split each rule into a sequence of [%m* a%]'s (a sequence of matches followed by one assert). [pause]
+- If you think of an [%r%] as a synchronous sequence of reads and writes, then a single [%m* a%] is a write that yields
+
+[slide][%"Co-routines" everywhere%]
+- The split is semantics preserving at the individual rule level
+  - [%a, ~b, c, ~d%] -> [%a, ~b%] + [%b, c, ~d%]
+  - We ensure that the match on [%b%] matches *only* the locally asserted [%b%] (not any other [%b%] from another rule)
+
+[slide][%Why "Co-routines" everywhere?%]
 *When you activate *dream*, gain a power.
 If you forget dream, play the gained power.[pause]
 [code][%
@@ -103,7 +116,7 @@ choose-new-power
 [pause]
 - [%activate%] treats [%forget%] and [%gain%] like return values, but they don't need to be declared as such. [pause]
 - execution of [%activate%] "pauses" while rules matching [%gain-power%] resolve [pause]
-  - a prefix of the rule asserts [%gain-power%]; then a suffix matches that tuple along with [%gain%] and [%forget%] before "continuing" [pause]
+  - a prefix of the rule asserts [%gain-power%]; then a suffix matches that tuple along with its associated [%gain%] and [%forget%] before "continuing" [pause]
   - *these things are all semantically datalog rules*
 
 [slide][%Aggregates%]
