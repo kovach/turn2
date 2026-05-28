@@ -88,6 +88,22 @@ The two phases do not overlap, but we can still match this situation after it ha
 - because we split each rule into a sequence of [%m* a%]'s (a sequence of matches followed by one assert). [pause]
 - If you think of an [%r%] as a synchronous sequence of reads and writes, then a single [%m* a%] is a write that yields
 
+[slide][%Why "Co-routines" everywhere?%]
+Step 1: assert [%b%] and [%d%] using the rule:
+[code][%
+a, ~b, c, ~d
+%][timeline] [pause]
+(this slide is a live demo)
+
+[slide][%Why "Co-routines" everywhere?%]
+Step 2: assert [%b%] and [%d%] using the rules:
+[code][%
+a, ~b
+
+b, c, ~d
+%][timeline] [pause]
+(this slide is a live demo)
+
 [slide][%"Co-routines" everywhere%]
 - The split is semantics preserving at the individual rule level
   - [%a, ~b, c, ~d%] -> [%a, ~b%] + [%b, c, ~d%]

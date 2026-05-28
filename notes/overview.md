@@ -1,3 +1,16 @@
+# pres preserves edits during a presentation
+plan: plans/v2-pres-preserve-edits.md
+
+- when we edit the code of a slide, we should preserve those edits in the in-memory representation
+  leaving and returning to the slide should preserve edits
+- this is complicated by the fact that each code block may be divided into segments by `[pause]` expressions
+- we will simplify by only allowing edits to the final version of the code. the earlier stages will show their original content, then after the last pause within a code block, the full (potentially modified) code will be loaded
+- the main requirement is to add a flag and method to the editor class: whether the editor is frozen.
+- after creating the editor for the slide, freeze it if it contains pauses; after last pause, unfreeze
+
+# 26/05/28
+- slide overview view?
+# 26/05/27
 # 26/05/26
 # 26/05/25
 todo
@@ -20,17 +33,29 @@ activate.it.is misfits
   ~choose.it _X, !in-supply _X;
   is _X X
   ~play-card.it.^is X
-    {move X _ => nope}
+    {move X _ => ~nope}
 ```
-- an exception expression is `{p t1..tn => q s1..sm}`; neither atom has a marker
-  - any free variables in the `si` terms are bound by the `ti` terms
+
+```
+foo . {bar => baz}
+{card => foo} . action
+action.it.is.{move To => move To'}
+```
+
+- an exception expression is `{p t1..tn => e}`
+  - the lhs is an atom without a marker
+  - the rhs is an arbitrary rule expression that *does not contain any exception expression*
 - they are implemented as a global program transformation that occurs before any expansion
 - every positive occurrence of the predicate symbol `p` is rewritten to a fresh `p'`
-- we generate a fresh `p_exn` symbol and a declaration `#acc p_exn => bool`
-- the exception expression is rewritten to `(l_atom, ^ p_exn -> 1)` (within the rule it occurs in)
-- a new rule `p' t1..tn, p_exn -> 1, ^ q s1..sm` (*exception*)
-- a new rule `p' V1..Vn, p_exn -> 0, ^ p V1..Vn` (*default*)
-  - the `Vi` are fresh variables; the default rule matches any tuple, not just the ones matching the terms used in the exception case
+- the exception expression is rewritten to `(p' t1..tn, ^ p_exn V1..Vm -> 1)` (within the rule it occurs in)
+  - the `Vi` variables are any variables appearing in `e` that are bound earlier in the rule (any bound within `t1..tn` can be excluded)
+    - note that if rule contains two `{...}`, then the latter expression's `Vi` may contain variables bound by the prior expression's `t1...tn`
+      the basic requirement is that the generated exception/default rules described below should have no dangling references
+- we generate a fresh `p_exn` symbol and a declaration `#acc p_exn v1..vm => bool` (the `vi` terms are arbitrary; ignored by compiler for now)
+- a new rule `p' t1..tn, p_exn V1..Vm -> 1, e` (*exception*)
+- a new rule `p' V1..Vn, p_exn ... -> 0, ^ p V1..Vn` (*default*)
+  - the `V1..Vn` here are fresh variables; the default rule matches any tuple, not just the ones matching the terms used in the exception case
+  - the arguments to `p_exn` (in the default case) should be all bound by `_`, since they are unused
 - the generated rule names should be derived from the source rule name:
   ```
   #def f ... { ... } ...
@@ -42,7 +67,8 @@ activate.it.is misfits
   #def f_default ...
   ```
 
-no other semantics changes: this feature is source-to-source on the rule set
+no other semantics changes: this feature is a source-to-source transform on the rule set
+
 
 ## multiple exceptions on `p`
 
@@ -51,11 +77,24 @@ multiple exceptions are handled trivially by applying the previous logic in sequ
 - if we have `{p => q}` followed by `{p => r}`, we apply the transformation for `p => q` first; in particular, this generates a default case which asserts `p`
 - then when handling `p => r`, these generated rules are rewritten as described
 
-## issues for later
+## multiple exceptions in one rule
 
+- as before, exception rewrites are applied one at a time, starting with the one earlier in the rule
+- see note above about variable scoping
+
+## limitations (for now)
+- `{...}` cannot appear as the head or tail of a dot (`.`)
+- the rhs `e` of `{... => e}` cannot contain `{...}`
+
+## comments/issues for later
 questions (these are considerations for later, not this change):
+- is the f_exn rule redundant? just do `e` inside `f`? is it meaningfully easier to understand this way?
 - we could allow the set of all rules to be ordered, so that rule R later than exception E is not re-written by it
   - we might not expose this to users, or only through a dedicated syntax
+
+### the misfits example explained
+the intent here is to play the selected card without moving it
+the exception fires exactly when a card is going to be moved as a result of playing it in this context
 
 # boolean aggregate
 plan: plans/v2-bool-aggregate.md
