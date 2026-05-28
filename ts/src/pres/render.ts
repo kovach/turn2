@@ -21,6 +21,7 @@ type ActiveBlock = {
   blockIdx: number;
   segments: Segment[];
   codeMaxReveal: number;
+  fullText: string;
   editor: Editor;
   containerEl: HTMLElement;
   hosts: { timeline: HTMLElement; tuples: HTMLElement };
@@ -255,7 +256,12 @@ function revealedText(segments: Segment[], reveal: number): string {
 
 function applyCodeReveal(h: RenderHandle) {
   for (const a of h.activeBlocks) {
-    const next = revealedText(a.segments, h.state.reveal);
+    const final = h.state.reveal >= a.codeMaxReveal;
+    const key = editKey(a.slideIdx, a.blockIdx);
+    const next = final
+      ? (h.editMap.get(key) ?? a.fullText)
+      : revealedText(a.segments, h.state.reveal);
+    a.editor.setFrozen(!final);
     if (a.editor.value === next) continue;
     a.editor.value = next;
     // Programmatic value writes don't fire `input`, so re-evaluate
@@ -354,6 +360,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     blockIdx,
     segments: block.segments,
     codeMaxReveal,
+    fullText,
     editor: null!,
     containerEl,
     hosts: { timeline: timelineHost, tuples: tuplesHost },
@@ -388,6 +395,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     },
   });
   active.editor = editor;
+  editor.setFrozen(h.state.reveal < codeMaxReveal);
   hostBox.appendChild(toolbar);
   h.activeBlocks.push(active);
 

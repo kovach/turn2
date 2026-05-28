@@ -22,7 +22,9 @@ export class Editor {
   private readonly keyHandler: (ev: KeyboardEvent) => void;
   private readonly inputHandler: () => void;
   private readonly scrollHandler: () => void;
+  private readonly mouseDownHandler: (ev: MouseEvent) => void;
   private lastLineCount = 0;
+  private _frozen = false;
 
   constructor(opts: EditorOptions) {
     this.opts = opts;
@@ -63,9 +65,13 @@ export class Editor {
     this.keyHandler = (ev) => this.onKeyDown(ev);
     this.inputHandler = () => this.onInput();
     this.scrollHandler = () => { this.gutterEl.scrollTop = this.ta.scrollTop; };
+    this.mouseDownHandler = (ev) => {
+      if (this._frozen) ev.preventDefault();
+    };
     this.ta.addEventListener("keydown", this.keyHandler);
     this.ta.addEventListener("input", this.inputHandler);
     this.ta.addEventListener("scroll", this.scrollHandler);
+    this.ta.addEventListener("mousedown", this.mouseDownHandler);
 
     this.rebuildGutter();
 
@@ -85,6 +91,15 @@ export class Editor {
   get element(): HTMLTextAreaElement { return this.ta; }
   focus(): void { this.ta.focus(); }
 
+  get frozen(): boolean { return this._frozen; }
+  setFrozen(v: boolean): void {
+    if (this._frozen === v) return;
+    this._frozen = v;
+    this.ta.readOnly = v;
+    this.ta.classList.toggle("editor-frozen", v);
+    if (v && document.activeElement === this.ta) this.ta.blur();
+  }
+
   destroy(): void {
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer);
@@ -93,6 +108,7 @@ export class Editor {
     this.ta.removeEventListener("keydown", this.keyHandler);
     this.ta.removeEventListener("input", this.inputHandler);
     this.ta.removeEventListener("scroll", this.scrollHandler);
+    this.ta.removeEventListener("mousedown", this.mouseDownHandler);
     if (!this.adopted) this.wrap.remove();
   }
 
@@ -139,6 +155,14 @@ export class Editor {
   }
 
   private onKeyDown(ev: KeyboardEvent): void {
+    if (this._frozen) {
+      // Escape still blurs; everything else: let readOnly drop it.
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.ta.blur();
+      }
+      return;
+    }
     if (ev.key === "Escape") {
       ev.preventDefault();
       this.ta.blur();
