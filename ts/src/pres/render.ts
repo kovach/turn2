@@ -11,6 +11,11 @@ import {
 
 type State = { slide: number; reveal: number };
 
+// Per code block, the "right" entries of the reveal-state structure `S`
+// (see plans/v2-relaxed-editor-freezing.md): reveal -> edited full content.
+// Absence of a key means that reveal is "left" (untouched source).
+export type EditMap = Map<number, string>;
+
 type EffectiveSlide = {
   kind: "title" | "content";
   slide: Slide;
@@ -20,8 +25,6 @@ type ActiveBlock = {
   slideIdx: number;
   blockIdx: number;
   segments: Segment[];
-  codeMaxReveal: number;
-  fullText: string;
   editor: Editor;
   containerEl: HTMLElement;
   hosts: { timeline: HTMLElement; tuples: HTMLElement };
@@ -53,7 +56,7 @@ type RenderHandle = {
   state: State;
   root: HTMLElement;
   mountedSlide: number;
-  editMap: Map<string, string>;
+  edits: Map<string, EditMap>;
   activeBlocks: ActiveBlock[];
   activeSvgs: ActiveSvg[];
   // In-memory copy of full .pres source; mutated on drag commit.
@@ -187,7 +190,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
     root.innerHTML = `<div class="empty">no slides</div>`;
     return {
       doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
-      mountedSlide: -1, editMap: new Map(), activeBlocks: [], activeSvgs: [],
+      mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
       currentSrc: source,
     };
   }
@@ -198,7 +201,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
   };
   const handle: RenderHandle = {
     doc, effectiveSlides, state, root,
-    mountedSlide: -1, editMap: new Map(), activeBlocks: [], activeSvgs: [],
+    mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
     currentSrc: source,
   };
   renderCurrent(handle);
@@ -248,20 +251,41 @@ function editKey(slideIdx: number, blockIdx: number): string {
   return `${slideIdx}/${blockIdx}`;
 }
 
-function revealedText(segments: Segment[], reveal: number): string {
+export function revealedText(segments: Segment[], reveal: number): string {
   let out = "";
   for (const s of segments) if (s.reveal <= reveal) out += s.text;
   return out;
 }
 
+// Greatest reveal with a "right" (edited) entry, or 0 if there are none.
+export function maxEdited(S: EditMap): number {
+  let m = 0;
+  for (const r of S.keys()) if (r > m) m = r;
+  return m;
+}
+
+// Reconstruct the editor text at `reveal` from the reveal-state structure S:
+// start from the nearest "right" entry at or below `reveal`, then append the
+// source segments for the reveals above it (up to `reveal`). With an empty S
+// this equals `revealedText(segments, reveal)`.
+export function editorState(S: EditMap, segments: Segment[], reveal: number): string {
+  let base = "";
+  let start = 0;
+  for (let r = reveal; r >= 1; r--) {
+    const e = S.get(r);
+    if (e !== undefined) { base = e; start = r; break; }
+  }
+  let out = base;
+  for (const s of segments) if (s.reveal > start && s.reveal <= reveal) out += s.text;
+  return out;
+}
+
 function applyCodeReveal(h: RenderHandle) {
   for (const a of h.activeBlocks) {
-    const final = h.state.reveal >= a.codeMaxReveal;
-    const key = editKey(a.slideIdx, a.blockIdx);
-    const next = final
-      ? (h.editMap.get(key) ?? a.fullText)
-      : revealedText(a.segments, h.state.reveal);
-    a.editor.setFrozen(!final);
+    const S = h.edits.get(editKey(a.slideIdx, a.blockIdx))!;
+    const R = h.state.reveal;
+    const next = editorState(S, a.segments, R);
+    a.editor.setFrozen(maxEdited(S) > R);
     if (a.editor.value === next) continue;
     a.editor.value = next;
     // Programmatic value writes don't fire `input`, so re-evaluate
@@ -290,13 +314,10 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
   const containerEl = h.root.querySelector<HTMLElement>(`.block.code[data-block-idx="${blockIdx}"]`);
   if (!containerEl) return;
 
-  const codeMaxReveal = block.segments.reduce((m, s) => Math.max(m, s.reveal), 1);
   const key = editKey(h.state.slide, blockIdx);
-  const fullText = block.segments.map(s => s.text).join("");
-  // editMap holds user edits made after the block was fully revealed;
-  // before that, the value is a function of (segments, reveal).
-  const initial = h.editMap.get(key)
-    ?? (h.state.reveal >= codeMaxReveal ? fullText : revealedText(block.segments, h.state.reveal));
+  let S = h.edits.get(key);
+  if (!S) { S = new Map(); h.edits.set(key, S); }
+  const initial = editorState(S, block.segments, h.state.reveal);
   const hostBox = document.createElement("div");
   hostBox.className = "pres-editor-host";
   containerEl.appendChild(hostBox);
@@ -359,8 +380,6 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     slideIdx: h.state.slide,
     blockIdx,
     segments: block.segments,
-    codeMaxReveal,
-    fullText,
     editor: null!,
     containerEl,
     hosts: { timeline: timelineHost, tuples: tuplesHost },
@@ -382,11 +401,12 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     saveBackend: "none",
     autoGrow: true,
     onChange: (value: string) => {
-      // Only persist edits once the block is fully revealed; partial-reveal
-      // text is reveal-driven and would otherwise poison editMap.
-      if (h.state.reveal >= active.codeMaxReveal) {
-        h.editMap.set(key, value);
-      }
+      // Edits can only reach a non-frozen reveal; record the current
+      // reveal as a "right" entry. The throw guards the invariant that a
+      // frozen reveal (one with edits at a greater reveal) never lands here.
+      const R = h.state.reveal;
+      if (maxEdited(S) > R) throw new Error("edit on a frozen reveal");
+      S.set(R, value);
       if (active.debounceTimer !== null) clearTimeout(active.debounceTimer);
       active.debounceTimer = setTimeout(() => {
         active.debounceTimer = null;
@@ -395,7 +415,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     },
   });
   active.editor = editor;
-  editor.setFrozen(h.state.reveal < codeMaxReveal);
+  editor.setFrozen(maxEdited(S) > h.state.reveal);
   hostBox.appendChild(toolbar);
   h.activeBlocks.push(active);
 
@@ -649,11 +669,8 @@ function commitOne(
 
 function teardownAll(h: RenderHandle) {
   for (const a of h.activeBlocks) {
-    // Snapshot current text in case debounce hasn't fired — but only if the
-    // block was fully revealed at the time the user typed.
-    if (h.state.reveal >= a.codeMaxReveal) {
-      h.editMap.set(editKey(a.slideIdx, a.blockIdx), a.editor.value);
-    }
+    // Edits live in h.edits, written synchronously on each keystroke, so
+    // there is nothing to snapshot here.
     if (a.debounceTimer !== null) clearTimeout(a.debounceTimer);
     a.editor.destroy();
     const outBox = a.containerEl.querySelector<HTMLElement>(".pres-output");

@@ -1,3 +1,35 @@
+# `sum` weight parsing
+plan: plans/v2-sum-reject-invalid-weights.md
+
+# relaxed editor freezing
+plan: plans/v2-relaxed-editor-freezing.md
+
+- walking back the most recent change partially
+  (plans/v2-pres-preserve-edits)
+- logically, a code block with n pauses represents n+1 different editor states (each called a *reveal*)
+- moving from one to the next means concatenating some lines of code (a *segment*) to the previous
+- we will return to the prior behavior, where each intermediate state can be edited
+- we use the following data structure S per code block:
+  - for each reveal, either `left Segment `, where Segment is the segment from the source file, or `right EditState`,
+    where EditState is the edited content
+  - on advance to reveal R, do `editorState(R, S)`
+    - if S(R) = left Segment, append Segment to `editorState(R-1, S)`
+    - if S(R) = right EditState, return EditState
+  - an edit can only be done at R if S(R') = left, for all R < R'
+    - otherwise, editor should be frozen
+  - when an edit is done at R and S(R) = left ..., update S(R) = right content, where content is the current content plus the edit
+    if S(R) = right already, then just update the state
+
+## what happens if we advance backwards?
+- advancing backwards may move to a slide that is before the latest edited `r`. doing so freezes the editor
+  note that, on the initial pass forward, all reveal states are editable (because `r` is >= 1)
+  (this should be checked on each reveal change, not just backward steps)
+
+# 26/05/29
+exn todo
+- review note about anchor for `e`
+- review multiple exns per rule
+
 # pres preserves edits during a presentation
 plan: plans/v2-pres-preserve-edits.md
 
