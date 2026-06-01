@@ -3,19 +3,18 @@
   author: ...
   date: [today]
   theme: light
+  show-slide-total: off
 %]
 
 [slide][%Purpose%]
 - Turn is for defining situations.
-- It weaves queries, action, and choice together over time
+- It enables the programmer to weave together observations, actions, and choice over time.
 
-[slide][%Why a Language%]
-- Old definitions should rarely need to change to accommodate new ones
-  - new attributes of old entities
-  - new behaviors within old ones
-  - *avoid fixed local structure*
-- Matching the efficiency of natural language
-  - *avoid encodings
+[slide][%Why?%]
+- I really like *Spirit Island*
+- I admire games like MtG, Dominion, Gloomhaven, etc.
+[pause]
+- **Formalizing these games *naturally* is a legitimate intellectual challenge**
 
 [slide][%Compounds%]
 We call the basic constituent of a situation a *tuple* (if it contains no variables) or a *compound*.
@@ -33,7 +32,7 @@ reading from top to bottom:
 [code][%
 turn T       -- during some Turn... [pause]
 play-card C  -- a card is played... [pause]
-is-action C     -- that is an action... [pause]
+is-action C  -- that is an action... [pause]
 ~activate C  -- so activate the card.
 %]
 
@@ -47,31 +46,31 @@ is-action C     -- that is an action... [pause]
 -- Reminder: the rule we want to trigger
 -- turn T, play-card C, is-action C, ~activate C
 [pause]
-+is-action C     -- create an action card (fact) [pause]
-~turn T         -- create a Turn (after `action` begins) (episode) [pause]
-~play-card C    -- play the card (during that turn) (episode)
++is-action C   -- create an action card (fact) [pause]
+~turn T        -- create a Turn (after `action` begins) (episode) [pause]
+~play-card C   -- play the card (during that turn) (episode)
 
 -- re-introduce the rule... [pause]
 turn T, play-card C, is-action C, ~activate C
 %][timeline]
 
-[slide][%Timeline View%]
+[slide][%Building a Game%]
 [code][%
 ~game
-
+[pause]
 game, ~turn
-
+[pause]
 turn
-  ( ~action-phase );
-  ( ~buy-phase );
-  ( ~cleanup-phase )
+  ~action-phase;
+  ~buy-phase;
+  ~cleanup-phase
 %][timeline]
 
 [slide][%The now(s)%]
-Sometimes we need several related points in time, so we allow grouping.
-This temporarily shrinks the interval and later pops the changes:
+- Sometimes we *do* need to relate separated intervals
+- We use a *subquery* to locally modify the interval
 [code][%
--- "If you play the card you drew, ... [pause]
+-- "If you play the card you drew this turn, ..." [pause]
 turn T
   ( draw-phase, draw-card C )    -- "drew C" [pause]
   ( action-phase, play-card C )  -- "play C"
@@ -80,58 +79,65 @@ turn T
 [pause]
 The two phases do not overlap, but we can still match this situation after it happened and respond.
 
+[slide][%Now Stack in Detail%]
+[code][%
+~t         -- <t, t>
+  ( ~a     -- <a, a>
+  );       -- a>, t>
+  ( ~b     -- <b, b>
+  );       -- b>, t>
+%][timeline]
+
 [slide][%Imperative Logic Programming%]
 [code][%
-e X Y, ^p X Y
+edge X Y, ^path X Y
 
-e X Y, p Y Z, ^p X Z [pause]
+edge X Y, path Y Z, ^path X Z [pause]
 
 ~setup; ~turn
 [pause]
 setup
-  -- connect permanently
-  ~connect a b;
+  ~connect a b;  -- connect permanently
   ~connect b c;
 [pause]
-connect X Y, +e X Y
+connect X Y, +edge X Y
 [pause]
 turn
-  -- connect temporarily
-  ~temp-connect c d; [pause]
+  ~temp-connect c d;  -- connect temporarily [pause]
 
 turn
   temp-connect X Y;
-  ^e X Y
+  ^edge X Y
 
 %][timeline]
 
 [slide][%"Co-routines" everywhere%]
-Goal: assert [%d%] using this rule (no shortcuts!):
+Goal: assert [%d%] using this rule (*no shortcuts please*):
 [code][%
 a, ~b, c, ~d
 %][timeline]
 
 [slide][%Why "Co-routines" everywhere?%]
-*When you activate *dream*, gain a power.
-If you forget dream, play the gained power.[pause]
+*When you activate *dream*, Gain a Power.*
+*If you Forget *dream*, Play the Gained Power.* [pause]
 [code][%
 activate It, card:name It dream
-  ~gain-power
-    (gain New)
-    (forget It)
-  ~play-power New
+  ( ~gain-power
+      (gain New)
+      (forget It)
+  ); ~play-power New
 [pause]
 gain-power
   ~choose-new-power;
   ~forget-power
 [pause]
+choose-new-power
+  ? P, !power P   -- syntax explained soon...
+  ~gain P         -- definition elided
+[pause]
 forget-power
   ? P, !power P
-  ~forget P
-[pause]
-choose-new-power
-  ? P, !power P
-  ~gain P
+  ~forget P       -- definition elided
 %]
 [pause]
 - [%activate%] treats [%forget%] and [%gain%] like return values, but they don't need to be declared as such. [pause]
@@ -164,19 +170,11 @@ look, at me -> L, ~print L
 %][timeline]
 
 
-[slide][%Where am I?%]
-- Answer: wherever you last put me.[pause]
-
-- traditional variables and token-with-location are equivalent
-  - a variable is a slot that provides access to the value it was most recently set to
-  - a token is an entity that is located at the place it was most recently moved to
-
 [slide][%last%]
 - [%last(a, b) := b%]
-- A (non commutative) aggregate function is applied to values in temporal order, so [%last%] evaluates to the most recent one.
+- A (non commutative) aggregate function is applied to values in temporal order.
 [pause]
 [code][%
--- Review of declaration of `at`
 #agg at * -> last
 
 -- Explanation:[pause]
@@ -186,27 +184,27 @@ look, at me -> L, ~print L
 -- #agg at * -> last -- aggregated by *last* (?)
 %]
 
-[slide][%Choices%]
+[slide][%Choice%]
 - A rule set is compiled into a monotone logic program.
 - Given a set of past decision tuples, this LP computes a set of choices to be made.
 - The choice set is represented by a query.
-  - The query, evaluated at the right *now*, matches valid choices.
+  - The query, evaluated at the *now*, matches valid choices.
 
-[slide][%Choices%]
+[slide][%Choice%]
 [code][%
 choose-card
-  ?Card      -- introduces *choice variable*
-  ~it Card   -- a handle for other queries to grab onto
-  !card Card -- asserts that any valid decision must be a `card`
+  ? Card      -- introduces *choice variable*
+  ! card Card -- asserts that any valid decision must be a `card`
+  ~ it Card   -- a handle for other queries to grab onto
 %]
 
 [slide][%Composable Choice%]
 Other rules can independently refine the choice:
 [code][%
 choose-card
-  ?Card      -- introduces *choice variable*
-  ~it Card   -- allows other queries to grab it
-  !card Card -- asserts that any valid decision must be a `card`
+  ? Card      -- introduces *choice variable*
+  ! card Card -- asserts that any valid decision must be a `card`
+  ~ it Card   -- a handle for other queries to grab onto
 [pause]
 -- If *Earthquake* is active:
 --   when choosing a card, it must be *sturdy*. [pause]
@@ -230,7 +228,26 @@ turn
   ^sturdy trading-post
 %]
 
+[slide][%Conclusion: Semantics Summary%]
+- A program is a set of rules
+- Each rule compiles independently to a monotone logic rule
+[pause]
+- Computing the least fixpoint of a program yields a set of *obstructions*:
+  - an aggregation to perform
+  - a choice to present
+  - **not discussed today:** some unordered linear episodes need ordering [pause]
+  - (these are exactly the operations that can be non-monotone or interact with the outside world)
+  [pause]
+- Resolving the earliest obstruction allows the program to advance, which is done by simply re-running it from scratch
+
 [slide][%Extras%]
+
+[slide][%Making Time%]
+- Each tuple needs a pair of fresh *moment* values (its start and stop)
+- We construct these deterministically from its context
+- This has an unanticipated benefit: the full causal history of a moment or entity is present in its id [pause]
+- This method is essentially skolemnization
+- TODO
 
 [slide][%Why "Co-routines" everywhere?%]
 Step 2: assert [%b%] and [%d%] using the rules:

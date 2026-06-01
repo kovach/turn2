@@ -61,6 +61,9 @@ type RenderHandle = {
   activeSvgs: ActiveSvg[];
   // In-memory copy of full .pres source; mutated on drag commit.
   currentSrc: string;
+  // Lazily-built keybindings overlay, appended to document.body and
+  // toggled via the help button / `?` key. Null until first opened.
+  helpEl: HTMLElement | null;
 };
 
 const GAS = 100;
@@ -137,19 +140,87 @@ function renderBlock(b: Block, blockIdx: number): string {
   return `<div class="block code" data-block-idx="${blockIdx}"${opts}></div>`;
 }
 
-function renderSlide(eff: EffectiveSlide, reveal: number): string {
+function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, helpButton: string): string {
   if (eff.kind === "title") {
     return `<div class="slide title-slide r-${reveal}">
       <h1 class="title-line">${escapeHtml(eff.slide.title)}</h1>
       <div class="meta-author" data-slot="author"></div>
       <div class="meta-date" data-slot="date"></div>
+      ${helpButton}
     </div>`;
   }
   const body = eff.slide.blocks.map((b, i) => renderBlock(b, i)).join("");
   return `<div class="slide content-slide r-${reveal}">
     <h1 class="slide-title">${escapeHtml(eff.slide.title)}</h1>
     <div class="slide-body">${body}</div>
+    ${footer}
+    ${helpButton}
   </div>`;
+}
+
+// Keybindings shown in the help overlay. Kept alongside the bindings in
+// attachKeyHandler; update both together.
+const HELP_ITEMS: Array<[string, string]> = [
+  ["→ · l · Space", "Next step"],
+  ["← · h", "Previous step"],
+  ["↓ · j · PageDown", "Next slide"],
+  ["↑ · k · PageUp", "Previous slide"],
+  ["Home · p", "First slide"],
+  ["End · n", "Last slide"],
+  ["t", "Toggle timeline"],
+  ["d", "Toggle database"],
+  ["?", "Toggle this help"],
+  ["Esc", "Close this help"],
+];
+
+// The `?` button shown on the first slide only.
+const HELP_BUTTON_HTML =
+  `<button type="button" class="help-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>`;
+
+function ensureHelpEl(h: RenderHandle): HTMLElement {
+  if (h.helpEl) return h.helpEl;
+  const overlay = document.createElement("div");
+  overlay.className = "help-overlay";
+  overlay.hidden = true;
+  const rows = HELP_ITEMS.map(
+    ([k, d]) => `<tr><td class="help-key">${escapeHtml(k)}</td><td class="help-desc">${escapeHtml(d)}</td></tr>`,
+  ).join("");
+  overlay.innerHTML = `<div class="help-panel">
+    <h2 class="help-title">Keyboard shortcuts</h2>
+    <table class="help-table">${rows}</table>
+    <div class="help-hint">press ? or Esc to close</div>
+  </div>`;
+  // Click on the backdrop (but not the panel) closes.
+  overlay.addEventListener("click", ev => { if (ev.target === overlay) closeHelp(h); });
+  document.body.appendChild(overlay);
+  h.helpEl = overlay;
+  return overlay;
+}
+
+function helpOpen(h: RenderHandle): boolean {
+  return !!h.helpEl && !h.helpEl.hidden;
+}
+
+function closeHelp(h: RenderHandle): void {
+  if (h.helpEl) h.helpEl.hidden = true;
+}
+
+function toggleHelp(h: RenderHandle): void {
+  if (helpOpen(h)) closeHelp(h);
+  else ensureHelpEl(h).hidden = false;
+}
+
+// Bottom-right slide number for content slides. Title slides get no number;
+// content slides are numbered from 1. With `show-slide-total` on, append the
+// total content-slide count as `i / n`.
+function slideFooter(h: RenderHandle, eff: EffectiveSlide): string {
+  if (eff.kind !== "content") return "";
+  const hasTitle = h.effectiveSlides[0]?.kind === "title";
+  const num = h.state.slide - (hasTitle ? 1 : 0) + 1;
+  const label = h.doc.metadata.showSlideTotal
+    ? `${num} / ${h.doc.slides.length}`
+    : `${num}`;
+  return `<div class="slide-number">${label}</div>`;
 }
 
 function escapeHtml(s: string): string {
@@ -191,7 +262,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
     return {
       doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
       mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
-      currentSrc: source,
+      currentSrc: source, helpEl: null,
     };
   }
   const init = readUrlHash();
@@ -202,7 +273,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
   const handle: RenderHandle = {
     doc, effectiveSlides, state, root,
     mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
-    currentSrc: source,
+    currentSrc: source, helpEl: null,
   };
   renderCurrent(handle);
   attachKeyHandler(handle);
@@ -229,7 +300,8 @@ function renderCurrent(h: RenderHandle) {
 
   if (h.mountedSlide !== h.state.slide) {
     teardownAll(h);
-    h.root.innerHTML = renderSlide(eff, h.state.reveal);
+    const helpButton = h.state.slide === 0 ? HELP_BUTTON_HTML : "";
+    h.root.innerHTML = renderSlide(eff, h.state.reveal, slideFooter(h, eff), helpButton);
     h.mountedSlide = h.state.slide;
     if (eff.kind === "title") {
       const authorEl = h.root.querySelector<HTMLElement>('[data-slot="author"]');
@@ -237,6 +309,8 @@ function renderCurrent(h: RenderHandle) {
       if (authorEl) authorEl.textContent = h.doc.metadata.author ?? "";
       if (dateEl) dateEl.textContent = h.doc.metadata.date ?? "";
     }
+    const helpBtn = h.root.querySelector<HTMLElement>(".help-button");
+    if (helpBtn) helpBtn.addEventListener("click", () => toggleHelp(h));
     mountCodeBlocks(h);
     mountSvgBlocks(h);
   }
@@ -752,12 +826,20 @@ function attachKeyHandler(h: RenderHandle) {
     "n":          gotoEnd,
     "t":          toggleTimeline,
     "d":          toggleTuples,
+    "?":          () => toggleHelp(h),
   };
 
   document.addEventListener("keydown", ev => {
     if (ev.target instanceof HTMLTextAreaElement || ev.target instanceof HTMLInputElement) return;
-    // Any modifier suppresses our handlers — those combos belong to the browser/OS.
+    // Any modifier suppresses our handlers — those combos belong to the
+    // browser/OS. (`?` is Shift+/, so shiftKey is deliberately allowed.)
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    // While the help overlay is open, only `?`/Esc act (both close it);
+    // every other key is swallowed so navigation can't run behind it.
+    if (helpOpen(h)) {
+      if (ev.key === "?" || ev.key === "Escape") { closeHelp(h); ev.preventDefault(); }
+      return;
+    }
     const fn = bindings[ev.key];
     if (!fn) return;
     fn();

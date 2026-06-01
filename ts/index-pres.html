@@ -10,7 +10,21 @@
     html, body { height: 100%; }
     body { font-family: system-ui, sans-serif; display: flex; align-items: safe center; justify-content: center; }
     #pres { width: 100%; max-width: 1100px; padding: 32px; }
-    .slide { min-height: 70vh; display: flex; flex-direction: column; }
+    .slide { min-height: 70vh; display: flex; flex-direction: column; position: relative; }
+    .slide-number { position: absolute; bottom: 0; right: 0; font-size: 14px; opacity: 0.45; user-select: none; }
+    .help-button { position: absolute; top: 0; right: 0; width: 30px; height: 30px; border-radius: 50%;
+      font: inherit; font-size: 16px; line-height: 1; cursor: pointer; background: transparent; opacity: 0.6; }
+    .help-button:hover { opacity: 1; }
+    .help-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55); }
+    .help-overlay[hidden] { display: none; }
+    .help-panel { min-width: 320px; max-width: 90vw; padding: 24px 28px; border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
+    .help-title { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+    .help-table { border-collapse: collapse; font-size: 16px; }
+    .help-table td { padding: 4px 12px 4px 0; vertical-align: top; }
+    .help-key { font-family: monospace; white-space: nowrap; opacity: 0.85; }
+    .help-hint { margin-top: 16px; font-size: 13px; opacity: 0.6; }
     .slide-title, .title-line { font-size: 36px; font-weight: 600; margin-bottom: 24px; }
     .title-slide { align-items: center; justify-content: center; text-align: center; }
     .title-slide .title-line { font-size: 56px; }
@@ -69,6 +83,8 @@
     body.mode-light .meta-author { color: #555; }
     body.mode-light .meta-date   { color: #777; }
     body.mode-light .block.code { background: #f3f3f0; border: 1px solid #e0e0db; color: #2a2a2a; }
+    body.mode-light .help-button { color: #555; border: 1px solid #d0d0c8; }
+    body.mode-light .help-panel { background: #fdfdfd; color: #1a1a1a; border: 1px solid #e0e0db; }
 
     /* Dark mode */
     body.mode-dark { background: #1a1a1a; color: #e8e8e8; }
@@ -79,6 +95,8 @@
     body.mode-dark .pres-output { border-top-color: rgba(255,255,255,0.1); }
     body.mode-dark .pres-output-tuples { color: #c8c8c8; }
     body.mode-dark .pres-eval-error { color: #f87171; }
+    body.mode-dark .help-button { color: #aaa; border: 1px solid #333; }
+    body.mode-dark .help-panel { background: #1f1f1f; color: #e8e8e8; border: 1px solid #2a2a2a; }
   </style>
 </head>
 <body class="mode-light">

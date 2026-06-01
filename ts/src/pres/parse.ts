@@ -99,6 +99,7 @@ function parseMetadata(body: string, meta: Doc["metadata"]) {
     const value = resolveMetaValue(m[2]!);
     if (key === "title" || key === "author" || key === "date") meta[key] = value;
     else if (key === "theme" && (value === "light" || value === "dark")) meta.theme = value;
+    else if (key === "show-slide-total") meta.showSlideTotal = /^(on|true|yes|1)$/i.test(value);
   }
 }
 
