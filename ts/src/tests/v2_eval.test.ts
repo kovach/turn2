@@ -177,7 +177,7 @@ prop X Y
 // 6) aggregation: % points -> sum
 {
   const src = `
-#acc points -> sum
+#agg points -> sum
 
 + points -> 3
 + points -> 4
@@ -196,7 +196,7 @@ points -> N
 // per distinct X value, with the weights summed within each group.
 {
   const src = `
-#acc score -> sum
+#agg score -> sum
 
 ~ game, ( ~ init ); ( ~ check )
 
@@ -320,7 +320,7 @@ foo X
 // prematurely with the bound-key empty-zero fallback. Regression test.
 {
   const src = `
-#acc at e -> last
+#agg at e -> last
 
 move It To, +at It -> To
 
@@ -334,7 +334,7 @@ setup
   +dahan d1, ~move d1 l1
   +dahan d2, ~move d2 l1
 
-#acc dahan-count land -> count
+#agg dahan-count land -> count
 
 look, ~locations, ~counts
 
@@ -366,7 +366,7 @@ look
 // 14) bool aggregate: assertion present -> query yields 1.
 {
   const src = `
-#acc p -> bool
+#agg p -> bool
 
 +p a -> 1
 p a -> 1
@@ -381,7 +381,7 @@ p a -> 1
 // 15) bool aggregate: no assertion -> query `-> 0` succeeds.
 {
   const src = `
-#acc p -> bool
+#agg p -> bool
 
 p a -> 0
 +ok-absent
@@ -395,7 +395,7 @@ p a -> 0
 // 16) bool aggregate: free variable binds to the result.
 {
   const src = `
-#acc p -> bool
+#agg p -> bool
 
 +p a -> 1
 p a -> X
@@ -414,7 +414,7 @@ p b -> Y
 // 17) bool aggregate: idempotent — many asserts still yield 1, not a count.
 {
   const src = `
-#acc p -> bool
+#agg p -> bool
 
 +p a -> 1
 +p a -> 1
@@ -431,9 +431,9 @@ p a -> X
 // 18) bool aggregate parse errors.
 {
   const cases: { src: string; needle: string }[] = [
-    { src: "#acc p -> bool\n+p a -> 0\n", needle: "reserved for queries" },
-    { src: "#acc p -> bool\n+p a -> 2\n", needle: "must be literal '1'" },
-    { src: "#acc p -> bool\np a -> 2\n+x\n", needle: "query weight must be" },
+    { src: "#agg p -> bool\n+p a -> 0\n", needle: "reserved for queries" },
+    { src: "#agg p -> bool\n+p a -> 2\n", needle: "must be literal '1'" },
+    { src: "#agg p -> bool\np a -> 2\n+x\n", needle: "query weight must be" },
   ];
   for (const c of cases) {
     const r = parse(c.src);

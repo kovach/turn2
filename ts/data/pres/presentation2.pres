@@ -17,8 +17,8 @@
 - Matching the efficiency of natural language
   - *avoid encodings
 
-[slide][%Atoms%]
-The basic constituent of a situation is called a *tuple* or *atom*
+[slide][%Compounds%]
+We call the basic constituent of a situation a *tuple* (if it contains no variables) or a *compound*.
 [code][%
 turn T                   -- "T is a turn"
 card C                   -- "C is a card"
@@ -28,16 +28,16 @@ card:name C pot-of-greed -- "the name of C is pot-of-greed"
 (variables are capitalized; symbols lower-case)
 
 [slide][%The Now%]
-A compound query is a sequence of atoms. It describes an interval in time, the *now*,
+A query is a sequence of compounds. It describes an interval in time, the *now*,
 reading from top to bottom:
 [code][%
 turn T       -- during some Turn... [pause]
 play-card C  -- a card is played... [pause]
-action C     -- that is an action... [pause]
+is-action C     -- that is an action... [pause]
 ~activate C  -- so activate the card.
 %]
 
-[slide][%Kinds of Action%]
+[slide][%Kinds of Assertion%]
 - [%~episode%]: creates a new interval contained within *now*
 - [%+fact%]: creates a new interval (left, Top), with left contained in *now*, extending indefinitely forward in time
 - [%^property%]: creates a new interval equal to *now*
@@ -45,14 +45,14 @@ action C     -- that is an action... [pause]
 [slide][%Triggering the Rule%]
 [code][%
 -- Reminder: the rule we want to trigger
--- turn T, play-card C, action C, ~activate C
+-- turn T, play-card C, is-action C, ~activate C
 [pause]
-+action C     -- create an action card (fact) [pause]
-~turn T       -- create a Turn (after `action` begins) (episode) [pause]
-~play-card C  -- play the card (during that turn) (episode)
++is-action C     -- create an action card (fact) [pause]
+~turn T         -- create a Turn (after `action` begins) (episode) [pause]
+~play-card C    -- play the card (during that turn) (episode)
 
 -- re-introduce the rule... [pause]
-turn T, play-card C, action C, ~activate C
+turn T, play-card C, is-action C, ~activate C
 %][timeline]
 
 [slide][%Timeline View%]
@@ -80,34 +80,36 @@ turn T
 [pause]
 The two phases do not overlap, but we can still match this situation after it happened and respond.
 
-[slide][%"Co-routines" everywhere%]
-- a rule is a sequence of matches or assertions:
-  - [%r := (m | ~a)*%] ... [pause]
-- but the structure of this equivalent regex is more interesting:
-  - [%r := (m* ~a)*%] ...[pause]
-- because we split each rule into a sequence of [%m* ~a%]'s (a sequence of matches followed by one assert). [pause]
-- If you think of an [%r%] as a synchronous sequence of reads and writes, then a [%m* ~a%] is a single group of writes that yield
+[slide][%Imperative Logic Programming%]
+[code][%
+e X Y, ^p X Y
 
-[slide][%Why "Co-routines" everywhere?%]
-Step 1: assert [%b%] and [%d%] using the rule:
+e X Y, p Y Z, ^p X Z [pause]
+
+~setup; ~turn
+[pause]
+setup
+  -- connect permanently
+  ~connect a b;
+  ~connect b c;
+[pause]
+connect X Y, +e X Y
+[pause]
+turn
+  -- connect temporarily
+  ~temp-connect c d; [pause]
+
+turn
+  temp-connect X Y;
+  ^e X Y
+
+%][timeline]
+
+[slide][%"Co-routines" everywhere%]
+Goal: assert [%d%] using this rule (no shortcuts!):
 [code][%
 a, ~b, c, ~d
-%][timeline] [pause]
-(this slide is a live demo)
-
-[slide][%Why "Co-routines" everywhere?%]
-Step 2: assert [%b%] and [%d%] using the rules:
-[code][%
-a, ~b
-
-b, c, ~d
-%][timeline] [pause]
-(this slide is a live demo)
-
-[slide][%"Co-routines" everywhere%]
-- The split is semantics preserving at the individual rule level
-  - [%a, ~b, c, ~d%] -> [%a, ~b%] + [%b, c, ~d%]
-  - We ensure that the match on [%b%] matches *only* the locally asserted [%b%] (not any other [%b%] from another rule)
+%][timeline]
 
 [slide][%Why "Co-routines" everywhere?%]
 *When you activate *dream*, gain a power.
@@ -120,57 +122,39 @@ activate It, card:name It dream
   ~play-power New
 [pause]
 gain-power
-  ~forget-power;
-  ~choose-new-power
+  ~choose-new-power;
+  ~forget-power
 [pause]
 forget-power
-  ? P, ~forget P, !power P
+  ? P, !power P
+  ~forget P
 [pause]
 choose-new-power
-  ? P, +gain P, !power P
+  ? P, !power P
+  ~gain P
 %]
 [pause]
 - [%activate%] treats [%forget%] and [%gain%] like return values, but they don't need to be declared as such. [pause]
 - execution of [%activate%] "pauses" while rules matching [%gain-power%] resolve [pause]
-  - a prefix of the rule asserts [%gain-power%]; then a suffix matches that tuple along with its associated [%gain%] and [%forget%] before "continuing" [pause]
-  - *these things are all semantically datalog rules*
+- each rule is converted into one or more simple datalog rules
 
 [slide][%Aggregates%]
-- We often need to reduce over a relation
-  - (*your score is the sum of ...*, *if you gained no cards this turn, ...*)
-- Aggregates are demand-driven and calculated at some interval [pause]
+- We often need to reduce over a relation.
+  - (*your score is the sum of ...*, *if you gained no cards this turn, ...*) [pause]
+- Aggregates are demand-driven and calculated at some interval. [pause]
 - *We use aggregates to implement state.*
 
-[slide][%Where am I?%]
-- Answer: wherever you last put me.[pause]
-
-- variables and physical tokens are logically equivalent
-  - a variable is a slot that provides access to the value it was most recently set to
-  - a token is an entity that is located at the place it was most recently moved [pause]
-
-[code][%
-#acc at * -> last
-
--- Explanation:[pause]
--- #acc ...          -- Directive declaring an accumulated relation[pause]
--- #acc at ...       -- named *at*[pause]
--- #acc at * ...     -- taking one argument of any type[pause]
--- #acc at * -> last -- aggregated by *last* (?)
-%]
-
-[slide][%last%]
-- [%last(a, b) := b%]
-- last is applied to values in temporal order, so it evaluates to the most recent one
 
 [slide][%Aggregation: Last Position%]
 [code][%
-#acc at * -> last
-
 ~game
-  ( ~step here );
-  ( ~look );
-  ( ~step there );
-  ( ~look );
+  ~step here;
+  ~look;
+  ~step there;
+  ~look;
+[pause]
+-- Aggregate declaration (explained later)
+#agg at * -> last
 [pause]
 -- We use `step` to move `me` around...
 step L, +at me -> L
@@ -178,6 +162,29 @@ step L, +at me -> L
 -- and `look` to observe its current location.
 look, at me -> L, ~print L
 %][timeline]
+
+
+[slide][%Where am I?%]
+- Answer: wherever you last put me.[pause]
+
+- traditional variables and token-with-location are equivalent
+  - a variable is a slot that provides access to the value it was most recently set to
+  - a token is an entity that is located at the place it was most recently moved to
+
+[slide][%last%]
+- [%last(a, b) := b%]
+- A (non commutative) aggregate function is applied to values in temporal order, so [%last%] evaluates to the most recent one.
+[pause]
+[code][%
+-- Review of declaration of `at`
+#agg at * -> last
+
+-- Explanation:[pause]
+-- #agg ...          -- Directive declaring an accumulated relation[pause]
+-- #agg at ...       -- named *at*[pause]
+-- #agg at * ...     -- taking one argument of any type[pause]
+-- #agg at * -> last -- aggregated by *last* (?)
+%]
 
 [slide][%Choices%]
 - A rule set is compiled into a monotone logic program.
@@ -222,3 +229,20 @@ turn
   ( play-card _, play-card-count -> N, le 2 N )
   ^sturdy trading-post
 %]
+
+[slide][%Extras%]
+
+[slide][%Why "Co-routines" everywhere?%]
+Step 2: assert [%b%] and [%d%] using the rules:
+[code][%
+a, ~b
+
+b, c, ~d
+%][timeline] [pause]
+(this slide is a live demo)
+
+[slide][%"Co-routines" everywhere%]
+- The split is semantics preserving at the individual rule level
+  - [%a, ~b, c, ~d%] -> [%a, ~b%] + [%b, c, ~d%]
+  - We ensure that the match on [%b%] matches *only* the locally asserted [%b%] (not any other [%b%] from another rule)
+

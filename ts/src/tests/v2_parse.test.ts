@@ -179,7 +179,7 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 
 // 8) schema decl
 {
-  const p = ok("#acc points -> sum\n+ points -> 3\n");
+  const p = ok("#agg points -> sum\n+ points -> 3\n");
   assert.equal(p.schema.get("points"), "sum");
   assert.equal(p.rules.length, 1);
   console.log("PASS: schema decl");

@@ -12,7 +12,7 @@ const SOURCE = `
   ( ~step there );
   ( ~look );
 
-#acc at * -> last
+#agg at * -> last
 
 step L, +at me -> L
 

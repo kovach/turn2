@@ -39,7 +39,7 @@ activate.it.is.card:name village
 -- The Rest --
 
 
-#acc at _ -> last
+#agg at _ -> last
 move It To
   +at It -> To
 

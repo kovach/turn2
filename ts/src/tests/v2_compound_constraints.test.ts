@@ -195,7 +195,7 @@ turn, ? C, !item C
 //    sub. Options surface bindings for both ?A and ?W.
 {
   const src = `
-#acc score key -> sum
+#agg score key -> sum
 
 + foo a, + score a 5, + score a 7, + foo b, + score b 3, + turn
 

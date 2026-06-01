@@ -26,7 +26,7 @@ type Token =
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
   | { kind: "def"; name: string; line: number }
-  | { kind: "acc"; decl: SchemaDecl };
+  | { kind: "agg"; decl: SchemaDecl };
 
 export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
@@ -209,10 +209,10 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     }
     return { kind: "def", name, line: tok.line };
   }
-  if (tok.name === "acc") {
+  if (tok.name === "agg") {
     const decl = parseSchemaText(tok.argText, tok.line);
     if ("message" in decl) return decl;
-    return { kind: "acc", decl };
+    return { kind: "agg", decl };
   }
   return { line: tok.line, message: `unknown command '#${tok.name}'` };
 }
@@ -231,7 +231,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const cmd = parseCommand(t);
       if ("message" in cmd) return cmd;
       i++;
-      if (cmd.kind === "acc") {
+      if (cmd.kind === "agg") {
         if (schema.has(cmd.decl.relation)) {
           return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
         }

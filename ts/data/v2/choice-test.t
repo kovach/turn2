@@ -1,4 +1,4 @@
-#acc at * -> last
+#agg at * -> last
 
 ~game, ( ~setup; ~turn )
 
@@ -39,7 +39,7 @@ game
   ~look;
   locations X -> Y, ~count X Y
 
-#acc locations * -> count
+#agg locations * -> count
 
 look
   at X -> Y, +locations X -> ()

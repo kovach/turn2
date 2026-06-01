@@ -221,7 +221,7 @@ console.log("PASS: mixed entangled + independent — only entangled batch surfac
   const src = `
 ~game
 
-#acc at * -> last
+#agg at * -> last
 
 game, +thing t1, +thing t2, +thing bad
 +at t1 -> here
@@ -274,7 +274,7 @@ c1
 //    contribution-visibility differences).
 {
   const baseWithThing = `
-#acc at * -> last
+#agg at * -> last
 
 (~setup); ~t
 

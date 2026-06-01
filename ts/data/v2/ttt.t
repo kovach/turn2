@@ -21,7 +21,7 @@ setup, n R, n C
   +cell R C
 
 -- determine filled cells
-#acc fills -> bool
+#agg fills -> bool
 
 -- A cell is eligible to be chosen if it hasn't been filled earlier
 cell R C, turn
@@ -73,5 +73,5 @@ turn
   ~won M D
 
 -- needed for negation
-#acc did-win -> bool
+#agg did-win -> bool
 turn, (won _ _), +did-win -> 1

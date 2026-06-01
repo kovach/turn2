@@ -185,7 +185,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     }
 
     if (schema.has("at")) {
-      // `#acc at * -> <aggregator>`: use aggregateOver so e.g. `last`
+      // `#agg at * -> <aggregator>`: use aggregateOver so e.g. `last`
       // collapses multiple `+at X -> Y` contributions into one parent
       // per icon. Pattern: `(at _free _free)` — group key is the X
       // slot, weight is the target L.

@@ -14,7 +14,7 @@ activate .(it.is This, card:name This call) .(target T)
 -- Setup --
 
 
-#acc at e -> last
+#agg at e -> last
 #def move move It To, +at It -> To
 
 ~game
@@ -38,7 +38,7 @@ gain-power E, type E major
 
 forget-power E, ?P, ~forgot E P, !card P
 
-#acc dahan-count land -> count
+#agg dahan-count land -> count
 
 look, ~locations, ~counts
 
