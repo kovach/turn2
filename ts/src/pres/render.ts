@@ -175,7 +175,7 @@ const HELP_ITEMS: Array<[string, string]> = [
 
 // The `?` button shown on the first slide only.
 const HELP_BUTTON_HTML =
-  `<button type="button" class="help-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>`;
+  `<button type="button" class="help-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">Help <span class="help-q">(?)</span></button>`;
 
 function ensureHelpEl(h: RenderHandle): HTMLElement {
   if (h.helpEl) return h.helpEl;
