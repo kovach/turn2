@@ -117,6 +117,122 @@ def2:  p2' W.., p2_exn _.. -> 0, ^p   W..
 Producers emit `p1'`; def1 forwards to `p2'` unless `e1` intercepts;
 def2 forwards to `p` unless `e2` intercepts.
 
+### Worked: two exceptions in one rule, V-scoping
+
+Two exceptions on **different** predicates in the same rule, where the
+second's RHS references a variable bound by the first's `t1..tn`:
+
+```
+#def r
+  is _X X
+  {p X => e1 X}
+  is _Y Y
+  {q Z => e2 X Z}
+```
+
+Process exc1 `{p X => e1 X}`. `V = vars(e1 X) ∩ vars(prefix) \ {X} =
+∅`, so `m=0`. After steps 3–6, R becomes:
+
+```
+is _X X
+match  p_prime1 X
+anchor p_exn1 -> 1
+{q Z => e2 X Z}
+```
+
+and S gains:
+
+```
+r_exn1:     match p_prime1 X, aggregate p_exn1 -> 1, e1 X
+r_default1: match p_prime1 W, aggregate p_exn1 -> 0, anchor p W
+```
+
+Process exc2 `{q Z => e2 X Z}`. R's prefix up to this Exception now
+binds `X` (via the just-inserted `match p_prime1 X`) and `Y`. So
+`V = vars(e2 X Z) ∩ {X, Y} \ {Z} = {X}`, `m=1` — the flag transports
+`X` to `e2`. After step 7 R joins S. Final R body:
+
+```
+is _X X
+match  p_prime1 X
+anchor p_exn1 -> 1
+is _Y Y
+match  q_prime1 Z
+anchor q_exn1 X -> 1
+```
+
+Plus on S:
+
+```
+r_exn2:     match q_prime1 Z, aggregate q_exn1 X -> 1, e2 X Z
+r_default2: match q_prime1 W, aggregate q_exn1 _ -> 0, anchor q W
+```
+
+Schema additions: `p_exn1: bool`, `q_exn1: bool` (arity 0 and 1
+respectively for the `Vi` payload).
+
+### Worked: two exceptions in one rule, same predicate
+
+Intra-rule chaining on the same predicate. The key behavior: exc2's
+step-3 walks S — which already contains `r_default1` — and rewrites
+def1's positive `^move` to `^move_prime2`.
+
+```
+#def r
+  is _X X
+  {move X _ => nope}
+  is _Y Y
+  {move Y _ => boom}
+```
+
+After exc1, R has `match move_prime1 X _, anchor move_exn1 -> 1` and S
+contains:
+
+```
+r_exn1:     match move_prime1 X _, aggregate move_exn1 -> 1, nope
+r_default1: match move_prime1 W1 W2, aggregate move_exn1 -> 0,
+            anchor move W1 W2
+```
+
+Processing exc2, step 3 rewrites positive `move` → `move_prime2`
+across S. **This mutates `r_default1`'s tail** from `anchor move W1
+W2` to `anchor move_prime2 W1 W2`. R's already-inserted `match
+move_prime1 X _` is not touched: it's a `match` (so step 3 skips it
+anyway), and its head is `move_prime1`, not `move`.
+
+Final R body:
+
+```
+is _X X
+match  move_prime1 X _
+anchor move_exn1 -> 1
+is _Y Y
+match  move_prime2 Y _
+anchor move_exn2 -> 1
+```
+
+Final generated rules:
+
+```
+r_exn1:     match move_prime1 X _,    aggregate move_exn1 -> 1, nope
+r_default1: match move_prime1 W1 W2,  aggregate move_exn1 -> 0,
+            anchor move_prime2 W1 W2          -- rewritten by exc2
+r_exn2:     match move_prime2 Y _,    aggregate move_exn2 -> 1, boom
+r_default2: match move_prime2 W1 W2,  aggregate move_exn2 -> 0,
+            anchor move W1 W2
+```
+
+Producer flow: `^move A B` got rewritten by exc1's step 3 to
+`^move_prime1 A B`. Then:
+
+- if `move_exn1` is set within the tuple's moment (r fired with
+  `X=A`), `r_exn1` runs `nope`;
+- otherwise `r_default1` forwards `^move_prime2 A B`;
+- if `move_exn2` is set (r fired with `Y=A`), `r_exn2` runs `boom`;
+- otherwise `r_default2` forwards the real `^move A B`.
+
+So source order = priority within a rule.
+
 ## Parsing (`ts/src/v2/parse.ts`)
 
 **Tokenizer.** At `atomStart` on `{`, scan to the matching `}` (track
@@ -230,19 +346,41 @@ Skip to the next free integer on collision.
 2. Context-variable transport (`m>0`): `e` references a var bound
    earlier in `R`; the var reaches `e` via the flag.
 3. Multi-atom RHS: `e` is e.g. `~foo X, bar Y`.
-4. Two exceptions in the same rule where the second's `e` references a
-   var bound by the first's `t1..tn` (V-scoping).
-5. Chaining: two exceptions on the same `p` in distinct contexts each
+4. **V-scoping (intra-rule, different predicates)** — the *Worked:
+   two exceptions in one rule, V-scoping* example. Parse the program
+   and call `applyExceptions`; assert:
+   - R's final body is the six atoms shown (alpha-equivalent),
+     including `anchor q_exn1 X -> 1` (X transported, m=1).
+   - S contains exactly `r`, `r_exn1`, `r_default1`, `r_exn2`,
+     `r_default2` with the bodies shown.
+   - `schema` gains `p_exn1 → "bool"` and `q_exn1 → "bool"`.
+   - Behavior end-to-end: emit a producer of `p A` under R's anchor
+     bound to X=A and confirm `e1 A` fires (not `p A`); emit one
+     outside R's anchor and confirm `p` is preserved. Same shape for
+     `q B` with the carried X.
+5. **Same-predicate (intra-rule chaining)** — the *Worked: two
+   exceptions in one rule, same predicate* example. Assert:
+   - R's final body matches the six atoms shown.
+   - `r_default1`'s tail is `anchor move_prime2 W1 W2`, **not**
+     `anchor move W1 W2` (this is the load-bearing intra-rule rewrite
+     — its absence means step 3 isn't walking S).
+   - `r_default2`'s tail is `anchor move W1 W2`.
+   - Behavior: with a producer of `^move a b`, run two variants of R's
+     context — one with X=a (expect `nope`, no `move a b`), one with
+     Y=a (expect `boom`, no `move a b`), one with neither (expect real
+     `move a b`). Confirms source-order priority within a rule.
+6. **Cross-rule chaining** (the existing *Chaining example*
+   subsection): two exceptions on the same `p` in distinct rules each
    intercept their own context; a producer in neither stays `p`.
-6. Wildcard `t_i` (`move X _`): override fires regardless of arg 2.
-7. Naming: `#def f ... { e1 } ... { e2 }` yields `f`, `f_exn1`,
+7. Wildcard `t_i` (`move X _`): override fires regardless of arg 2.
+8. Naming: `#def f ... { e1 } ... { e2 }` yields `f`, `f_exn1`,
    `f_default1`, `f_exn2`, `f_default2`.
-8. Reduced `misfits` example (exception as a plain body item nested in
+9. Reduced `misfits` example (exception as a plain body item nested in
    a dot-chain rule).
-9. Errors: nested exception in RHS; aggregate on LHS
-   (`{p a -> X => q}`); non-symbol head or marker on LHS; `.` adjacent
-   to a `{...}` block.
-10. No-exception program is unchanged through `applyExceptions`.
+10. Errors: nested exception in RHS; aggregate on LHS
+    (`{p a -> X => q}`); non-symbol head or marker on LHS; `.` adjacent
+    to a `{...}` block.
+11. No-exception program is unchanged through `applyExceptions`.
 
 ## File touch list
 
