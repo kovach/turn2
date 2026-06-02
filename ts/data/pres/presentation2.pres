@@ -7,14 +7,14 @@
 %]
 
 [slide][%Purpose%]
-- Turn is for defining situations.
-- It enables the programmer to weave together observations, actions, and choice over time.
+- Turn is a language for situations, not algorithms. [pause]
+- A program is a set of *rules*; a rule *observes* some part of the situation, then produces some *assertion* or presents a *choice*.
 
 [slide][%Why?%]
 - I really like *Spirit Island*
-- I admire games like MtG, Dominion, Gloomhaven, etc.
+- ... and games like MtG, Dominion, Gloomhaven, etc.
 [pause]
-- These games are extremely *extensible*, and they perform radical modifications to their base rule behavior.
+- These games are extremely *extensible*, and extensions perform radical modifications to their base rule behavior.
 - **Formalizing these games *naturally* is a legitimate intellectual challenge**
 
 [slide][%Compounds%]

@@ -309,10 +309,20 @@ rules.
 
 ### Fresh symbols
 
-Per exception, mint `<p>_prime<k>` and `<p>_exn<k>` with the smallest
+Per exception, mint `_<p>_prime<k>` and `_<p>_exn<k>` with the smallest
 `k ≥ 1` producing names unused in the program. (`p'` in the overview is
-notation, not a literal — the suffix `_prime<k>` keeps names readable
-and avoids the reserved `*`/`_` *prefix* rule at parse.ts:710.)
+notation, not a literal — the explicit `_prime<k>` / `_exn<k>` suffixes
+keep names readable.)
+
+The leading `_` matches the existing engine-emitted-predicate convention
+(`_choose`, `_constrain`, `_do-agg`, `_agg-result`, `_free` — all minted
+as Symbol terms programmatically; the parse.ts:710 reservation only
+prevents user source from writing `_`-prefixed Symbols). Treating these
+exception-generated heads the same way means the existing UI
+hide-internal toggles automatically hide `_<p>_prime<k>` / `_<p>_exn<k>`
+tuples by default — see `ts/src/v2/timeline.ts:139`,
+`ts/src/web.ts:697`, and the `_`-vs-user-key split in
+`ts/src/v2/render-output.ts:136`. No new filter list is needed.
 
 ### Naming
 
