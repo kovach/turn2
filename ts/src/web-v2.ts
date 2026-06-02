@@ -360,7 +360,18 @@ async function run(): Promise<void> {
 
   positiveLines = collectPositiveLines(parsed.rules);
 
-  const result = runFixpoint(parsed, GAS, TUPLE_GAS);
+  let result;
+  try {
+    result = runFixpoint(parsed, GAS, TUPLE_GAS);
+  } catch (e) {
+    // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
+    // other evaluation failure — show it rather than swallowing it.
+    setStatus((e as Error).message, true);
+    displayEl.innerHTML = "";
+    setInfo("");
+    positiveLines = new Set();
+    return;
+  }
   const { store, status, iterations } = result;
   lastStore = store;
 

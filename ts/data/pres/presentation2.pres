@@ -14,7 +14,7 @@
 - I really like *Spirit Island*
 - ... and games like MtG, Dominion, Gloomhaven, etc.
 [pause]
-- These games are extremely *extensible*, and extensions perform radical modifications to their base rule behavior.
+- These games are extremely *extensible*, and extensions can perform radical modifications to the base rule *behavior*.
 - **Formalizing these games *naturally* is a legitimate intellectual challenge**
 
 [slide][%Compounds%]
@@ -38,9 +38,9 @@ is-action C  -- that is an action... [pause]
 %]
 
 [slide][%Kinds of Assertion%]
-- [%~episode%]: creates a new interval contained within *now*
-- [%+fact%]: creates a new interval (left, Top), with left contained in *now*, extending indefinitely forward in time
-- [%^property%]: creates a new interval equal to *now*
+- [%~%] (*episode*): creates a new interval contained within *now*
+- [%+%] (*fact*): creates a new interval (left, Top), with left contained in *now*, extending indefinitely forward in time
+- [%^%] (*property*): creates a new interval equal to *now*
 
 [slide][%Triggering the Rule%]
 [code][%
@@ -55,7 +55,7 @@ is-action C  -- that is an action... [pause]
 turn T, play-card C, is-action C, ~activate C
 %][timeline]
 
-[slide][%Building a Game%]
+[slide][%Sequencing%]
 [code][%
 ~game
 [pause]
@@ -89,7 +89,7 @@ The two phases do not overlap, but we can still match this situation after it ha
   );       -- b>, t>
 %][timeline]
 
-[slide][%Imperative Logic Programming%]
+[slide][%Imperative + Logic Programming%]
 [code][%
 edge X Y, ^path X Y
 
@@ -119,13 +119,13 @@ a, ~b, c, ~d
 %][timeline]
 
 [slide][%Why "Co-routines" everywhere?%]
-*When you activate *dream*, Gain a Power.*
-*If you Forget *dream*, Play the Gained Power.* [pause]
+*When you activate [%dream%], Gain a Power.*
+*Then, if you Forgot [%dream%], Play the Gained Power.* [pause]
 [code][%
 activate It, card:name It dream
   ( ~gain-power
-      (gain New)
       (forget It)
+      (gain New)
   ); ~play-power New
 [pause]
 gain-power
@@ -133,11 +133,11 @@ gain-power
   ~forget-power
 [pause]
 choose-new-power
-  ? P, !power P   -- syntax explained soon...
+  ?P, !power P   -- syntax explained soon...
   ~gain P         -- definition elided
 [pause]
 forget-power
-  ? P, !power P
+  ?P, !power P
   ~forget P       -- definition elided
 %]
 [pause]

@@ -767,7 +767,17 @@ function runAndRender(source: string, active: ActiveBlock): void {
     showError(active, `parse error line ${parsed.line}: ${parsed.message}`);
     return;
   }
-  const { store, status } = runFixpoint(parsed, GAS, TUPLE_GAS);
+  let result;
+  try {
+    result = runFixpoint(parsed, GAS, TUPLE_GAS);
+  } catch (e) {
+    // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
+    // other evaluation failure. Surface it instead of letting it escape the
+    // (debounced) event handler and vanish.
+    showError(active, (e as Error).message);
+    return;
+  }
+  const { store, status } = result;
   if (status.kind === "gas") {
     showError(active, `gas exceeded (${GAS} iterations)`);
     return;

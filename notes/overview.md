@@ -1,3 +1,35 @@
+# user defined js functions
+plan: plans/v2-user-js-functions.md
+status: pending
+
+```
+#js (div x y) {
+  return Math.round(x / y);
+}
+```
+becomes
+```
+function div(x, y) {
+  return Math.floor(x / y);
+}
+```
+and it's called like:
+```
+  +foo @js(div X 4)
+```
+
+- this is a new `#` command (alongside existing `#def` and `#agg`)
+- it allows easy calls to arbitrary js code, which we expect to be *pure*
+- any variables in the `@js(...)` expression must be bound (error at lift time)
+
+## term encoding/decoding
+- a compound like `(pair x (f y))` becomes `["pair", "x", ["f", "y"]]` on the js side and translated back
+- `bool` in js becomes 0/1 on term side
+- other relevant cases? expand this list
+- apply `decode` for each argument before call; and `encode` on the return value
+
+# 26/06/2
+
 # `sum` weight parsing
 plan: plans/v2-sum-reject-invalid-weights.md
 
@@ -520,7 +552,7 @@ plan: plans/v2-seminaive.md
 
 # nat syntax
 plan: plans/v2-nat-syntax.md
-waiting
+status: pending
 
 - parse numerals (0, 1, 2, ...) as unary encoded natural numbers (z, (s z), (s (s z)), ...)
 - also display them

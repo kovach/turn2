@@ -9,12 +9,12 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "../types.js";
-import type { MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
+import type { JsDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 
 export function expand(program: Program): Program {
   const decomposed = program.rules.map((r) => {
-    const { rule, essential } = decomposeRule(r);
+    const { rule, essential } = decomposeRule(r, program.jsDefs);
     return pruneChains(rule, essential);
   });
   const split: Rule[] = [];
@@ -27,7 +27,7 @@ export function expand(program: Program): Program {
   );
   const variants: Rule[] = [];
   for (const rule of kept) variants.push(...generateDeltaVariants(rule));
-  return { rules: variants, schema: program.schema };
+  return { rules: variants, schema: program.schema, jsDefs: program.jsDefs };
 }
 
 // ----- Semi-naive delta variants -----
@@ -148,6 +148,10 @@ interface DecState {
   // either downstream-recoverable or pure reductions of other entries.
   // Consumed by `pruneChains` in expand-liveness.ts.
   essential: Set<string>;
+  // `#js` function table (for `@js(...)` lowering: existence + arity checks).
+  jsDefs: Map<string, JsDef>;
+  // Counter for fresh `_js_<k>` result Variables.
+  jsCounter: number;
 }
 
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
@@ -168,7 +172,7 @@ const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
-function decomposeRule(rule: Rule): { rule: Rule; essential: Set<string> } {
+function decomposeRule(rule: Rule, jsDefs: Map<string, JsDef>): { rule: Rule; essential: Set<string> } {
   const state: DecState = {
     ruleName: rule.name,
     out: [],
@@ -179,6 +183,8 @@ function decomposeRule(rule: Rule): { rule: Rule; essential: Set<string> } {
     essential: new Set(),
     existentialNames: new Set(),
     anonExistCounter: 0,
+    jsDefs,
+    jsCounter: 0,
   };
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
   return { rule: { ...rule, body: state.out }, essential: state.essential };
@@ -269,11 +275,77 @@ function noteVar(state: DecState, name: string): void {
   state.essential.add(name);
 }
 
+// A `*js`-headed Atom/Id is the parser's encoding of a `@js(name args...)`
+// call. It is only legal in positive emit atoms (lowered by
+// `emitBindingsAndRewrite`); anywhere else it must error.
+function isJsHead(t: Term): boolean {
+  if (t.tag !== "Atom" && t.tag !== "Id") return false;
+  const h = t.atom.terms[0];
+  return h !== undefined && h.tag === "Symbol" && h.name === "*js";
+}
+
+function jsNotAllowed(state: DecState): never {
+  throw new Error(
+    `rule '${state.ruleName}': '@js(...)' is only allowed in '+'/'~'/'^'/'?' atoms ` +
+    `(not in matches, '=', '!(...)', or aggregate patterns)`,
+  );
+}
+
 function collectVarsTerm(t: Term, state: DecState): void {
+  if (isJsHead(t)) jsNotAllowed(state);
   if (t.tag === "Variable") { noteVar(state, t.name); return; }
   if (t.tag === "Atom" || t.tag === "Id") {
     for (const x of t.atom.terms) collectVarsTerm(x, state);
   }
+}
+
+// Lower a `@js(name args...)` term (encoded as `Atom([*js, name, ...args])`)
+// to a fresh result Variable `V`, pushing a `JsCall` atom that binds `V`
+// (see plans/v2-user-js-functions.md). Args are checked against `state.seen`
+// — every variable must already be bound by an earlier term/atom (we refuse
+// to invent one, unlike the default Variable path). Nested `@js` recurse,
+// so the inner JsCall is pushed (and thus runs) before the outer.
+function lowerJsCall(term: Term, state: DecState, lexPos: number, span: Span): Term {
+  if (term.tag !== "Atom" && term.tag !== "Id") jsNotAllowed(state);
+  const terms = term.atom.terms;
+  const nameSym = terms[1];
+  if (nameSym === undefined || nameSym.tag !== "Symbol") {
+    throw new Error(`rule '${state.ruleName}': '@js(...)' must name a function`);
+  }
+  const func = nameSym.name;
+  const def = state.jsDefs.get(func);
+  if (def === undefined) {
+    throw new Error(`rule '${state.ruleName}': '@js(${func} ...)' calls undefined #js function`);
+  }
+  const rawArgs = terms.slice(2);
+  if (rawArgs.length !== def.params.length) {
+    throw new Error(
+      `rule '${state.ruleName}': '@js(${func} ...)' expects ${def.params.length} argument(s), got ${rawArgs.length}`,
+    );
+  }
+  const args = rawArgs.map((a) => lowerJsArg(a, state, lexPos, span, func));
+  const V: Term = { tag: "Variable", name: `_js_${state.jsCounter++}` };
+  state.out.push({ tag: "JsCall", func, args, out: V, span });
+  return V;
+}
+
+function lowerJsArg(t: Term, state: DecState, lexPos: number, span: Span, func: string): Term {
+  if (isJsHead(t)) return lowerJsCall(t, state, lexPos, span);
+  if (t.tag === "Variable") {
+    if (t.name === "_" || !state.seen.has(t.name)) {
+      throw new Error(
+        `rule '${state.ruleName}': '@js(${func} ...)': variable '${t.name}' is not bound before this use`,
+      );
+    }
+    return t;
+  }
+  if (t.tag === "Wildcard") {
+    throw new Error(`rule '${state.ruleName}': '@js(${func} ...)': '_' argument has no value`);
+  }
+  if (t.tag === "Atom" || t.tag === "Id") {
+    return { tag: t.tag, atom: { terms: t.atom.terms.map((x) => lowerJsArg(x, state, lexPos, span, func)) } };
+  }
+  return t;
 }
 
 // Walk `t` and rewrite it so every unbound user Variable / Wildcard is
@@ -308,6 +380,9 @@ function emitBindingsAndRewrite(term: Term, state: DecState, lexPos: number, spa
   }
   if (term.tag === "Wildcard") {
     return freshIdTemplate(state, lexPos, "_");
+  }
+  if (isJsHead(term)) {
+    return lowerJsCall(term, state, lexPos, span);
   }
   if (term.tag === "Atom" || term.tag === "Id") {
     const inner = term.atom.terms.map((x) => emitBindingsAndRewrite(x, state, lexPos, span));
@@ -550,6 +625,7 @@ function buildConstrainRowAtom(
   const blockNames = new Set<string>(); // names consumed by this block
 
   function rewrite(t: Term): Term {
+    if (isJsHead(t)) jsNotAllowed(state);
     if (t.tag === "Variable") {
       if (t.name === "_") {
         // Anonymous wildcard: one fresh template per occurrence.

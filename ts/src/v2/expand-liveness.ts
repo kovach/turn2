@@ -62,6 +62,8 @@ function rewriteAtom(a: RuleAtom, live: Set<string>, essential: Set<string>): Ru
     case "Le":
     case "AssertLt":
       return { ...a, a: rw(a.a), b: rw(a.b) };
+    case "JsCall":
+      return { ...a, args: a.args.map(rw), out: rw(a.out) };
     case "Atom":
     case "Sub":
       // Pre-expand kinds shouldn't reach this pass. Pass through unchanged.
@@ -86,6 +88,10 @@ function addUses(a: RuleAtom, live: Set<string>): void {
     case "Le":
     case "AssertLt":
       collectVars(a.a, live); collectVars(a.b, live);
+      break;
+    case "JsCall":
+      for (const t of a.args) collectVars(t, live);
+      collectVars(a.out, live);
       break;
     case "Atom":
     case "Sub":

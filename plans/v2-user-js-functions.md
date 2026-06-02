@@ -59,29 +59,45 @@ export interface Program { rules: Rule[]; schema: Map<string,string>; jsDefs: Ma
 
 ### 2. Parser — `#js` directive (`ts/src/v2/parse.ts`)
 
+Syntax (whitespace-sensitive, to avoid a brace-matching JS sub-lexer). Two
+forms, neither of which counts braces — so the body may hold arbitrary JS
+(strings, templates, nested/unbalanced-looking braces, `--`):
+```
+#js (inc x) { return x + 1; }          -- one-liner: `}` is the last char
+
+#js (div x y) {                        -- multi-line: `{` last, body indented,
+  return Math.round(x / y);            --   closed by `}` at column 0
+}
+```
+
 - **Tokenizer (parse.ts:120-148):** add a `name === "js"` branch beside `def`.
-  The body is a brace block spanning multiple lines: capture from the current
-  line through the brace-balanced `{...}`, consuming `lines[]` and advancing
-  `li`. Read the body from the **raw** lines, not the `stripComment`-ed `raw`
-  (parse.ts:68) — `--` is not treated as a comment inside a `#js` body; preserve
-  newlines. Brace counting is lexical (does not skip braces inside JS
-  string/regex literals — document this limit). Emit `{tag:"command",
-  name:"js", argText:<signature + raw {...}>, line}`. Error on EOF with
-  unbalanced braces.
-- **`parseCommand` (parse.ts:197):** add a `js` case. Parse signature
-  `(name p1..pn)` — name and each param a lowercase symbol, name not a reserved
-  auto-name (mirror parse.ts:205-208). Body = brace-balanced substring after the
-  first `{`. Return `{kind:"js", name, params, body, line}`.
-- **`Command` type (parse.ts:26-29):** add `| {kind:"js"; name; params; body; line}`.
+  Read from the **raw** (un-stripped) lines so the body survives verbatim
+  (`stripComment` would eat `--`). Take everything before the first `{` as the
+  signature. Then look at the text after `{` on that line:
+  - empty → **multi-line**: collect following raw lines (newline-joined) until
+    the first non-blank column-0 line, which must start with `}` (else "body
+    must be indented"); EOF first → "missing closing '}'".
+  - ends with `}` → **one-liner**: body is between the `{` and the *last* `}`.
+  - otherwise → error (close with `}` on the line, or put `{` last + indent).
+
+  Emit `{tag:"command", name:"js", argText:<signature>, body:<raw body>, line}`;
+  for the multi-line form advance `li` past the `}` line.
+- **`parseCommand` (parse.ts:197):** add a `js` case taking `(sig, body)`. Parse
+  signature `(name p1..pn)` — name a lowercase symbol (call sites parse it as a
+  Symbol), not a reserved auto-name (mirror parse.ts:205-208); each param a
+  valid JS identifier (uppercase OK — params are JS-side, not language tokens).
+  Body is used verbatim. Return `{kind:"js", name, params, body, line}`.
+- **`Command` type (parse.ts:26-29):** add `| {kind:"js"; name; params; body; line}`;
+  add an optional `body?: string` to the `command` Token (the tokenizer fills it).
 - **`parseProgram` (parse.ts:220-250):** collect `js` commands into a `jsDefs`
   map (error on duplicate name); does **not** require a following rule. Init
   `jsDefs: new Map()` where `Program` is built.
 
 ### 3. Parser — `@js(...)` calls (`ts/src/v2/parse.ts`)
 
-- **`tokenizeTermText` (parse.ts:835):** break `@js` off as its own token —
-  `.replace(/@js\(/g, " @js ( ")`.
-- **`parseTerms` (parse.ts:847-873):** on `tok === "@js"`, require `(`, recurse
+- **`tokenizeTermText`:** no change needed — the existing `(`/`)` splitter
+  already breaks `@js(` into the tokens `@js` `(`.
+- **`parseTerms`:** on `tok === "@js"`, require `(`, recurse
   for the inner list, require `)`. First inner term must be a Symbol (the name).
   Push `Atom([Symbol("*js"), ...inner])`. Errors: missing `(`, unbalanced
   parens, non-symbol head.
@@ -226,7 +242,9 @@ re-formatter. (A future pre-expand IR dumper would render `*js` as
 
 ## Tests (`ts/src/tests/v2_js.test.ts`)
 
-1. Parse `#js` (single- and multi-line body) into `Program.jsDefs`.
+1. Parse `#js` both forms (one-liner `{ ... }`; multi-line indented with `}` at
+   column 0) into `Program.jsDefs`; reject an unindented / missing-`}` body and
+   an open `{` with trailing non-`}` content.
 2. Parse `@js(div X 4)` → `Atom([*js, div, X, 4])`.
 3. End-to-end `+foo @js(div X 4)` with `X` bound to a numeric symbol.
 4. Same-atom binding `+foo X @js(f X)`.

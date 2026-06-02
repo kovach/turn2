@@ -13,7 +13,8 @@
 import type { Atom, Term, Trail } from "../types.js";
 import { newTrail, trailLength, trailUnwind } from "../types.js";
 import { substAtom, substTerm, unifyAtoms, unifyTerms } from "../unify.js";
-import type { Rule, RuleAtom } from "./types.js";
+import type { HashconsState } from "../hashcons.js";
+import type { JsDef, Rule, RuleAtom } from "./types.js";
 import {
   addOrder,
   addTuple,
@@ -25,10 +26,32 @@ import {
   type Store,
 } from "./store.js";
 import { getOrCreateHead } from "./stats.js";
+import { decodeTerm, encodeTerm } from "./js-values.js";
+
+// A compiled `#js` function: takes the hashcons store + raw Term args, decodes
+// the args, runs the user body, and encodes the result. See compileJsDefs.
+export type CompiledJs = (hc: HashconsState, args: Term[]) => Term;
+
+// Compile each `#js` def once (before the fixpoint). A malformed body throws
+// here (a syntax error from `new Function`), surfaced with the function name.
+export function compileJsDefs(jsDefs: Map<string, JsDef>): Map<string, CompiledJs> {
+  const m = new Map<string, CompiledJs>();
+  for (const [name, d] of jsDefs) {
+    let inner: (...xs: unknown[]) => unknown;
+    try {
+      inner = new Function(...d.params, d.body) as (...xs: unknown[]) => unknown;
+    } catch (e) {
+      throw new Error(`#js ${name}: ${(e as Error).message}`);
+    }
+    m.set(name, (hc, args) => encodeTerm(inner(...args.map((t) => decodeTerm(t, hc)))));
+  }
+  return m;
+}
 
 interface Ctx {
   store: Store;
   schema: Map<string, string>;
+  jsFuncs: Map<string, CompiledJs>;
   trail: Trail;
   ruleName: string;
   ruleIdx: number;
@@ -38,11 +61,13 @@ export function evaluateRule(
   rule: Rule,
   store: Store,
   schema: Map<string, string>,
+  jsFuncs: Map<string, CompiledJs>,
   ruleIdx = -1,
 ): void {
   const ctx: Ctx = {
     store,
     schema,
+    jsFuncs,
     trail: newTrail(),
     ruleName: rule.name,
     ruleIdx,
@@ -69,10 +94,31 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
     case "AssertLt":   evalAssertLt(a, ctx, next); return;
     case "Max":        evalMaxMin(a, ctx, next, true); return;
     case "Min":        evalMaxMin(a, ctx, next, false); return;
+    case "JsCall":     evalJsCall(a, ctx, next); return;
     case "Atom":
     case "Sub":
       throw new Error(`internal: pre-expand RuleAtom '${a.tag}' reached evaluator (decomposition pass missing?)`);
   }
+}
+
+function evalJsCall(
+  a: Extract<RuleAtom, { tag: "JsCall" }>,
+  ctx: Ctx,
+  next: () => void,
+): void {
+  const args = a.args.map((t) => substTerm(t, ctx.trail)); // may contain Refs
+  const fn = ctx.jsFuncs.get(a.func);
+  if (fn === undefined) throw new Error(`@js(${a.func} ...): undefined #js function`);
+  let term: Term;
+  try {
+    term = fn(ctx.store.hash, args);
+  } catch (e) {
+    throw new Error(`@js(${a.func} ...) threw: ${(e as Error).message}`);
+  }
+  const mark = trailLength(ctx.trail);
+  // unifyTerms/bindable hashconses `term` when binding `out`.
+  if (unifyTerms(a.out, term, ctx.trail, ctx.store.hash)) next();
+  trailUnwind(ctx.trail, mark);
 }
 
 function evalEqual(

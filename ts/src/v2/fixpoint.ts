@@ -5,7 +5,7 @@
 // `active-choices`.
 
 import type { FixpointStatus, Program } from "./types.js";
-import { evaluateRule } from "./eval.js";
+import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { type Store, createStore, GasError } from "./store.js";
 import { expand } from "./expand.js";
 import {
@@ -30,6 +30,7 @@ export function runFixpoint(
   options?: { stats?: boolean },
 ): FixpointResult {
   const expanded = expand(program);
+  const jsFuncs = compileJsDefs(expanded.jsDefs);
   const store = createStore();
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
@@ -37,7 +38,7 @@ export function runFixpoint(
   let totalIters = 0;
 
   try {
-    return runLoop(expanded, store, gas, totalIters);
+    return runLoop(expanded, store, gas, totalIters, jsFuncs);
   } catch (e) {
     if (e instanceof GasError) {
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
@@ -46,10 +47,10 @@ export function runFixpoint(
   }
 }
 
-function runLoop(expanded: Program, store: Store, gas: number, startIters: number): FixpointResult {
+function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>): FixpointResult {
   let totalIters = startIters;
   while (true) {
-    const innerIters = innerLoop(expanded, store, gas - totalIters);
+    const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs);
     totalIters += innerIters;
     if (totalIters >= gas) {
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
@@ -103,7 +104,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
   }
 }
 
-function innerLoop(program: Program, store: Store, gas: number): number {
+function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<string, CompiledJs>): number {
   let iter = 0;
   while (iter < gas) {
     const before = storeSize(store);
@@ -131,7 +132,7 @@ function innerLoop(program: Program, store: Store, gas: number): number {
         continue;
       }
       rulesRan++;
-      evaluateRule(rule, store, program.schema, i);
+      evaluateRule(rule, store, program.schema, jsFuncs, i);
     }
     const after = storeSize(store);
     store.stats.iterations.push({

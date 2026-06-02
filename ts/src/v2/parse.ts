@@ -5,7 +5,7 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "../types.js";
-import type { Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { JsDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
 import { aggregators } from "../aggregators.js";
 
 export interface ParseError {
@@ -18,7 +18,7 @@ type Token =
   | { tag: "close"; sequence: boolean; line: number }
   | { tag: "atom"; marker: Marker; text: string; line: number }
   | { tag: "equal"; text: string; line: number }
-  | { tag: "command"; name: string; argText: string; line: number }
+  | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number }
   | { tag: "semi"; line: number };
@@ -26,7 +26,8 @@ type Token =
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
   | { kind: "def"; name: string; line: number }
-  | { kind: "agg"; decl: SchemaDecl };
+  | { kind: "agg"; decl: SchemaDecl }
+  | { kind: "js"; name: string; params: string[]; body: string; line: number };
 
 export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
@@ -141,6 +142,59 @@ function tokenize(input: string): Token[] | ParseError {
           atomStart = true;
           continue;
         }
+        if (name === "js") {
+          // Two forms, neither of which counts braces (so the body may contain
+          // arbitrary JS — strings, templates, nested braces):
+          //   - one-liner: `#js (sig) { body }` — `}` is the last char, body is
+          //     between the first `{` and the last `}` on the line.
+          //   - multi-line: `#js (sig) {` then *indented* body lines, closed by
+          //     a `}` at column 0 (the first unindented line after the `{`).
+          // Read raw (un-stripped) lines so the body survives verbatim.
+          const rawLine = lines[li]!;
+          const lead = rest.length - trimmed.length; // ws between '#' and name
+          const afterJs = pos + 1 + lead + name.length;
+          const sigPart = rawLine.slice(afterJs);
+          const bracePos = sigPart.indexOf("{");
+          if (bracePos < 0) {
+            return { line: lineno, message: "'#js' signature must be followed by '{'" };
+          }
+          const sig = sigPart.slice(0, bracePos).trim();
+          const afterBrace = sigPart.slice(bracePos + 1);
+          const afterTrim = afterBrace.trim();
+          let body: string;
+          let endLi = li;
+          if (afterTrim === "") {
+            // Multi-line: collect indented lines until a column-0 `}`.
+            const bodyLines: string[] = [];
+            for (;;) {
+              endLi++;
+              if (endLi >= lines.length) {
+                return { line: lineno, message: "'#js' body is missing a closing '}' at column 0" };
+              }
+              const bl = lines[endLi]!;
+              const blank = bl.trim() === "";
+              const indented = bl.length > 0 && /\s/.test(bl[0]!);
+              if (!blank && !indented) {
+                if (bl[0] !== "}") {
+                  return { line: endLi + 1, message: "'#js' body must be indented; expected '}' at column 0" };
+                }
+                break;
+              }
+              bodyLines.push(bl);
+            }
+            body = bodyLines.join("\n");
+          } else if (afterTrim.endsWith("}")) {
+            // One-liner: body is between `{` and the last `}` on the line.
+            body = afterBrace.slice(0, afterBrace.lastIndexOf("}"));
+          } else {
+            return { line: lineno, message: "'#js' body must close with '}' on the same line, or put '{' last and indent the body below" };
+          }
+          tokens.push({ tag: "command", name: "js", argText: sig, body, line: lineno });
+          li = endLi;       // multi-line: past the `}` line; one-liner: unchanged
+          pos = raw.length; // exit the inner while for the signature line
+          atomStart = true;
+          continue;
+        }
         const argText = ws < 0 ? "" : trimmed.slice(ws).trim();
         tokens.push({ tag: "command", name, argText, line: lineno });
         pos = raw.length;
@@ -214,12 +268,47 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     if ("message" in decl) return decl;
     return { kind: "agg", decl };
   }
+  if (tok.name === "js") {
+    return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
+  }
   return { line: tok.line, message: `unknown command '#${tok.name}'` };
+}
+
+// Parse a `#js` directive: `sig` is the `(name params...)` text from the
+// signature line; `body` is the raw JS between the `{` and the column-0 `}`
+// (collected by the tokenizer, verbatim).
+function parseJsCommand(sig: string, body: string, line: number): Command | ParseError {
+  if (!sig.startsWith("(") || !sig.endsWith(")")) {
+    return { line, message: "'#js' signature must be '(name params...)'" };
+  }
+  const inner = sig.slice(1, -1).trim();
+  const parts = inner.length === 0 ? [] : inner.split(/\s+/);
+  if (parts.length === 0) {
+    return { line, message: "'#js' signature must name the function" };
+  }
+  const name = parts[0]!;
+  if (!isSymToken(name)) {
+    return { line, message: `'#js' name must be a lowercase symbol (got '${name}')` };
+  }
+  if (/^r\d+$/.test(name)) {
+    return { line, message: `'#js' name '${name}' is reserved for auto-naming` };
+  }
+  // Params are ordinary JS identifiers in the function body — not language
+  // symbol/variable tokens — so uppercase (`X`) is fine; what matters is that
+  // `new Function(...params, body)` accepts them.
+  const params = parts.slice(1);
+  for (const p of params) {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(p)) {
+      return { line, message: `'#js' parameter must be a valid JS identifier (got '${p}')` };
+    }
+  }
+  return { kind: "js", name, params, body, line };
 }
 
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
+  const jsDefs = new Map<string, JsDef>();
   let i = 0;
 
   while (i < tokens.length) {
@@ -236,6 +325,13 @@ function parseProgram(tokens: Token[]): Program | ParseError {
           return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
         }
         schema.set(cmd.decl.relation, cmd.decl.aggregator);
+        continue;
+      }
+      if (cmd.kind === "js") {
+        if (jsDefs.has(cmd.name)) {
+          return { line: cmd.line, message: `duplicate '#js' function '${cmd.name}'` };
+        }
+        jsDefs.set(cmd.name, { name: cmd.name, params: cmd.params, body: cmd.body, span: { line: cmd.line } });
         continue;
       }
       // cmd.kind === "def" — attach to the rule that follows. Skip any
@@ -366,7 +462,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const boolErr = validateBoolWeights(rules, schema);
   if (boolErr !== null) return boolErr;
 
-  return { rules, schema };
+  return { rules, schema, jsDefs };
 }
 
 // Enforce surface restrictions for relations declared `-> bool`:
@@ -860,6 +956,20 @@ function parseTerms(tokens: string[], line: number, pos: { i: number } = { i: 0 
       const head = inner[0];
       const tag = (head !== undefined && head.tag === "Symbol" && head.name.startsWith("*")) ? "Id" : "Atom";
       terms.push({ tag, atom: { terms: inner } });
+    } else if (tok === "@js") {
+      // `@js(name args...)` -> Atom([*js, name, ...args]); the `*js` head
+      // marks it for lowering in expand (plans/v2-user-js-functions.md).
+      if (tokens[pos.i] !== "(") return { line, message: "expected '(' after '@js'" };
+      pos.i++;
+      const inner = parseTerms(tokens, line, pos);
+      if (!Array.isArray(inner)) return inner;
+      if (tokens[pos.i] !== ")") return { line, message: "unbalanced '(' in '@js(...)'" };
+      pos.i++;
+      const fn = inner[0];
+      if (fn === undefined || fn.tag !== "Symbol") {
+        return { line, message: "'@js(...)' must name a function" };
+      }
+      terms.push({ tag: "Atom", atom: { terms: [{ tag: "Symbol", name: "*js" }, ...inner] } });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
     } else if (tok.length > 0 && tok[0]! >= "A" && tok[0]! <= "Z") {

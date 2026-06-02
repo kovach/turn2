@@ -100,6 +100,18 @@ export type RuleAtom =
       rhs: Term;
       span: Span;
     }
+  // Call a user-defined `#js` function. Produced by the anchor-decomposition
+  // pass when it lowers a `@js(...)` term (see plans/v2-user-js-functions.md).
+  // At eval, `args` are substituted (must be ground), decoded to JS values,
+  // the compiled body runs, and its return is encoded and unified with `out`
+  // (a fresh Variable). Treated like `Equal` by the remaining expand passes.
+  | {
+      tag: "JsCall";
+      func: string;
+      args: Term[];
+      out: Term;
+      span: Span;
+    }
   // ----- Post-expand only -----
   //
   // Stored-tuple lookup. The matched tuple's atom unifies against `atom`,
@@ -186,10 +198,21 @@ export interface SchemaDecl {
   span: Span;
 }
 
+// A user-defined JS function from a `#js (name p1 ..) { body }` directive.
+// See plans/v2-user-js-functions.md.
+export interface JsDef {
+  name: string;
+  params: string[];
+  body: string; // raw JS source between the braces
+  span: Span;
+}
+
 export interface Program {
   rules: Rule[];
   // `relation -> aggregator` for weighted-query dispatch.
   schema: Map<string, string>;
+  // `name -> definition` for `#js` functions.
+  jsDefs: Map<string, JsDef>;
 }
 
 // Stored data. Intervals carry hashconsed Term endpoints; their order in the
