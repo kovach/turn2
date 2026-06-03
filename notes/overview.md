@@ -1,6 +1,52 @@
+# editor auto-complete
+plan: plans/v2-editor-autocomplete.md
+
+- new editor parameter (set when constructed): enable symbol/variable autocomplete
+  - default to on for index-v2, off for pres editors
+- if cursor is at right-end of a token that parses as a symbol or variable, propose autocompletion based on 1) set of symbols in current program or 2) set of variables in current rule
+  - right-end means whitespace to right, at least one non-whitespace to left
+- display only top N continuations in an overlay box; text should match the teal color used in index-v2 database view
+- if current token is complete symbol/variable or has no continuations, don't display box
+- when box is shown, <tab> selects first one. no keybinding to select others.
+- box displays at most 5
+- must work even if program fails to parse; finding symbols is trivial from the lexer
+  - finding variables is harder because rules can be either whitespace separated or begin with `#def ...`
+  - decision: don't track state or guess; just disable proposals for variable completion if the program doesn't parse
+- helper functions:
+  - determine prefix of rule text of rule containing cursor
+  - determine token that cursor is immediately to the right of, if exists
+  - compute completions
+    - strategy: propose strict continuation followed by subsequence continuations (query chars in order, gaps allowed; hyphens are not special); so if symbols `foo` `foo-bar` exist, then `f` could complete either
+      example:
+        suppose file contains symbols `foo`, `fbar` `foo-b-ar`
+        query: `fo` completions: `foo`, `foo-b-ar`
+        query: `fb` completions: `fbar`, `foo-b-ar`
+        query: `ba` completions: `fbar` `foo-b-ar`
+        query: `foo` completions: none (exact match)
+      any other edge cases you can think of?
+    - edge case: the in-progress token is itself part of the program text, so it gets
+      collected as a symbol/variable and would exact-match itself (always suppressing
+      the box). fix: blank out the token's span (preserving offsets so line numbers and
+      other occurrences are unchanged) before collecting candidates. a genuinely-complete
+      token still matches its other occurrence(s) and is suppressed correctly.
+
+# 26/06/3
+- add pres to file overview
+- ? cleanup: move v1 code to sub-dir
+
+# random actor
+plan: TODO
+status: ? depends on small change: store some tuples outside of source text
+
+- add a new optional syntax for `?` (ask): `?[...]`, which allows an *actor* to be selected
+- for now, two options: `random` and `you`. the default (what is done today) is `you`
+- each actor corresponds to a *handler* for the choice when it is scheduled; currently all of the handling is external to evaluation and results in an `is` tuple being asserted
+- example RuleAtom: `?[random] C`
+- the `random` actor will also generate an `is` tuple, but ...
+  ...
+
 # user defined js functions
 plan: plans/v2-user-js-functions.md
-status: pending
 
 ```
 #js (div x y) {

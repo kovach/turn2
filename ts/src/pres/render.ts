@@ -474,6 +474,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     initial,
     saveBackend: "none",
     autoGrow: true,
+    enableAutocomplete: false,
     onChange: (value: string) => {
       // Edits can only reach a non-frozen reveal; record the current
       // reveal as a "right" entry. The throw guards the invariant that a

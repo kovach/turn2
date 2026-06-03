@@ -1,3 +1,5 @@
+import { suggestionsFor } from "./autocomplete.js";
+
 export type SaveBackend = "none" | "server" | "url-param";
 
 export interface EditorOptions {
@@ -8,6 +10,9 @@ export interface EditorOptions {
   saveTarget?: string;
   onChange?: (value: string) => void;
   autoGrow?: boolean;
+  // Symbol/variable completion overlay (plans/v2-editor-autocomplete.md).
+  // Default off; index-v2 opts in, pres leaves it off.
+  enableAutocomplete?: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -23,8 +28,17 @@ export class Editor {
   private readonly inputHandler: () => void;
   private readonly scrollHandler: () => void;
   private readonly mouseDownHandler: (ev: MouseEvent) => void;
+  private readonly keyUpHandler: (ev: KeyboardEvent) => void;
+  private readonly blurHandler: () => void;
   private lastLineCount = 0;
   private _frozen = false;
+
+  // Autocomplete state. `acBox`/`acMirror` are created lazily on first show.
+  private readonly acEnabled: boolean;
+  private acBox: HTMLDivElement | null = null;
+  private acMirror: HTMLDivElement | null = null;
+  private acItems: string[] = [];
+  private acToken: { start: number; end: number } | null = null;
 
   constructor(opts: EditorOptions) {
     this.opts = opts;
@@ -62,16 +76,34 @@ export class Editor {
       this.adopted = false;
     }
 
+    this.acEnabled = opts.enableAutocomplete ?? false;
+
     this.keyHandler = (ev) => this.onKeyDown(ev);
     this.inputHandler = () => this.onInput();
-    this.scrollHandler = () => { this.gutterEl.scrollTop = this.ta.scrollTop; };
+    this.scrollHandler = () => {
+      this.gutterEl.scrollTop = this.ta.scrollTop;
+      if (this.acEnabled) this.hideAutocomplete();
+    };
     this.mouseDownHandler = (ev) => {
       if (this._frozen) ev.preventDefault();
     };
+    // Only refresh the completion box after the keystrokes that build a token:
+    // a bare character key (no Ctrl/Meta/Alt modifier) or Backspace. We
+    // deliberately ignore paste and caret movement — the box is not required
+    // there, which keeps the per-keystroke parse/tokenize off the input path.
+    this.keyUpHandler = (ev) => {
+      const isChar = ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
+      if (isChar || ev.key === "Backspace") this.updateAutocomplete();
+    };
+    this.blurHandler = () => this.hideAutocomplete();
     this.ta.addEventListener("keydown", this.keyHandler);
     this.ta.addEventListener("input", this.inputHandler);
     this.ta.addEventListener("scroll", this.scrollHandler);
     this.ta.addEventListener("mousedown", this.mouseDownHandler);
+    if (this.acEnabled) {
+      this.ta.addEventListener("keyup", this.keyUpHandler);
+      this.ta.addEventListener("blur", this.blurHandler);
+    }
 
     this.rebuildGutter();
 
@@ -109,6 +141,10 @@ export class Editor {
     this.ta.removeEventListener("input", this.inputHandler);
     this.ta.removeEventListener("scroll", this.scrollHandler);
     this.ta.removeEventListener("mousedown", this.mouseDownHandler);
+    this.ta.removeEventListener("keyup", this.keyUpHandler);
+    this.ta.removeEventListener("blur", this.blurHandler);
+    this.acBox?.remove();
+    this.acMirror?.remove();
     if (!this.adopted) this.wrap.remove();
   }
 
@@ -162,6 +198,20 @@ export class Editor {
         this.ta.blur();
       }
       return;
+    }
+    // When the completion box is visible: Tab accepts the first entry, Escape
+    // dismisses the box (without blurring). Other keys fall through.
+    if (this.acEnabled && this.acBox && this.acItems.length > 0) {
+      if (ev.key === "Tab") {
+        ev.preventDefault();
+        this.acceptFirstCompletion();
+        return;
+      }
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.hideAutocomplete();
+        return;
+      }
     }
     if (ev.key === "Escape") {
       ev.preventDefault();
@@ -325,7 +375,134 @@ export class Editor {
       });
     }
   }
+
+  // --- autocomplete ---------------------------------------------------------
+
+  // The partial token the cursor sits at the right end of, or null when no box
+  // should show (selection present, cursor not at a token's right edge, empty
+  // run, or only a bare marker to the left).
+  private currentToken(): { text: string; start: number; end: number } | null {
+    const ta = this.ta;
+    if (ta.selectionStart !== ta.selectionEnd) return null;
+    const pos = ta.selectionStart;
+    const value = ta.value;
+    // Right edge: whitespace or end-of-text immediately to the right.
+    if (pos < value.length && !/\s/.test(value[pos]!)) return null;
+    // Scan left over token chars (everything but whitespace / structural
+    // separators).
+    let start = pos;
+    while (start > 0 && !AC_SEP.test(value[start - 1]!)) start--;
+    if (start === pos) return null; // nothing to the left
+    // Strip a leading literal-type marker when the run begins at the line's
+    // first non-whitespace column (e.g. `-foo` typed without a space).
+    const lineStart = value.lastIndexOf("\n", pos - 1) + 1;
+    const indentLen = value.slice(lineStart).match(/^[ \t]*/)![0]!.length;
+    if (start === lineStart + indentLen && isMarkerCh(value[start]!)) start++;
+    if (start >= pos) return null;
+    return { text: value.slice(start, pos), start, end: pos };
+  }
+
+  private updateAutocomplete(): void {
+    if (!this.acEnabled || this._frozen) { this.hideAutocomplete(); return; }
+    const tok = this.currentToken();
+    if (!tok) { this.hideAutocomplete(); return; }
+    const value = this.ta.value;
+    // Blank out the in-progress token (same length, so offsets/line numbers are
+    // preserved) before gathering candidates: otherwise the token counts as its
+    // own program symbol/rule variable and exact-matches itself, suppressing the
+    // box. Other occurrences of the same name survive, so a genuinely-complete
+    // token is still suppressed correctly.
+    const masked = value.slice(0, tok.start) + " ".repeat(tok.end - tok.start) + value.slice(tok.end);
+    const items = suggestionsFor(masked, tok.text, lineNumberAt(value, tok.start));
+    if (items.length === 0) { this.hideAutocomplete(); return; }
+    this.acItems = items;
+    this.acToken = { start: tok.start, end: tok.end };
+    this.showAutocomplete(tok.start, items);
+  }
+
+  private showAutocomplete(tokenStart: number, items: string[]): void {
+    if (!this.acBox) {
+      this.acBox = document.createElement("div");
+      this.acBox.className = "editor-autocomplete";
+      this.acBox.setAttribute("aria-hidden", "true");
+      this.wrap.appendChild(this.acBox);
+    }
+    const box = this.acBox;
+    box.textContent = "";
+    items.forEach((it, i) => {
+      const row = document.createElement("div");
+      row.className = "editor-autocomplete-item" + (i === 0 ? " is-first" : "");
+      row.textContent = it;
+      box.appendChild(row);
+    });
+    const { left, top } = this.caretCoords(tokenStart);
+    box.style.left = left + "px";
+    box.style.top = top + "px";
+    box.style.display = "block";
+  }
+
+  private hideAutocomplete(): void {
+    this.acItems = [];
+    this.acToken = null;
+    if (this.acBox) this.acBox.style.display = "none";
+  }
+
+  private acceptFirstCompletion(): void {
+    const tok = this.acToken;
+    const first = this.acItems[0];
+    if (!tok || first === undefined) return;
+    this.hideAutocomplete();
+    this.replaceRange(tok.start, tok.end, first, tok.start + first.length);
+  }
+
+  // Pixel position (relative to `this.wrap`) of the caret at offset `pos`,
+  // via an off-screen mirror that replicates the textarea's text metrics.
+  private caretCoords(pos: number): { left: number; top: number } {
+    const ta = this.ta;
+    if (!this.acMirror) {
+      this.acMirror = document.createElement("div");
+      this.acMirror.className = "editor-autocomplete-mirror";
+      this.wrap.appendChild(this.acMirror);
+    }
+    const mirror = this.acMirror;
+    const cs = getComputedStyle(ta);
+    for (const p of AC_MIRROR_PROPS) mirror.style.setProperty(p, cs.getPropertyValue(p));
+    mirror.style.width = ta.clientWidth + "px";
+    mirror.style.left = ta.offsetLeft + "px";
+    mirror.style.top = ta.offsetTop + "px";
+    mirror.textContent = ta.value.slice(0, pos);
+    const marker = document.createElement("span");
+    marker.textContent = "​";
+    mirror.appendChild(marker);
+    const lineH = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4;
+    const left = ta.offsetLeft + marker.offsetLeft - ta.scrollLeft;
+    const top = ta.offsetTop + marker.offsetTop - ta.scrollTop + lineH;
+    return { left, top };
+  }
 }
+
+// Token-run separators: whitespace plus the structural punctuation the lexer
+// breaks on. A symbol/variable token is a maximal run of non-separator chars.
+const AC_SEP = /[\s(),.;]/;
+
+function isMarkerCh(ch: string): boolean {
+  return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!" || ch === "?";
+}
+
+function lineNumberAt(value: string, pos: number): number {
+  let n = 1;
+  for (let i = 0; i < pos; i++) if (value.charCodeAt(i) === 10) n++;
+  return n;
+}
+
+// Computed-style properties the caret mirror must copy to match text layout.
+const AC_MIRROR_PROPS = [
+  "font-family", "font-size", "font-weight", "font-style", "font-variant",
+  "line-height", "letter-spacing", "word-spacing", "tab-size",
+  "padding-top", "padding-right", "padding-bottom", "padding-left",
+  "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+  "box-sizing",
+];
 
 function lineBoundsAt(value: string, pos: number): { start: number; end: number } {
   const start = value.lastIndexOf("\n", pos - 1) + 1;

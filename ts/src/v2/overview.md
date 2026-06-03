@@ -154,14 +154,26 @@ Renders a v2 store as a timeline visualization (SVG or ASCII): moments are laid 
 
 # editor.ts
 
-A self-contained code-editor wrapper around a `<textarea>` that adds a line-number gutter, smart editing keybindings (indent/dedent, auto-indent on Enter, smart Home/Delete), auto-grow, a freeze (read-only) mode, and debounced autosave to either a URL query param or a server endpoint. All edits go through `execCommand("insertText")` so native undo and input events keep working.
+A self-contained code-editor wrapper around a `<textarea>` that adds a line-number gutter, smart editing keybindings (indent/dedent, auto-indent on Enter, smart Home/Delete), auto-grow, a freeze (read-only) mode, an optional symbol/variable completion overlay, and debounced autosave to either a URL query param or a server endpoint. All edits go through `execCommand("insertText")` so native undo and input events keep working.
 
 **Key terms:**
-- `Editor` — textarea wrapper adding a line-number gutter, smart-edit keybindings, auto-grow, freeze mode, and autosave
+- `Editor` — textarea wrapper adding a line-number gutter, smart-edit keybindings, auto-grow, freeze mode, autocomplete, and autosave
 - `SaveBackend` — autosave target: `none` | `server` | `url-param`
 - `setFrozen` — read-only mode toggle
 - smart editing — indent/dedent, auto-indent on Enter, smart Home/Delete, all via `execCommand` so native undo works
+- `enableAutocomplete` — opt-in flag (on for index-v2, off for pres) for the completion overlay; logic lives in `autocomplete.ts`
+- caret mirror — off-screen div replicating textarea metrics to position the completion box at the cursor
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
+
+# autocomplete.ts
+
+The DOM-free core of the editor's symbol/variable completion (`editor.ts` owns the overlay box and caret geometry; this module owns the data). Given the editor text and the partial token under the cursor, it returns ranked completions: symbols come from the whole program (lexer-derived, so they survive a parse failure), variables come from the rule containing the cursor (parse required — disabled when the program doesn't parse). See plans/v2-editor-autocomplete.md.
+
+**Key terms:**
+- `suggestionsFor` — top entry: dispatch on token class (symbol vs variable) and rank
+- `completions` — ranking: exact match suppresses; strict-prefix matches first, then subsequence matches; capped at 5
+- `collectProgramSymbols` — all Symbol tokens in the text (via the lexer; lenient fallback if even tokenizing fails); excludes `*`-headed internal symbols
+- `collectRuleVariables` — Variables of the rule whose source span contains a given line; `null` on parse failure
 
 # default-display.ts
 

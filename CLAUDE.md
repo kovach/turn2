@@ -1,5 +1,8 @@
-- notes/overview.md has an overview of the project and links to several plans that were used to create it
-- when told to read a section like `# some task or problem`, it refers to the top of overview.
+- ts/src/v2/overview.md has an up-to-date overview of the project, except for the `ts/src/pres` sub-project
+  - the "v1" code in ts/src is deprecated
+- notes/overview.md has a log of all plans that were used to create the project
+- when told to read a section like `# some task or problem`, it refers to the top of notes/overview.md.
   - if it contains a line like `plan: TODO`, write an implementation plan at a new file under `plans/` and replace TODO with its filename
+  - if the change adds files, include a note in the plan to update `ts/src/v2/overview.md`
 - don't try to run ts programs at /tmp; the relative imports will always fail. instead write any temp programs under `ts/src/`
 - most of the work now should only be done on the "v2" implementation

@@ -12,7 +12,7 @@
  * Structural rules (flex layout, gutter alignment, right border, monospace
  * font, no-wrap textarea) live here so both hosts stay in sync. */
 
-.editor-wrap { display: flex; align-items: stretch; }
+.editor-wrap { display: flex; align-items: stretch; position: relative; }
 .editor-wrap .editor-textarea {
   flex: 1 1 auto;
   width: auto;
@@ -42,3 +42,33 @@
   border-right: 1px solid var(--editor-gutter-border, rgba(0,0,0,0.2));
 }
 .editor-gutter > div { min-width: 2ch; }
+
+/* Autocomplete overlay (plans/v2-editor-autocomplete.md). Text uses the same
+ * teal as the db-view predicate color (--syn-pred). */
+.editor-autocomplete {
+  position: absolute;
+  z-index: 30;
+  font-family: monospace;
+  font-size: var(--editor-font-size, 14px);
+  line-height: 1.4;
+  color: var(--syn-pred, #007a5a);
+  background: var(--editor-autocomplete-bg, #1e1e1e);
+  border: 1px solid var(--editor-autocomplete-border, rgba(78, 201, 176, 0.5));
+  border-radius: 4px;
+  padding: 2px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: pre;
+  pointer-events: none;
+}
+.editor-autocomplete-item { padding: 1px 8px; }
+.editor-autocomplete-item.is-first { background: var(--editor-autocomplete-sel, rgba(78, 201, 176, 0.18)); }
+
+/* Off-screen mirror used only to measure caret pixel coordinates. */
+.editor-autocomplete-mirror {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+  top: 0;
+  left: 0;
+}

@@ -592,7 +592,7 @@ document.addEventListener("selectionchange", () => {
 // Editor: Tab/Shift-Tab indent, Enter auto-indent, smart Home, smart Delete.
 // saveBackend "none" — this file owns the run/save lifecycle via its own
 // input listener; Editor only provides keybindings.
-new Editor({ existing: sourceEl, saveBackend: "none" });
+new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true });
 
 hideInternalEl.addEventListener("change", () => {
   void run();

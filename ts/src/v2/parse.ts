@@ -56,7 +56,7 @@ function markerOf(ch: string): Marker {
   }
 }
 
-function tokenize(input: string): Token[] | ParseError {
+export function tokenize(input: string): Token[] | ParseError {
   // A blank line ends a rule only when the next non-blank line starts at
   // column 0. A blank line followed by indented content is treated as a
   // continuation (the spec's `activate` example uses blank lines for
@@ -928,17 +928,38 @@ function findTopArrow(text: string): number {
   return -1;
 }
 
-function tokenizeTermText(text: string): string[] {
+export function tokenizeTermText(text: string): string[] {
   return text.replace(/\(/g, " ( ").replace(/\)/g, " ) ").trim().split(/\s+/).filter((t) => t.length > 0);
 }
 
-function isSymToken(tok: string): boolean {
+// Canonical token-class predicates. A token's first character decides its
+// class: uppercase or `_`-prefixed → Variable, bare `_` → Wildcard, anything
+// else (non-empty) → Symbol. These are the shared source of truth used by
+// `parseTerms` and by the editor autocomplete (plans/v2-editor-autocomplete.md).
+
+// True for a non-empty token that names a Symbol (lower-case / punctuation
+// start, not `_`, not upper-case).
+export function isSymbolToken(tok: string): boolean {
   if (tok.length === 0) return false;
   const c = tok[0]!;
   if (c === "_") return false;
   if (c >= "A" && c <= "Z") return false;
   return true;
 }
+
+// True for a non-empty token that names a Variable: an upper-case start, or
+// `_` followed by at least one more character (bare `_` is a Wildcard, not a
+// Variable).
+export function isVariableToken(tok: string): boolean {
+  if (tok.length === 0) return false;
+  const c = tok[0]!;
+  if (c >= "A" && c <= "Z") return true;
+  if (c === "_" && tok.length > 1) return true;
+  return false;
+}
+
+// Back-compat alias for the in-module call sites.
+const isSymToken = isSymbolToken;
 
 function parseTerms(tokens: string[], line: number, pos: { i: number } = { i: 0 }): Term[] | ParseError {
   const terms: Term[] = [];
@@ -972,9 +993,7 @@ function parseTerms(tokens: string[], line: number, pos: { i: number } = { i: 0 
       terms.push({ tag: "Atom", atom: { terms: [{ tag: "Symbol", name: "*js" }, ...inner] } });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
-    } else if (tok.length > 0 && tok[0]! >= "A" && tok[0]! <= "Z") {
-      terms.push({ tag: "Variable", name: tok });
-    } else if (tok.length > 1 && tok[0] === "_") {
+    } else if (isVariableToken(tok)) {
       terms.push({ tag: "Variable", name: tok });
     } else {
       terms.push({ tag: "Symbol", name: tok });
