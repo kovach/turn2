@@ -63,6 +63,11 @@ export function completions(
 // top-to-bottom), deduped. Works even when the program does not parse: it
 // relies only on the lexer, and falls back to a lenient split if even
 // tokenizing fails. Compiler-internal `*`-headed symbols are excluded.
+//
+// `#agg` declarations also contribute their head relation name (the first
+// token of the directive's arg text), so a relation that is only declared and
+// never otherwise written still completes. Other directives (`#def`, `#js`)
+// are intentionally not mined here.
 export function collectProgramSymbols(text: string): Set<string> {
   const out = new Set<string>();
   const add = (w: string) => {
@@ -73,6 +78,9 @@ export function collectProgramSymbols(text: string): Set<string> {
     for (const t of toks) {
       if (t.tag === "atom" || t.tag === "equal") {
         for (const w of tokenizeTermText(t.text)) add(w);
+      } else if (t.tag === "command" && t.name === "agg") {
+        const head = tokenizeTermText(t.argText)[0];
+        if (head !== undefined) add(head);
       }
     }
   } else {

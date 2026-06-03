@@ -88,12 +88,17 @@ export class Editor {
       if (this._frozen) ev.preventDefault();
     };
     // Only refresh the completion box after the keystrokes that build a token:
-    // a bare character key (no Ctrl/Meta/Alt modifier) or Backspace. We
-    // deliberately ignore paste and caret movement — the box is not required
-    // there, which keeps the per-keystroke parse/tokenize off the input path.
+    // a bare character key (no Ctrl/Meta/Alt modifier) or Backspace. Any other
+    // key (caret movement, Enter, shortcuts, etc.) dismisses the box rather
+    // than leaving a stale one up. Releases of a bare modifier are ignored, so
+    // the Shift-up that ends an uppercase keystroke doesn't kill the box the
+    // letter just opened. This keeps the per-keystroke parse/tokenize off the
+    // input path while ensuring the box never lingers.
     this.keyUpHandler = (ev) => {
+      if (MODIFIER_KEYS.has(ev.key)) return;
       const isChar = ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
       if (isChar || ev.key === "Backspace") this.updateAutocomplete();
+      else this.hideAutocomplete();
     };
     this.blurHandler = () => this.hideAutocomplete();
     this.ta.addEventListener("keydown", this.keyHandler);
@@ -484,6 +489,11 @@ export class Editor {
 // Token-run separators: whitespace plus the structural punctuation the lexer
 // breaks on. A symbol/variable token is a maximal run of non-separator chars.
 const AC_SEP = /[\s(),.;]/;
+
+// Bare modifier keys: their keyup must neither refresh nor dismiss the box, so
+// the Shift-up ending an uppercase keystroke doesn't close what the letter
+// opened.
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph"]);
 
 function isMarkerCh(ch: string): boolean {
   return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!" || ch === "?";

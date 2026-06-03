@@ -86,6 +86,18 @@ import {
   console.log("PASS: internal/command symbols excluded");
 }
 
+{
+  // `#agg` contributes its head relation name even when the relation is never
+  // otherwise written; the aggregator and `#def`/`#js` names are not mined.
+  const text = "#agg lonely -> count\n#def helper\n#js (jsfn x) { return x }";
+  const syms = collectProgramSymbols(text);
+  assert.ok(syms.has("lonely"), "agg head relation collected");
+  assert.ok(!syms.has("count"), "aggregator not collected");
+  assert.ok(!syms.has("helper"), "#def name not collected");
+  assert.ok(!syms.has("jsfn"), "#js name not collected");
+  console.log("PASS: agg head relation collected");
+}
+
 // --- variable extraction scoped to the rule ---------------------------------
 {
   // Two whitespace-separated rules; X is in rule 1, Y in rule 2.
