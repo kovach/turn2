@@ -398,10 +398,39 @@ function parseCodeBody(body: string): { segments: Segment[]; addedPauses: number
   return { segments, addedPauses: pauseCount };
 }
 
+// Which reveal levels a slide's blocks actually populate with new content.
+// Each [pause] (and each in-code [pause]) bumps the reveal counter; a level in
+// 2..overlayCount that nothing lands on means the pause that created it was
+// redundant (pause-then-pause, or a trailing pause). Level 1 is the base, not
+// produced by a pause, so it is never reported.
+function revealOccupancy(blocks: Block[]): Set<number> {
+  const occ = new Set<number>();
+  for (const b of blocks) {
+    if (b.kind === "para") for (const s of b.spans) occ.add(s.reveal);
+    else if (b.kind === "list") for (const it of b.items) occ.add(it.reveal);
+    else if (b.kind === "code") for (const s of b.segments) occ.add(s.reveal);
+    else if (b.kind === "svg") occ.add(b.reveal);
+  }
+  return occ;
+}
+
+function pauseWarnings(title: Span[], blocks: Block[], overlayCount: number): string[] {
+  if (overlayCount < 2) return [];
+  const occ = revealOccupancy(blocks);
+  const empty: number[] = [];
+  for (let r = 2; r <= overlayCount; r++) if (!occ.has(r)) empty.push(r);
+  if (empty.length === 0) return [];
+  const name = plainTitle(title) || "(untitled)";
+  const steps = empty.join(", ");
+  const plural = empty.length > 1 ? "s" : "";
+  return [`slide "${name}": redundant [pause]${plural} — reveal step${plural} ${steps} show${plural ? "" : "s"} no new content`];
+}
+
 export function parse(src: string): Doc {
   const toks = tokenize(src);
   const meta: Doc["metadata"] = {};
   const slides: Slide[] = [];
+  const warnings: string[] = [];
 
   let cur: { title: Span[]; builder: Builder; lineBuf: LineBuf } | null = null;
   const openSlide = (title: Span[]) => {
@@ -416,6 +445,7 @@ export function parse(src: string): Doc {
     }
     flushAll(cur.builder);
     const overlayCount = Math.max(1, cur.builder.reveal);
+    warnings.push(...pauseWarnings(cur.title, cur.builder.blocks, overlayCount));
     slides.push({ title: cur.title, blocks: cur.builder.blocks, overlayCount });
     cur = null;
   };
@@ -520,5 +550,5 @@ export function parse(src: string): Doc {
     slides.shift();
   }
 
-  return { metadata: meta, slides };
+  return { metadata: meta, slides, warnings };
 }

@@ -1,6 +1,9 @@
 export type Doc = {
   metadata: { title?: Span[]; author?: string; date?: string; theme?: "light" | "dark"; showSlideTotal?: boolean };
   slides: Slide[];
+  // Non-fatal authoring problems surfaced by the parser (e.g. redundant
+  // [pause]s). Shown via the `(!)` overlay on the first slide.
+  warnings: string[];
 };
 
 export type Slide = {

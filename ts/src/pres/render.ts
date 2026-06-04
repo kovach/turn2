@@ -64,6 +64,9 @@ type RenderHandle = {
   // Lazily-built keybindings overlay, appended to document.body and
   // toggled via the help button / `?` key. Null until first opened.
   helpEl: HTMLElement | null;
+  // Lazily-built warnings overlay (same component as help). Null until first
+  // opened; only reachable when doc.warnings is non-empty.
+  warnEl: HTMLElement | null;
 };
 
 const GAS = 100;
@@ -151,13 +154,13 @@ function renderBlock(b: Block, blockIdx: number): string {
   return `<div class="block code" data-block-idx="${blockIdx}"${opts}></div>`;
 }
 
-function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, helpButton: string): string {
+function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, controls: string): string {
   if (eff.kind === "title") {
     return `<div class="slide title-slide r-${reveal}">
       <h1 class="title-line">${titleHtml(eff.slide.title)}</h1>
       <div class="meta-author" data-slot="author"></div>
       <div class="meta-date" data-slot="date"></div>
-      ${helpButton}
+      ${controls}
     </div>`;
   }
   const body = eff.slide.blocks.map((b, i) => renderBlock(b, i)).join("");
@@ -165,7 +168,7 @@ function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, helpBu
     <h1 class="slide-title">${titleHtml(eff.slide.title)}</h1>
     <div class="slide-body">${body}</div>
     ${footer}
-    ${helpButton}
+    ${controls}
   </div>`;
 }
 
@@ -184,41 +187,73 @@ const HELP_ITEMS: Array<[string, string]> = [
   ["Esc", "Close this help"],
 ];
 
-// The `?` button shown on the first slide only.
+// Buttons shown at the top-right of the first slide only. The warnings button
+// is emitted by renderControls only when there are warnings.
 const HELP_BUTTON_HTML =
   `<button type="button" class="help-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">Help <span class="help-q">(?)</span></button>`;
+const WARN_BUTTON_HTML =
+  `<button type="button" class="warn-button" title="Warnings" aria-label="Warnings">(!)</button>`;
 
-function ensureHelpEl(h: RenderHandle): HTMLElement {
-  if (h.helpEl) return h.helpEl;
+// Top-right control cluster for the first slide: a `(!)` button if there are
+// warnings, then Help.
+function renderControls(h: RenderHandle): string {
+  const warnBtn = h.doc.warnings.length > 0 ? WARN_BUTTON_HTML : "";
+  return `<div class="slide-controls">${warnBtn}${HELP_BUTTON_HTML}</div>`;
+}
+
+// Shared overlay component used by both Help and Warnings. Builds a hidden
+// `.help-overlay` whose backdrop click closes it.
+function makeOverlay(onClose: () => void, title: string, bodyHtml: string, hint: string): HTMLElement {
   const overlay = document.createElement("div");
   overlay.className = "help-overlay";
   overlay.hidden = true;
-  const rows = HELP_ITEMS.map(
-    ([k, d]) => `<tr><td class="help-key">${escapeHtml(k)}</td><td class="help-desc">${escapeHtml(d)}</td></tr>`,
-  ).join("");
   overlay.innerHTML = `<div class="help-panel">
-    <h2 class="help-title">Keyboard shortcuts</h2>
-    <table class="help-table">${rows}</table>
-    <div class="help-hint">press ? or Esc to close</div>
+    <h2 class="help-title">${escapeHtml(title)}</h2>
+    ${bodyHtml}
+    <div class="help-hint">${escapeHtml(hint)}</div>
   </div>`;
-  // Click on the backdrop (but not the panel) closes.
-  overlay.addEventListener("click", ev => { if (ev.target === overlay) closeHelp(h); });
+  overlay.addEventListener("click", ev => { if (ev.target === overlay) onClose(); });
   document.body.appendChild(overlay);
-  h.helpEl = overlay;
   return overlay;
 }
 
-function helpOpen(h: RenderHandle): boolean {
-  return !!h.helpEl && !h.helpEl.hidden;
+function ensureHelpEl(h: RenderHandle): HTMLElement {
+  if (h.helpEl) return h.helpEl;
+  const rows = HELP_ITEMS.map(
+    ([k, d]) => `<tr><td class="help-key">${escapeHtml(k)}</td><td class="help-desc">${escapeHtml(d)}</td></tr>`,
+  ).join("");
+  h.helpEl = makeOverlay(() => closeHelp(h), "Keyboard shortcuts",
+    `<table class="help-table">${rows}</table>`, "press ? or Esc to close");
+  return h.helpEl;
 }
 
-function closeHelp(h: RenderHandle): void {
-  if (h.helpEl) h.helpEl.hidden = true;
+function ensureWarnEl(h: RenderHandle): HTMLElement {
+  if (h.warnEl) return h.warnEl;
+  const items = h.doc.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("");
+  h.warnEl = makeOverlay(() => closeWarn(h), "Warnings",
+    `<ul class="warn-list">${items}</ul>`, "press Esc to close");
+  return h.warnEl;
 }
 
+function helpOpen(h: RenderHandle): boolean { return !!h.helpEl && !h.helpEl.hidden; }
+function warnOpen(h: RenderHandle): boolean { return !!h.warnEl && !h.warnEl.hidden; }
+function anyOverlayOpen(h: RenderHandle): boolean { return helpOpen(h) || warnOpen(h); }
+
+function closeHelp(h: RenderHandle): void { if (h.helpEl) h.helpEl.hidden = true; }
+function closeWarn(h: RenderHandle): void { if (h.warnEl) h.warnEl.hidden = true; }
+function closeOverlays(h: RenderHandle): void { closeHelp(h); closeWarn(h); }
+
+// Opening one overlay closes the other so only a single panel shows at a time.
 function toggleHelp(h: RenderHandle): void {
-  if (helpOpen(h)) closeHelp(h);
-  else ensureHelpEl(h).hidden = false;
+  if (helpOpen(h)) { closeHelp(h); return; }
+  closeWarn(h);
+  ensureHelpEl(h).hidden = false;
+}
+
+function toggleWarn(h: RenderHandle): void {
+  if (warnOpen(h)) { closeWarn(h); return; }
+  closeHelp(h);
+  ensureWarnEl(h).hidden = false;
 }
 
 // Bottom-right slide number for content slides. Title slides get no number;
@@ -273,7 +308,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
     return {
       doc, effectiveSlides, state: { slide: 0, reveal: 1 }, root,
       mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
-      currentSrc: source, helpEl: null,
+      currentSrc: source, helpEl: null, warnEl: null,
     };
   }
   const init = readUrlHash();
@@ -284,7 +319,7 @@ export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderH
   const handle: RenderHandle = {
     doc, effectiveSlides, state, root,
     mountedSlide: -1, edits: new Map(), activeBlocks: [], activeSvgs: [],
-    currentSrc: source, helpEl: null,
+    currentSrc: source, helpEl: null, warnEl: null,
   };
   renderCurrent(handle);
   attachKeyHandler(handle);
@@ -311,8 +346,8 @@ function renderCurrent(h: RenderHandle) {
 
   if (h.mountedSlide !== h.state.slide) {
     teardownAll(h);
-    const helpButton = h.state.slide === 0 ? HELP_BUTTON_HTML : "";
-    h.root.innerHTML = renderSlide(eff, h.state.reveal, slideFooter(h, eff), helpButton);
+    const controls = h.state.slide === 0 ? renderControls(h) : "";
+    h.root.innerHTML = renderSlide(eff, h.state.reveal, slideFooter(h, eff), controls);
     h.mountedSlide = h.state.slide;
     if (eff.kind === "title") {
       const authorEl = h.root.querySelector<HTMLElement>('[data-slot="author"]');
@@ -322,6 +357,8 @@ function renderCurrent(h: RenderHandle) {
     }
     const helpBtn = h.root.querySelector<HTMLElement>(".help-button");
     if (helpBtn) helpBtn.addEventListener("click", () => toggleHelp(h));
+    const warnBtn = h.root.querySelector<HTMLElement>(".warn-button");
+    if (warnBtn) warnBtn.addEventListener("click", () => toggleWarn(h));
     mountCodeBlocks(h);
     mountSvgBlocks(h);
   }
@@ -856,10 +893,11 @@ function attachKeyHandler(h: RenderHandle) {
     // Any modifier suppresses our handlers — those combos belong to the
     // browser/OS. (`?` is Shift+/, so shiftKey is deliberately allowed.)
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    // While the help overlay is open, only `?`/Esc act (both close it);
-    // every other key is swallowed so navigation can't run behind it.
-    if (helpOpen(h)) {
-      if (ev.key === "?" || ev.key === "Escape") { closeHelp(h); ev.preventDefault(); }
+    // While an overlay (help or warnings) is open, only `?`/Esc act (both
+    // close it); every other key is swallowed so navigation can't run behind
+    // it.
+    if (anyOverlayOpen(h)) {
+      if (ev.key === "?" || ev.key === "Escape") { closeOverlays(h); ev.preventDefault(); }
       return;
     }
     const fn = bindings[ev.key];

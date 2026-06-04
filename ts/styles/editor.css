@@ -52,8 +52,10 @@
   font-size: var(--editor-font-size, 14px);
   line-height: 1.4;
   color: var(--syn-pred, #007a5a);
-  background: var(--editor-autocomplete-bg, #1e1e1e);
-  border: 1px solid var(--editor-autocomplete-border, rgba(78, 201, 176, 0.5));
+  /* Default through the host's theme palette so the box follows light/dark
+   * automatically; the literal is only a last resort if no palette is set. */
+  background: var(--editor-autocomplete-bg, var(--bg-2, #1e1e1e));
+  border: 1px solid var(--editor-autocomplete-border, var(--border, rgba(78, 201, 176, 0.5)));
   border-radius: 4px;
   padding: 2px 0;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -61,7 +63,7 @@
   pointer-events: none;
 }
 .editor-autocomplete-item { padding: 1px 8px; }
-.editor-autocomplete-item.is-first { background: var(--editor-autocomplete-sel, rgba(78, 201, 176, 0.18)); }
+.editor-autocomplete-item.is-first { background: var(--editor-autocomplete-sel, var(--hover, rgba(78, 201, 176, 0.18))); }
 
 /* Off-screen mirror used only to measure caret pixel coordinates. */
 .editor-autocomplete-mirror {

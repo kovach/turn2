@@ -8,8 +8,7 @@
 
 [slide][%Purpose%]
 - Turn is a language for situations, not algorithms. [pause]
-- A program is a set of *rules*; a rule *observes* some part of the situation, then produces some *assertion* or presents a *choice*. [pause]
-  - *(modulo a few wrinkles we won't have time for today)*
+- A program is a set of *rules*; a rule *observes* some part of the situation, then produces some *assertion* or presents a *choice*.
 
 {
 most languages, whether objected oriented, functional etc are basically oriented towards algorithms
@@ -20,7 +19,7 @@ games dynamics though are not a solution to a problem
 the basic thing about situations is that if I have one situation here, and another there, there is always a composite of the two
 maybe they unfold independently or maybe the overlap in some way, but the interesting thing about them is how they unfold depending on the participants choices
 
-the rest of the talk will be about unpacking what I mean by observation, assertion, and choice
+the rest of the talk will be about unpacking what I mean by observation, assertion, and choice and how they fit together as language features
 }
 
 [slide][%Why?%]
@@ -49,7 +48,7 @@ observational equivalence for this kind of program is very discerning
 - *When you Discard this, if you did not Play any cards this turn, [...]"
 [pause]
 ----
-- *Target gets +3 range for measuring Range to Coastal Lands*
+- *Player gets +3 range for measuring Range to Coastal Lands*
 - *When targeting, you may Gather 1 of your Presence into Target Land (*in to meet targeting requirements*)*
 
 [slide][%Compounds%]
@@ -62,6 +61,10 @@ card:name C pot-of-greed -- "the name of C is pot-of-greed"
 [pause]
 (variables are capitalized; symbols lower-case)
 
+{
+  ":-" are normal id characters
+}
+
 [slide][%The Now%]
 A query is a sequence of compounds. It describes an interval in time, *the now*,
 reading from top to bottom:
@@ -72,16 +75,31 @@ is-action C  -- that is an action... [pause]
 ~activate C  -- so activate the card.
 %]
 
+{
+  this is the key idea of the language:
+    every tuple has an interval attached
+    a conjunction of compounds only match tuples that overlap
+  the interval shrinks as you read through the rule
+
+  i'll have a diagram in a moment
+}
+
 [slide][%Kinds of Assertion%]
 - [%~%] (*episode*): creates a new interval contained within now
 - [%+%] (*fact*): creates a new interval (left, Top), with left contained in now, extending indefinitely forward in time
 - [%^%] (*property*): sets the interval equal to now
 
+{
+  each tuple has two moments attached (start, end) that define an interval
+  the moments are symbolic; the only thing we know about their ordering is what's implied by this slide
+  so if two rules independently assert episodes within a `turn`, they don't overlap because their endpoints are not comparable
+}
+
 [slide][%Triggering the Rule%]
 [code][%
 -- Reminder: the rule we want to trigger
--- turn T, play-card C, is-action C, ~activate C
-[pause]
+-- turn T, play-card C, is-action C, ~activate C [pause]
+
 +is-action C   -- create an action card (fact) [pause]
 ~turn T        -- create a Turn (after `action` begins) (episode) [pause]
 ~play-card C   -- play the card (during that turn) (episode)
@@ -89,6 +107,13 @@ is-action C  -- that is an action... [pause]
 -- re-introduce the rule... [pause]
 turn T, play-card C, is-action C, ~activate C
 %][timeline]
+
+{
+  so, maybe this looks like a usual datalog program; there's a query and an implication
+  logic/constraint based approaches to game language seem to have this defect:
+    they talk about small steps, like what happens across one turn
+  this is a bad fit for games with complex turns containing many sequences of actions
+}
 
 [slide][%Sequencing%]
 [code][%
@@ -103,17 +128,16 @@ turn
 %][timeline]
 
 [slide][%The now(s)%]
-- Sometimes we *do* need to relate separated intervals
-- We use a *subquery* to locally modify the interval
+- Sometimes we *do* need to talk about several non-overlapping intervals
+  within the span of one rule (sequencing, past tense).
+- We use a *sub-rule* [%(...)%] to temporarily modify the now.
 [code][%
--- "If you play the card you drew this turn, ..." [pause]
+-- "If you play a card you drew this turn, ..." [pause]
 turn T
   ( draw-phase, draw-card C )    -- "drew C" [pause]
-  ( action-phase, play-card C )  -- "play C"
+  action-phase, play-card C      -- "play C"
   -- ...
 %]
-[pause]
-The two phases do not overlap, but we can still match this situation after it happened and respond.
 
 [slide][%Co-routines everywhere%]
 Goal: assert [%d%] using this rule (*no shortcuts please*):
@@ -145,7 +169,7 @@ forget-power
 %]
 [pause]
 - [%activate%] treats [%forget%] and [%gain%] like return values, but they don't need to be declared as such. [pause]
-- execution of [%activate%] "pauses" while rules matching [%gain-power%] resolve [pause]
+- execution of [%activate%] "pauses" while rules matching [%gain-power%] resolve
 
 [slide][%Aggregates%]
 - We often need to reduce over a relation.
@@ -175,9 +199,25 @@ look, at me -> L, ~print L
 
 [slide][%Choice%]
 - A rule set is compiled into a monotone logic program.
+  - With no side effects, how can we handle I/O? [pause]
+
+- Inputs: ordinary facts within a distinguished relation
+- Outputs: ordinary facts within distinguished relations
+- Constraints?
+
+[slide][%Examples%]
+- *Choose a Coastal Land adjacent to a Land containing two or more Invaders*
+[code][%
+do-it
+  ?L
+  !(coastal L, adjacent L L', land:invader-count L' X, le 1 X)
+%]
+
+
+[slide][%Choice%]
 - Given a set of past decision tuples, this LP computes a set of choices to be made.
 - The choice set is represented by a query.
-  - The query, evaluated at the *now*, matches valid choices.
+- The query, evaluated at the right moment, matches valid choices.
 
 [slide][%Choice%]
 [code][%

@@ -125,4 +125,25 @@ function firstPara(blocks: Block[]): Span[] {
   ]);
 }
 
+// 12. Redundant-[pause] warnings: pause-then-pause and trailing pause.
+{
+  // Trailing pause: content, then a pause with nothing after.
+  const trailing = parse(`[slide][%S%]\nhello\n[pause]\n`);
+  assert.equal(trailing.warnings.length, 1, "trailing pause should warn");
+  assert.match(trailing.warnings[0]!, /slide "S".*redundant \[pause\]/);
+
+  // Pause immediately followed by pause leaves a dead middle step.
+  const doubled = parse(`[slide][%S%]\na\n[pause]\n[pause]\nb\n`);
+  assert.equal(doubled.warnings.length, 1, "pause-then-pause should warn");
+  assert.match(doubled.warnings[0]!, /reveal step 2/);
+}
+
+// 13. No false positives: a pause with content on both sides is fine, and a
+//     leading pause (empty base step, content after) is not reported.
+{
+  assert.deepEqual(parse(`[slide][%S%]\na\n[pause]\nb\n`).warnings, []);
+  assert.deepEqual(parse(`[slide][%S%]\n[pause]\na\n`).warnings, []);
+  assert.deepEqual(parse(`[slide][%S%]\nno pauses here\n`).warnings, []);
+}
+
 console.log("pres_parse: all assertions passed");
