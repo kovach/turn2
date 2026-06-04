@@ -99,7 +99,7 @@ export class Editor {
       const isChar = ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey;
       if (isChar || ev.key === "Backspace") this.updateAutocomplete();
       else this.hideAutocomplete();
-    };
+    }; // TODO: organize as much autocomplete logic as possible into separate file or class; attach optionally
     this.blurHandler = () => this.hideAutocomplete();
     this.ta.addEventListener("keydown", this.keyHandler);
     this.ta.addEventListener("input", this.inputHandler);

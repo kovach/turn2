@@ -72,23 +72,34 @@ const DEBOUNCE_MS = 200;
 
 function buildEffectiveSlides(doc: Doc): EffectiveSlide[] {
   const out: EffectiveSlide[] = [];
-  const hasMeta = !!(doc.metadata.title || doc.metadata.author || doc.metadata.date);
+  const hasMeta = !!((doc.metadata.title && doc.metadata.title.length > 0) || doc.metadata.author || doc.metadata.date);
   if (hasMeta) {
     out.push({
       kind: "title",
-      slide: { title: doc.metadata.title ?? "", blocks: [], overlayCount: 1 },
+      slide: { title: doc.metadata.title ?? [], blocks: [], overlayCount: 1 },
     });
   }
   for (const s of doc.slides) out.push({ kind: "content", slide: s });
   return out;
 }
 
-function wrapSpan(s: Span): string {
+// Inline formatting for a span (code/em/strong), without the reveal wrapper.
+function spanInner(s: Span): string {
   let inner = escapeHtml(s.text);
   if (s.code) inner = `<code>${inner}</code>`;
   if (s.italic) inner = `<em>${inner}</em>`;
   if (s.bold) inner = `<strong>${inner}</strong>`;
-  return `<span class="frag" data-reveal="${s.reveal}">${inner}</span>`;
+  return inner;
+}
+
+function wrapSpan(s: Span): string {
+  return `<span class="frag" data-reveal="${s.reveal}">${spanInner(s)}</span>`;
+}
+
+// Titles are always fully visible, so they get the inline formatting but no
+// per-span `.frag`/`data-reveal` wrapper.
+function titleHtml(spans: Span[]): string {
+  return spans.map(spanInner).join("");
 }
 
 function spanHtml(spans: Span[]): string {
@@ -143,7 +154,7 @@ function renderBlock(b: Block, blockIdx: number): string {
 function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, helpButton: string): string {
   if (eff.kind === "title") {
     return `<div class="slide title-slide r-${reveal}">
-      <h1 class="title-line">${escapeHtml(eff.slide.title)}</h1>
+      <h1 class="title-line">${titleHtml(eff.slide.title)}</h1>
       <div class="meta-author" data-slot="author"></div>
       <div class="meta-date" data-slot="date"></div>
       ${helpButton}
@@ -151,7 +162,7 @@ function renderSlide(eff: EffectiveSlide, reveal: number, footer: string, helpBu
   }
   const body = eff.slide.blocks.map((b, i) => renderBlock(b, i)).join("");
   return `<div class="slide content-slide r-${reveal}">
-    <h1 class="slide-title">${escapeHtml(eff.slide.title)}</h1>
+    <h1 class="slide-title">${titleHtml(eff.slide.title)}</h1>
     <div class="slide-body">${body}</div>
     ${footer}
     ${helpButton}

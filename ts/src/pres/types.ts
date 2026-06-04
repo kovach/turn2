@@ -1,13 +1,20 @@
 export type Doc = {
-  metadata: { title?: string; author?: string; date?: string; theme?: "light" | "dark"; showSlideTotal?: boolean };
+  metadata: { title?: Span[]; author?: string; date?: string; theme?: "light" | "dark"; showSlideTotal?: boolean };
   slides: Slide[];
 };
 
 export type Slide = {
-  title: string;
+  title: Span[];
   blocks: Block[];
   overlayCount: number;
 };
+
+// Structured body of a [% ... %] region: a sequence of plain text and nested
+// quotes. Produced by the recursive quote reader so that nested [% %] needs
+// no special-case handling at any consumer. `flattenBody` is its inverse.
+export type BodyPart =
+  | { kind: "text"; text: string }
+  | { kind: "quote"; parts: BodyPart[] };
 
 export type Block =
   | { kind: "para"; spans: Span[] }

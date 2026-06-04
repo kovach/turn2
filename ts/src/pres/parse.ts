@@ -1,9 +1,9 @@
-import type { Block, CodeOpt, Doc, ListItem, Segment, Slide, Span } from "./types.js";
+import type { Block, BodyPart, CodeOpt, Doc, ListItem, Segment, Slide, Span } from "./types.js";
 
 type Tok =
   | { kind: "text"; text: string }
-  | { kind: "inlineCode"; text: string }
-  | { kind: "cmd"; name: string; body: string | null; bodyOffset: number; opts: string[] | null };
+  | { kind: "inlineCode"; parts: BodyPart[] }
+  | { kind: "cmd"; name: string; body: BodyPart[] | null; bodyOffset: number; opts: string[] | null };
 
 function tokenize(src: string): Tok[] {
   const toks: Tok[] = [];
@@ -16,10 +16,10 @@ function tokenize(src: string): Tok[] {
   while (i < src.length) {
     if (src[i] === "[" && src[i + 1] === "%") {
       // Bare body — inline code.
-      const b = readBody(src, i);
+      const b = readQuote(src, i);
       if (b === null) { textBuf += src[i++]!; continue; }
       flushText();
-      toks.push({ kind: "inlineCode", text: b.body });
+      toks.push({ kind: "inlineCode", parts: b.parts });
       i = b.next;
       continue;
     }
@@ -30,13 +30,13 @@ function tokenize(src: string): Tok[] {
       const name = src.slice(i + 1, end);
       if (!/^[a-zA-Z][\w-]*$/.test(name)) { textBuf += src[i++]!; continue; }
       let j = end + 1;
-      let body: string | null = null;
+      let body: BodyPart[] | null = null;
       let bodyOffset = -1;
       let opts: string[] | null = null;
       if (src[j] === "[" && src[j + 1] === "%") {
-        const b = readBody(src, j);
+        const b = readQuote(src, j);
         if (b === null) { textBuf += src[i++]!; continue; }
-        body = b.body;
+        body = b.parts;
         bodyOffset = j + 2;
         j = b.next;
       }
@@ -61,21 +61,45 @@ function tokenize(src: string): Tok[] {
   return toks;
 }
 
-function readBody(src: string, start: number): { body: string; next: number } | null {
-  // src[start] === '[', src[start+1] === '%'
-  let depth = 1;
+// Recursive `[% ... %]` reader. `src[start]` is '[', `src[start+1]` is '%'.
+// Returns the body as a list of text/quote parts (nested `[% %]` become
+// `quote` children rather than being flattened back into text), or null on an
+// unterminated quote. Consumers that want raw source call `flattenBody`.
+function readQuote(src: string, start: number): { parts: BodyPart[]; next: number } | null {
   let i = start + 2;
-  let out = "";
+  const parts: BodyPart[] = [];
+  let buf = "";
+  const flush = () => {
+    if (buf.length > 0) { parts.push({ kind: "text", text: buf }); buf = ""; }
+  };
   while (i < src.length) {
-    if (src[i] === "[" && src[i + 1] === "%") { depth++; out += "[%"; i += 2; continue; }
-    if (src[i] === "%" && src[i + 1] === "]") {
-      depth--;
-      if (depth === 0) return { body: out, next: i + 2 };
-      out += "%]"; i += 2; continue;
+    if (src[i] === "[" && src[i + 1] === "%") {
+      const nested = readQuote(src, i);
+      if (nested === null) return null;
+      flush();
+      parts.push({ kind: "quote", parts: nested.parts });
+      i = nested.next;
+      continue;
     }
-    out += src[i++]!;
+    if (src[i] === "%" && src[i + 1] === "]") {
+      flush();
+      return { parts, next: i + 2 };
+    }
+    buf += src[i++]!;
   }
   return null;
+}
+
+// Inverse of `readQuote`: re-serialize a body to raw source, restoring the
+// `[%`/`%]` markers around nested quotes. Used by consumers ([code], [svg],
+// [metadata], inline code) that interpret the body as a flat string.
+export function flattenBody(parts: BodyPart[]): string {
+  let out = "";
+  for (const p of parts) {
+    if (p.kind === "text") out += p.text;
+    else out += `[%${flattenBody(p.parts)}%]`;
+  }
+  return out;
 }
 
 function todayStr(): string {
@@ -89,18 +113,43 @@ function resolveMetaValue(s: string): string {
   return s.trim().replace(/\[today\]/g, todayStr());
 }
 
-function parseMetadata(body: string, meta: Doc["metadata"]) {
-  for (const raw of body.split("\n")) {
+function parseMetadata(body: BodyPart[], meta: Doc["metadata"]) {
+  // Metadata is a flat `key: value` list, so flatten the body first. `title`
+  // is then re-parsed through the span formatter so it can carry inline
+  // formatting; author/date stay plain strings (rendered via textContent).
+  for (const raw of flattenBody(body).split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     const m = line.match(/^([a-zA-Z][\w-]*)\s*:\s*(.*)$/);
     if (!m) continue;
     const key = m[1]!.toLowerCase();
     const value = resolveMetaValue(m[2]!);
-    if (key === "title" || key === "author" || key === "date") meta[key] = value;
+    if (key === "title") meta.title = buildTitle(value);
+    else if (key === "author" || key === "date") meta[key] = value;
     else if (key === "theme" && (value === "light" || value === "dark")) meta.theme = value;
     else if (key === "show-slide-total") meta.showSlideTotal = /^(on|true|yes|1)$/i.test(value);
   }
+}
+
+// Build a title's spans from a body. Titles are always fully visible, so the
+// reveal is a constant. Leading/trailing whitespace is trimmed off the span
+// sequence (mirroring flushPara) since titles were previously `.trim()`ed.
+function buildTitle(parts: BodyPart[]): Span[];
+function buildTitle(text: string): Span[];
+function buildTitle(input: BodyPart[] | string): Span[] {
+  const parts: BodyPart[] = typeof input === "string" ? [{ kind: "text", text: input }] : input;
+  const spans: Span[] = [];
+  emitParts(spans, parts, 1);
+  const first = spans[0];
+  if (first) first.text = first.text.replace(/^\s+/, "");
+  const last = spans[spans.length - 1];
+  if (last) last.text = last.text.replace(/\s+$/, "");
+  return spans.filter(s => s.text.length > 0);
+}
+
+// Plain-text flattening of a title's spans, for error messages.
+function plainTitle(spans: Span[]): string {
+  return spans.map(s => s.text).join("");
 }
 
 // Split a text run into bold/italic-aware spans.
@@ -136,6 +185,16 @@ function emitFormattedText(target: Span[], text: string, reveal: number): void {
 function pushInlineCode(target: Span[], text: string, reveal: number) {
   if (text.length === 0) return;
   target.push({ text, reveal, code: true });
+}
+
+// Render a structured body into spans: text parts get bold/italic formatting,
+// nested quotes become inline code (their own nesting stays literal, matching
+// the old flatten-on-read behavior). Shared by titles and metadata `title`.
+function emitParts(target: Span[], parts: BodyPart[], reveal: number): void {
+  for (const p of parts) {
+    if (p.kind === "text") emitFormattedText(target, p.text, reveal);
+    else pushInlineCode(target, flattenBody(p.parts), reveal);
+  }
 }
 
 type Builder = {
@@ -320,8 +379,8 @@ export function parse(src: string): Doc {
   const meta: Doc["metadata"] = {};
   const slides: Slide[] = [];
 
-  let cur: { title: string; builder: Builder; lineBuf: LineBuf } | null = null;
-  const openSlide = (title: string) => {
+  let cur: { title: Span[]; builder: Builder; lineBuf: LineBuf } | null = null;
+  const openSlide = (title: Span[]) => {
     if (cur) closeSlide();
     cur = { title, builder: newBuilder(), lineBuf: newLineBuf() };
   };
@@ -338,8 +397,8 @@ export function parse(src: string): Doc {
   };
 
   const need = () => {
-    if (!cur) openSlide("");
-    return cur as { title: string; builder: Builder; lineBuf: LineBuf };
+    if (!cur) openSlide([]);
+    return cur as { title: Span[]; builder: Builder; lineBuf: LineBuf };
   };
 
   const flushLine = () => {
@@ -356,7 +415,7 @@ export function parse(src: string): Doc {
     }
     if (tok.kind === "inlineCode") {
       const c = need();
-      emitInlineCode(c.builder, c.lineBuf, tok.text);
+      emitInlineCode(c.builder, c.lineBuf, flattenBody(tok.parts));
       continue;
     }
     // cmd
@@ -365,8 +424,7 @@ export function parse(src: string): Doc {
       continue;
     }
     if (tok.name === "slide") {
-      const title = (tok.body ?? "").trim();
-      openSlide(title);
+      openSlide(buildTitle(tok.body ?? []));
       continue;
     }
     if (tok.name === "pause") {
@@ -384,9 +442,9 @@ export function parse(src: string): Doc {
       flushAll(c.builder);
       const hasCode = c.builder.blocks.some(b => b.kind === "code");
       if (hasCode) {
-        throw new Error(`slide "${c.title}" has more than one [code] block (only one allowed per slide)`);
+        throw new Error(`slide "${plainTitle(c.title)}" has more than one [code] block (only one allowed per slide)`);
       }
-      const { segments, addedPauses } = parseCodeBody(tok.body ?? "");
+      const { segments, addedPauses } = parseCodeBody(flattenBody(tok.body ?? []));
       if (segments.length > 0) {
         segments[0]!.text = segments[0]!.text.replace(/^\n/, "");
         const last = segments[segments.length - 1]!;
@@ -409,10 +467,12 @@ export function parse(src: string): Doc {
         c.lineBuf = newLineBuf();
       }
       flushAll(c.builder);
-      const body = tok.body ?? "";
-      if (body.includes("[%") || body.includes("%]")) {
-        throw new Error(`[svg] body in slide "${c.title}" may not contain nested [% or %]`);
+      // A nested `[% %]` inside the svg body becomes a quote part; svg bodies
+      // must stay flat (the source-splice logic indexes raw offsets).
+      if ((tok.body ?? []).some(p => p.kind === "quote")) {
+        throw new Error(`[svg] body in slide "${plainTitle(c.title)}" may not contain nested [% or %]`);
       }
+      const body = flattenBody(tok.body ?? []);
       const dynamic = (tok.opts ?? []).includes("dynamic-svg");
       c.builder.blocks.push({
         kind: "svg",
@@ -432,7 +492,7 @@ export function parse(src: string): Doc {
   }
   closeSlide();
 
-  while (slides.length > 0 && slides[0]!.title === "" && slides[0]!.blocks.length === 0) {
+  while (slides.length > 0 && slides[0]!.title.length === 0 && slides[0]!.blocks.length === 0) {
     slides.shift();
   }
 
