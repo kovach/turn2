@@ -98,4 +98,31 @@ function firstPara(blocks: Block[]): Span[] {
   assert.equal(flattenBody(parts), "a [%b [%c%]%] d");
 }
 
+// 9. `{ ... }` comments are dropped from the markup stream (incl. multi-line
+//    and nested), and may appear in titles' surrounding markup.
+{
+  const doc = parse(`[slide][%t%]\nbefore {a\nb {nested} c} after\n`);
+  assert.deepEqual(spanList(firstPara(doc.slides[0]!.blocks)), [
+    { text: "before  after" },
+  ]);
+}
+
+// 10. Braces inside a `[% %]` body are NOT comments — they belong to the
+//     program text (e.g. `#js { ... }`) and must survive verbatim.
+{
+  const doc = parse(`[slide][%t%]\n[code][% #js f() { return 1 } %]\n`);
+  const code = doc.slides[0]!.blocks.find(b => b.kind === "code");
+  assert.ok(code && code.kind === "code");
+  const joined = code.segments.map(s => s.text).join("");
+  assert.ok(joined.includes("{ return 1 }"), `braces in code body must survive, got: ${JSON.stringify(joined)}`);
+}
+
+// 11. An unterminated `{` is treated as literal text, not swallowed.
+{
+  const doc = parse(`[slide][%t%]\nkeep { this\n`);
+  assert.deepEqual(spanList(firstPara(doc.slides[0]!.blocks)), [
+    { text: "keep { this" },
+  ]);
+}
+
 console.log("pres_parse: all assertions passed");

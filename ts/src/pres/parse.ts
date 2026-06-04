@@ -14,6 +14,16 @@ function tokenize(src: string): Tok[] {
   };
 
   while (i < src.length) {
+    if (src[i] === "{") {
+      // Comment: drop `{ ... }` (nested, multi-line) from the markup stream.
+      // Only recognized here at the top level — `[% %]` bodies (code, svg,
+      // titles, inline code) are read verbatim by readQuote, so braces inside
+      // a program body are preserved. An unterminated `{` is treated as text.
+      const end = skipComment(src, i);
+      if (end === null) { textBuf += src[i++]!; continue; }
+      i = end;
+      continue;
+    }
     if (src[i] === "[" && src[i + 1] === "%") {
       // Bare body — inline code.
       const b = readQuote(src, i);
@@ -59,6 +69,20 @@ function tokenize(src: string): Tok[] {
   }
   flushText();
   return toks;
+}
+
+// Skip a `{ ... }` comment starting at `src[start]` ('{'). Braces nest, so
+// `{ a { b } c }` is fully consumed. Returns the index just past the matching
+// `}`, or null if the comment is never closed.
+function skipComment(src: string, start: number): number | null {
+  let depth = 1;
+  let i = start + 1;
+  while (i < src.length) {
+    const c = src[i++]!;
+    if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return i; }
+  }
+  return null;
 }
 
 // Recursive `[% ... %]` reader. `src[start]` is '[', `src[start+1]` is '%'.
