@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "serve": "npm run build && node dist/server.js",
     "watch": "sh watch.sh",
+    "v2": "tsx src/v2-cli.ts",
     "build:pres": "tsx src/pres/build-standalone.ts"
   },
   "keywords": [],

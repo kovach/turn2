@@ -32,6 +32,7 @@ The expansion pipeline that lowers parsed pre-expand rules into the flat post-ex
 
 **Key terms:**
 - `expand` — top-level pipeline: decompose → prune → split → filter → delta-variants
+- `expandStages` — same pipeline returning each named intermediate rule-list (`decomposed`/`split`/`filtered`/`variants`); `expand` is its `variants`. Used by the `v2-cli.ts` `--stage` dumps
 - `decomposeRule` — anchor-decomposition pass; threads SSA anchor vars and a `*chain` fingerprint, lowering each `Marker` to post-expand atoms
 - `splitRule` — slices a rule at every `Emit` into producer/consumer halves
 - delta-variants — semi-naive cloning; tags one `Match` as `delta` and sets `deltaHead`/`deltaSafeSkip`
@@ -130,6 +131,15 @@ The surface-syntax printer for hashconsed v2 terms, producing text that `parse` 
 - `tokensEq` — token-level term equality via hashcons tokens
 - `compressRefs` — share-aware DAG dump: each `Ref` body emitted once as `= V<i> (…)`
 - `renderDebugDump` — flat hashcons + db dump (preferred ad-hoc debugging tool)
+
+# print-ir.ts
+
+A DOM-free, Store-free debug renderer for the raw (un-hashconsed) IR — `Term` / `RuleAtom` / `Rule` / `Program` as produced by `parse` and the `expand` sub-stages (`print.ts` only handles hashconsed terms reached through a `Store`). Used by the `v2-cli.ts` `--stage` dumps. Output is debug-oriented (one tag-prefixed line per atom) and not guaranteed to round-trip through `parse`; it honors the same id-opacity invariant as `print.ts` (`Id`/`Ref` render as opaque handles).
+
+**Key terms:**
+- `renderTermRaw` — raw `Term` render; `Id` literals and stray `Ref`s stay opaque
+- `renderRuleAtom` — one line per atom tag, showing `Match` semi-naive constraint and `Atom` marker/weight
+- `renderRule` / `renderProgram` — `#def`/`#agg`/`#js` headers plus indented atom lines; `RenderOptions.lines` prefixes each atom with its source line (`Lnn`)
 
 # render-output.ts
 

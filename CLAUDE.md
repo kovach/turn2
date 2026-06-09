@@ -1,4 +1,4 @@
-- ts/src/v2/overview.md has an up-to-date overview of the project; but doesn't yet include the `ts/src/pres` sub-project
+- `ts/src/v2/overview.md` has an up-to-date technical overview of the project; but doesn't yet include the `ts/src/pres` sub-project
   - the "v1" code in ts/src is deprecated
 - notes/overview.md has a log of all plans that were used to create the project
 - when told to read a section like `# some task or problem`, it refers to the top of notes/overview.md.

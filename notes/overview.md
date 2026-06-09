@@ -1,3 +1,62 @@
+# CLI interface
+plan: plans/v2-cli-interface.md
+
+- add a script that provides CLI access to turn compilation/evaluation
+- include a "stage" flag that determines what stage of output to produce (after parse, after various expand steps, final program, final evaluation with db output)
+- accept input from stdin or file
+
+# 26/06/9
+installed typescript-lsp plugin
+  not sure about this
+
+# 26/06/8
+
+# bottom up aggregates
+status: beginning of sketch
+
+suppose we have a relation `p` and a subset of `p` tuples `s`
+call `s` complete for `t` if
+  - all tuples in `s` contain `t` (temporally)
+  - all tuples of `p` that contain `t` temporally are in `s`
+
+here's a plan to eagerly compute aggregate relations (bottom up):
+- whenever we insert `t` into `p`, get the complete subset for `t` (which always includes `t` itself) and compute the aggregate anchored at `t`
+
+sum { X -> Y | p X Z, q Z Y }
+
+sum { X -> Y | p X Z, count { -> N | r Z _ }, N > 0, q Z Y }
+
+
+# better aggregates
+plan: plans/v2-aggregate-comprehensions.md.
+status: paused
+
+```
++total me 2
+= ... sum( X -> Y | total X Y )           # per X, sum of Y
+
+-- nested: for location L, total value of tokens whose last loc is L
+sum( L -> Val | last( T -> L | token T, at T L ), value T Val )
+
+-- turns in which at least one card was drawn
+activate.hmm,
+count( T -> N | turn T, draw-card ), N > 0
+
+sum( L -> Val | last( T -> L | token T, at T L ), value T Val )
+
+token T, at T L, +_agg0 T L
+sum( L -> Val | _agg0 T -> L, value T Val )
+
+token T, at T L, +_agg0 T L
+_agg0 T -> L, value T Val, +_agg1 L Val
+_agg1 L -> Val
+```
+
+# 26/06/7
+- aggregation
+- show the hasse diagram
+- start thinking about garbage collection
+
 # editor auto-complete
 plan: plans/v2-editor-autocomplete.md
 
@@ -120,6 +179,8 @@ plan: plans/v2-pres-preserve-edits.md
 
 # 26/05/28
 - slide overview view?
+- primary model: switched to opus 4.8
+
 # 26/05/27
 # 26/05/26
 # 26/05/25
@@ -1279,4 +1340,4 @@ now we implement handling of the `?` `Ask` literal type, which takes user input
 - each new change appended to top
 - some lines indicate date (so, changes at or after that date appear earlier in the doc)
   - started adding inline dates at 26/05/8.
-- used sonnet 4.5 up until ~ 26/04/20, then switched to opus 4.7
+- model: used sonnet 4.5 up until ~ 26/04/20, then switched to opus 4.7

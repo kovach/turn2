@@ -35,9 +35,7 @@ activate.it.is.card:name village
   ( ~gain-action );
   ( ~gain-action )
   
-
 -- The Rest --
-
 
 #agg at _ -> last
 move It To

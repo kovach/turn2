@@ -1,6 +1,6 @@
 [metadata][%
   title: Formalizing Extensible Games with *Turn*
-  author: Scott Kovach
+  author:
   date: 2026-06-05
   theme: light
   show-slide-total: off
@@ -172,7 +172,7 @@ game, ~turn
 turn
   ( ~action-phase );
   ( ~buy-phase );
-  ( ~cleanup-phas )
+  ( ~cleanup-phas )   -- these editors are live
 %][timeline]
 
 [slide][%The now(s)%]

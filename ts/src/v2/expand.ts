@@ -12,7 +12,16 @@ import type { Atom, Span, Term } from "../types.js";
 import type { JsDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 
-export function expand(program: Program): Program {
+// The named intermediate rule-lists of the expansion pipeline, in order. The
+// CLI's `--stage` flag dumps these; `expand` returns the final `variants`.
+export interface ExpandStages {
+  decomposed: Rule[];
+  split: Rule[];
+  filtered: Rule[];
+  variants: Rule[];
+}
+
+export function expandStages(program: Program): ExpandStages {
   const decomposed = program.rules.map((r) => {
     const { rule, essential } = decomposeRule(r, program.jsDefs);
     return pruneChains(rule, essential);
@@ -22,11 +31,16 @@ export function expand(program: Program): Program {
   // Drop trailing slices with no observable effect (no Emit and no AssertLt).
   // After universal splitting, every rule but the trailing tail of an
   // emit-chain ends in an Emit; the trailing tail is pure guards/matches.
-  const kept = split.filter((r) =>
+  const filtered = split.filter((r) =>
     r.body.some((a) => a.tag === "Emit" || a.tag === "AssertLt"),
   );
   const variants: Rule[] = [];
-  for (const rule of kept) variants.push(...generateDeltaVariants(rule));
+  for (const rule of filtered) variants.push(...generateDeltaVariants(rule));
+  return { decomposed, split, filtered, variants };
+}
+
+export function expand(program: Program): Program {
+  const { variants } = expandStages(program);
   return { rules: variants, schema: program.schema, jsDefs: program.jsDefs };
 }
 
