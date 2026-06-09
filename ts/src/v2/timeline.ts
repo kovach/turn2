@@ -23,6 +23,13 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 export type Orientation = "horizontal" | "vertical";
 export type LaneMode = "compact" | "nested" | "tree";
+// "spine": moments sit on the time axis at their longest-path rank (distinct
+// incomparable moments can collapse to one x). "edges": each moment gets its
+// own column via a linear extension of the moment order, its dot is drawn on
+// the edge of one of its bars, and Hasse-cover arrows run dot to dot.
+// Horizontal-only; vertical orientation ignores it. See
+// plans/v2-timeline-edge-moments.md.
+export type MomentStyle = "spine" | "edges";
 
 // Font constants — used both for SVG <text> attributes and for
 // canvas-based width measurement so the two cannot drift apart.
@@ -30,6 +37,9 @@ const FONT_FAMILY = "monospace";
 const BAR_LABEL_PX = 11;
 const FACT_LABEL_PX = 11;
 const END_TICK_PX = 10;
+// Horizontal step a pair-arrow tail takes off a bar's right edge before it
+// turns vertical, so it clears the bar instead of running along its edge.
+const PAIR_EXIT_STEP = 8;
 
 export type Measurer = (text: string, fontPx: number) => number;
 
@@ -46,6 +56,8 @@ export interface TimelineOpts {
   hideInternal: boolean;
   orientation: Orientation;
   minColWidth: number;         // floor for per-rank-step width along the time axis
+  minFracWidth: number;        // edges variant: floor for within-rank gaps
+                               // (incomparable moments); much smaller than the step
   laneHeight: number;          // bar thickness in cross axis (horizontal) /
                                // bar width in cross axis (vertical)
   factLabelHeight: number;     // per-row gap on the fact stack
@@ -53,18 +65,21 @@ export interface TimelineOpts {
   barLabelMaxLen: number;
   margin: number;
   laneMode: LaneMode;
+  momentStyle: MomentStyle;
 }
 
 export const DEFAULT_OPTS: TimelineOpts = {
   hideInternal: true,
   orientation: "horizontal",
   minColWidth: 32,
+  minFracWidth: 12,
   laneHeight: 26,
   factLabelHeight: 16,
   factLabelMaxRows: 8,
   barLabelMaxLen: 28,
   margin: 16,
   laneMode: "tree",
+  momentStyle: "spine",
 };
 
 interface MomentNode {
@@ -120,6 +135,16 @@ export interface TimelineLayout {
   botLabelWidth: number;
   topLabelWidth: number;
   sidebar: SidebarSection[];
+  // --- edges-variant outputs (momentStyle "edges"; see MomentStyle) ---
+  // Canonical anchor per displayed moment: the (bar, side) edge its dot
+  // sits on, or null for spine placement (fact-only moments, bot, top).
+  momentAnchor: Map<number, { barIndex: number; side: "l" | "r" } | null>;
+  // Non-canonical bar edges sharing a moment — drawn as dashed vertical
+  // ties from the bar edge to the canonical dot.
+  momentTies: { tok: number; barIndex: number; side: "l" | "r" }[];
+  // Hasse cover pairs to draw as dot-to-dot arrows, minus pairs already
+  // implied by some bar's own (l, r) endpoints.
+  orderPairs: { from: number; to: number }[];
 }
 
 // --- Classification ---
@@ -252,6 +277,23 @@ export function layoutTimeline(
   rank.set(store.topTok, maxRank + 1);
   maxRank += 1;
 
+  // edges variant: give every moment its own column, but separate columns by
+  // two tiers. The longest-path `rank` above is the "step" tier (comparable
+  // moments always land on different ranks). We order moments by (rank, token)
+  // — a valid linear extension that also keeps each rank's moments contiguous —
+  // and overwrite `rank` with the column index. `colStepRank[col]` remembers
+  // the original step-rank so the width pass can floor within-rank gaps to a
+  // small fractional width and rank-boundary gaps to the full step. See
+  // plans/v2-timeline-fractional-columns.md.
+  let colStepRank: number[] | null = null;
+  if (opts.momentStyle === "edges" && opts.orientation === "horizontal") {
+    const stepRank = new Map(rank);
+    const order = [...displayed].sort((a, b) => (stepRank.get(a)! - stepRank.get(b)!) || (a - b));
+    colStepRank = order.map((u) => stepRank.get(u)!);
+    order.forEach((u, col) => rank.set(u, col));
+    maxRank = Math.max(0, order.length - 1);
+  }
+
   for (const m of moments.values()) m.rank = rank.get(m.tok)!;
 
   // `succ` is already the Hasse cover relation; reuse for arrows.
@@ -380,8 +422,14 @@ export function layoutTimeline(
   // margins, not into the per-step widths.
   const botLabelWidth = maxRank >= 1 ? measure("bot", END_TICK_PX) : 0;
   const topLabelWidth = maxRank >= 1 ? measure("top", END_TICK_PX) : 0;
+  // Floor each per-step gap. In the edges variant a gap between two columns of
+  // the same step-rank (incomparable moments) only needs the small fractional
+  // width; a gap that crosses a rank boundary gets the full step. Other modes
+  // floor every gap to the step uniformly (colStepRank is null).
   for (let r = 0; r < maxRank; r++) {
-    if (colWidths[r]! < opts.minColWidth) colWidths[r] = opts.minColWidth;
+    const floor = colStepRank !== null && colStepRank[r] === colStepRank[r + 1]
+      ? opts.minFracWidth : opts.minColWidth;
+    if (colWidths[r]! < floor) colWidths[r] = floor;
   }
 
   // Bar pass: enforce sum(colWidths[lRank..rRank-1]) >= label + pad.
@@ -399,7 +447,19 @@ export function layoutTimeline(
     const need = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
     let have = 0;
     for (let r = lR; r < rR; r++) have += colWidths[r]!;
-    if (need > have) colWidths[rR - 1]! += (need - have);
+    if (need > have) {
+      // Add the slack to the last rank-boundary gap in the span rather than
+      // the literal last gap, so a wide label doesn't shove apart two
+      // same-rank moments at a fractional gap. A bar spans l < r, so a
+      // boundary gap always exists; fall back to rR-1 if not (other modes).
+      let topUp = rR - 1;
+      if (colStepRank !== null) {
+        for (let r = rR - 1; r >= lR; r--) {
+          if (colStepRank[r] !== colStepRank[r + 1]) { topUp = r; break; }
+        }
+      }
+      colWidths[topUp]! += (need - have);
+    }
   }
 
   // Strip the helper `lRank` field used during layout.
@@ -409,7 +469,32 @@ export function layoutTimeline(
     lane: b.lane, label: b.label, full: b.full,
     startGroupRow: b.startGroupRow,
   }));
-  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, colWidths, botLabelWidth, topLabelWidth, sidebar };
+
+  // Edges-variant data (cheap; computed unconditionally to keep the layout
+  // function orientation/style-agnostic, like colWidths above).
+  // Canonical anchor = the first (bar, side) occurrence of each moment in
+  // tupleIndex order, `l` before `r`; later occurrences become dashed ties.
+  const momentAnchor = new Map<number, { barIndex: number; side: "l" | "r" } | null>();
+  const momentTies: { tok: number; barIndex: number; side: "l" | "r" }[] = [];
+  const barOrderIdx = finalBars.map((_, i) => i)
+    .sort((a, b) => finalBars[a]!.tupleIndex - finalBars[b]!.tupleIndex);
+  for (const i of barOrderIdx) {
+    const b = finalBars[i]!;
+    for (const side of ["l", "r"] as const) {
+      const tok = side === "l" ? b.lTok : b.rTok;
+      if (momentAnchor.has(tok)) momentTies.push({ tok, barIndex: i, side });
+      else momentAnchor.set(tok, { barIndex: i, side });
+    }
+  }
+  for (const tok of moments.keys()) {
+    if (!momentAnchor.has(tok)) momentAnchor.set(tok, null);
+  }
+  // Hasse covers minus pairs a bar already shows as its own endpoints.
+  const barPairs = new Set<string>();
+  for (const b of finalBars) barPairs.add(`${b.lTok},${b.rTok}`);
+  const orderPairs = edges.filter((e) => !barPairs.has(`${e.from},${e.to}`));
+
+  return { moments, bars: finalBars, facts, edges, laneCount, factRowCount, maxRank, maxStartGroupSize, colWidths, botLabelWidth, topLabelWidth, sidebar, momentAnchor, momentTies, orderPairs };
 }
 
 function truncate(s: string, n: number): string {
@@ -635,6 +720,40 @@ interface Projector {
   factLabelPos(rank: number, row: number): { x: number; y: number };
   // Bot/top tick label position + text-anchor.
   endTickPos(rank: number, which: "bot" | "top"): { x: number; y: number; anchor: "start" | "middle" | "end" };
+  // edges variant: dot position on a bar's edge (bar spans rankL..rankR at
+  // `lane`; `side` picks which edge).
+  momentAnchorPos(rankL: number, rankR: number, lane: number, side: "l" | "r"): { x: number; y: number };
+  // edges variant: orthogonal arrow path between two anchor points, routed
+  // around the given bar rectangles using only right/up/down segments.
+  // `fromRight` means the tail leaves a bar's right edge, in which case it
+  // steps right off the edge first so it doesn't hug the bar.
+  pairArrowPath(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    obstacles: { x: number; y: number; w: number; h: number }[],
+    fromRight: boolean,
+  ): string;
+}
+
+// Liang-Barsky: does the segment a→b pass through the interior of rect r?
+// Boundary grazing (a clip interval of measure ~0) does not count, so lines
+// running exactly along a bar's edge are not treated as overlapping it.
+function segIntersectsRect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  r: { x: number; y: number; w: number; h: number },
+): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const p = [-dx, dx, -dy, dy];
+  const q = [a.x - r.x, r.x + r.w - a.x, a.y - r.y, r.y + r.h - a.y];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) { if (q[i]! < 0) return false; continue; }
+    const t = q[i]! / p[i]!;
+    if (p[i]! < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+    else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return t1 - t0 > 1e-6;
 }
 
 function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
@@ -683,6 +802,58 @@ function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
       endTickPos: (_rank, which) => which === "bot"
         ? { x: xOf(0) - END_LABEL_GAP, y: spineY + 4, anchor: "end" }
         : { x: xOf(maxRank) + END_LABEL_GAP, y: spineY + 4, anchor: "start" },
+      momentAnchorPos: (rL, rR, lane, side) => ({
+        x: xOf(side === "l" ? rL : rR),
+        y: spineY - (lane + 1) * laneHeight - barInset + barH / 2,
+      }),
+      // Orthogonal routing — every segment runs right, up, or down (never
+      // diagonal, never left; `to` is always in a later column than `from`).
+      // When leaving a right edge, the tail first steps right off the edge so
+      // it clears the bar it exits. Among candidate Manhattan routes (simple
+      // L-bends and, if those are blocked, a corridor above the bars or
+      // through the lane/spine gap) we pick the one crossing the fewest bars,
+      // breaking ties by fewest turns, then smallest vertical travel — so a
+      // clean one-bend route never gains a redundant jog.
+      pairArrowPath: (a, b, obstacles, fromRight) => {
+        const ax = Math.min(a.x + (fromRight ? PAIR_EXIT_STEP : 0), b.x);
+        const aStep = { x: ax, y: a.y };
+        const aboveY = Math.max(4, Math.min(a.y, b.y, ...obstacles.map((r) => r.y)) - 6);
+        const belowY = spineY - barInset;
+        // Each route is the full point list from the dot to the target; the
+        // leading step to `aStep` collapses into the first segment when it is
+        // also horizontal, so routes that turn right first stay single-bend.
+        const routes = [
+          [a, aStep, { x: b.x, y: a.y }, b],                          // right, then up/down
+          [a, aStep, { x: ax, y: b.y }, b],                           // up/down at ax, then right
+          [a, aStep, { x: ax, y: aboveY }, { x: b.x, y: aboveY }, b], // corridor above the bars
+          [a, aStep, { x: ax, y: belowY }, { x: b.x, y: belowY }, b], // corridor below the bars
+        ];
+        // Drop the zero-length leading step (when not exiting a right edge)
+        // and any other coincident points so turn counts stay honest.
+        const clean = (pts: { x: number; y: number }[]) =>
+          pts.filter((p, i) => i === 0 || p.x !== pts[i - 1]!.x || p.y !== pts[i - 1]!.y);
+        const dir = (p: { x: number; y: number }, q: { x: number; y: number }) =>
+          `${Math.sign(q.x - p.x)},${Math.sign(q.y - p.y)}`;
+        const cost = (pts: { x: number; y: number }[]): [number, number, number] => {
+          let crossings = 0, turns = 0, travel = 0;
+          for (let i = 0; i < pts.length - 1; i++) {
+            for (const r of obstacles) if (segIntersectsRect(pts[i]!, pts[i + 1]!, r)) crossings++;
+            travel += Math.abs(pts[i + 1]!.y - pts[i]!.y);
+            if (i > 0 && dir(pts[i - 1]!, pts[i]!) !== dir(pts[i]!, pts[i + 1]!)) turns++;
+          }
+          return [crossings, turns, travel];
+        };
+        let best = clean(routes[0]!), bestCost = cost(best);
+        for (const r of routes.slice(1)) {
+          const pts = clean(r), c = cost(pts);
+          if (c[0] < bestCost[0]
+            || (c[0] === bestCost[0] && (c[1] < bestCost[1]
+              || (c[1] === bestCost[1] && c[2] < bestCost[2])))) {
+            best = pts; bestCost = c;
+          }
+        }
+        return `M ${best[0]!.x} ${best[0]!.y} ` + best.slice(1).map((p) => `L ${p.x} ${p.y}`).join(" ");
+      },
     };
   }
 
@@ -734,6 +905,10 @@ function makeProjector(opts: TimelineOpts, layout: TimelineLayout): Projector {
       y: which === "bot" ? yOf(rank) - 6 : yOf(rank) + 14,
       anchor: "middle",
     }),
+    // edges mode is horizontal-only; these spine-level fallbacks are never
+    // exercised but keep the projector interface total.
+    momentAnchorPos: (rL, rR, _lane, side) => ({ x: spineX, y: yOf(side === "l" ? rL : rR) }),
+    pairArrowPath: (a, b, _obstacles, _fromRight) => `M ${a.x} ${a.y} L ${b.x} ${b.y}`,
   };
 }
 
@@ -827,7 +1002,25 @@ export function renderTimeline(
   defs.appendChild(marker);
   svg.appendChild(defs);
 
-  // Hasse edges.
+  // edges mode draws bars first (dots sit on bar edges), then ties and
+  // dot-to-dot cover arrows; spine mode keeps the original spine order.
+  const edgesMode = o.momentStyle === "edges" && o.orientation === "horizontal";
+
+  // Canonical dot position for a moment: its anchor bar's edge, or the
+  // spine position for bar-less moments (fact-only, bot, top).
+  const anchorPoint = (tok: number): { x: number; y: number } => {
+    const a = layout.momentAnchor.get(tok);
+    if (a !== null && a !== undefined) {
+      const b = layout.bars[a.barIndex]!;
+      const lR = layout.moments.get(b.lTok)!.rank;
+      const rR = layout.moments.get(b.rTok)!.rank;
+      return proj.momentAnchorPos(lR, rR, b.lane, a.side);
+    }
+    return proj.momentPos(layout.moments.get(tok)!.rank);
+  };
+
+  // Hasse edges along the spine (spine mode).
+  const drawHasseEdges = (): void => {
   for (const e of layout.edges) {
     const fromM = layout.moments.get(e.from)!;
     const toM = layout.moments.get(e.to)!;
@@ -842,12 +1035,54 @@ export function renderTimeline(
     line.setAttribute("marker-end", "url(#tl-arrow)");
     svg.appendChild(line);
   }
+  };
+
+  // Dot-to-dot cover arrows (edges mode), routed around the bar rects.
+  const drawPairArrows = (): void => {
+    const barRects = layout.bars.map((b) => proj.barRect(
+      layout.moments.get(b.lTok)!.rank,
+      layout.moments.get(b.rTok)!.rank,
+      b.lane,
+    ));
+    for (const p of layout.orderPairs) {
+      const path = document.createElementNS(SVG_NS, "path");
+      const fromRight = layout.momentAnchor.get(p.from)?.side === "r";
+      path.setAttribute("d", proj.pairArrowPath(anchorPoint(p.from), anchorPoint(p.to), barRects, fromRight));
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#666");
+      path.setAttribute("stroke-width", "1");
+      path.setAttribute("marker-end", "url(#tl-arrow)");
+      svg.appendChild(path);
+    }
+  };
+
+  // Dashed vertical ties from non-canonical bar edges to the canonical dot
+  // (edges mode). Both ends share the moment's column, so ties are vertical.
+  const drawTies = (): void => {
+    for (const t of layout.momentTies) {
+      const b = layout.bars[t.barIndex]!;
+      const lR = layout.moments.get(b.lTok)!.rank;
+      const rR = layout.moments.get(b.rTok)!.rank;
+      const e = proj.momentAnchorPos(lR, rR, b.lane, t.side);
+      const c = anchorPoint(t.tok);
+      const line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("x1", String(e.x));
+      line.setAttribute("y1", String(e.y));
+      line.setAttribute("x2", String(c.x));
+      line.setAttribute("y2", String(c.y));
+      line.setAttribute("stroke", "#4fc1ff");
+      line.setAttribute("stroke-width", "1");
+      line.setAttribute("stroke-dasharray", "2,3");
+      svg.appendChild(line);
+    }
+  };
 
   // Moment dots + bot/top labels.
+  const drawMoments = (): void => {
   for (const m of layout.moments.values()) {
     const isBot = m.tok === store.botTok;
     const isTop = m.tok === store.topTok;
-    const p = proj.momentPos(m.rank);
+    const p = edgesMode ? anchorPoint(m.tok) : proj.momentPos(m.rank);
     const dot = document.createElementNS(SVG_NS, "circle");
     dot.setAttribute("cx", String(p.x));
     dot.setAttribute("cy", String(p.y));
@@ -870,8 +1105,10 @@ export function renderTimeline(
       svg.appendChild(txt);
     }
   }
+  };
 
   // Episode bars.
+  const drawBars = (): void => {
   for (const b of layout.bars) {
     const lM = layout.moments.get(b.lTok)!;
     const rM = layout.moments.get(b.rTok)!;
@@ -899,6 +1136,20 @@ export function renderTimeline(
     if (o.orientation === "vertical") label.setAttribute("text-anchor", "middle");
     label.textContent = b.label;
     svg.appendChild(label);
+  }
+  };
+
+  if (edgesMode) {
+    // Arrows first so bars paint over them: an interval covers a cover-edge
+    // where they cross. Ties and dots stay on top of the bars.
+    drawPairArrows();
+    drawBars();
+    drawTies();
+    drawMoments();
+  } else {
+    drawHasseEdges();
+    drawMoments();
+    drawBars();
   }
 
   // Fact stubs + labels (bucketed by rank so stub is drawn once per column).

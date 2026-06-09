@@ -1,3 +1,11 @@
+# timeline: edge-anchored moments + pairwise arrows
+plan: plans/v2-timeline-edge-moments.md
+
+- new horizontal timeline variant: moment dots sit at the left/right edges of interval bars inside the diagram (not on the spine), and arrows are drawn between each pair of moments
+- shows ordering info the current view loses when distinct moments collapse to the same rank
+
+decided: Hasse covers only; suppress arrows implied by a bar's own endpoints; interval-aware arrow routing (straight when clear, corridor detours around bars); horizontal orientation only; each distinct moment gets its own horizontal position (linear extension replaces ranks); one canonical dot per moment (arbitrary bar edge), dashed vertical ties to other bars sharing the moment
+
 # clean up v1
 plan: plans/v1-cleanup.md
 

@@ -187,18 +187,19 @@ UI glue that renders a store into a DOM host as either a syntax-highlighted tupl
 
 **Key terms:**
 - `renderTuples` — tuple-listing renderer (grouped by head or temporally ordered) into HTML spans with source-line attributes
-- `renderTimelineH` — horizontal timeline view (delegates to `timeline.ts`)
+- `renderTimelineH` — horizontal timeline view (delegates to `timeline.ts`; `momentStyle` spine|edges variant, defaulting to edges)
 - `temporalOrder` — orders tuples by longest-path depth via `lessThan`
 - `hideInternal` / `temporal` — view options (hide `_`-prefixed internal rows; temporal vs. grouped)
 
 # timeline.ts
 
-Renders a v2 store as a timeline visualization (SVG or ASCII): moments are laid out along a time axis using a Hasse-reduced partial order, episode (`~`) tuples become labeled bars stacked in lanes, fact (`+`) tuples become lines + labels, and `is`/`constrain` rows are pulled into a sidebar. The layout pass is orientation-agnostic and is then mapped to pixels by a projector supporting horizontal and vertical orientations plus three lane-packing strategies.
+Renders a v2 store as a timeline visualization (SVG or ASCII): moments are laid out along a time axis using a Hasse-reduced partial order, episode (`~`) tuples become labeled bars stacked in lanes, fact (`+`) tuples become lines + labels, and `is`/`constrain` rows are pulled into a sidebar. The layout pass is orientation-agnostic and is then mapped to pixels by a projector supporting horizontal and vertical orientations plus three lane-packing strategies. A horizontal-only `MomentStyle` "edges" variant (plans/v2-timeline-edge-moments.md) gives each moment its own column, but with two-tier spacing (plans/v2-timeline-fractional-columns.md): columns are ordered by (longest-path rank, token), and per-step gaps are floored to the full step (`minColWidth`) across a rank boundary but only to a small fractional width (`minFracWidth`) between same-rank — necessarily incomparable — moments, so comparable moments stay a step apart while incomparable ones cluster tightly. It draws each moment's dot on a canonical bar edge (dashed vertical ties to other bars sharing the moment), and replaces spine arrows with orthogonal dot-to-dot cover arrows (right/up/down only, routed around bars by fewest crossings then fewest turns), suppressing pairs a bar already shows as its own endpoints.
 
 **Key terms:**
 - `renderTimeline` — builds the SVG (Hasse arrows, moment dots, episode bars, fact stubs) + sidebar; used by render-output
 - `layoutTimeline` — orientation-agnostic layout: ranks moments by Hasse-reduced order, classifies tuples, packs lanes
-- `Orientation` / `LaneMode` — horizontal|vertical axis; compact|nested|tree bar-packing strategy
+- `Orientation` / `LaneMode` / `MomentStyle` — horizontal|vertical axis; compact|nested|tree bar-packing; spine|edges moment placement
+- `momentAnchor` / `momentTies` / `orderPairs` — edges-variant layout outputs: canonical dot per moment, dashed ties, drawn cover pairs
 - `renderTimelineAscii` — headless text rendering (no DOM/canvas)
 - episode (`~`) bars / fact (`+`) lines — the two tuple classes laid out; `is`/`_constrain` rows go to a sidebar
 

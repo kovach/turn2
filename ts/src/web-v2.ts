@@ -67,6 +67,8 @@ const orientVEl = document.getElementById("timeline-orient-v") as HTMLButtonElem
 const laneCompactEl = document.getElementById("timeline-lane-compact") as HTMLButtonElement;
 const laneNestedEl = document.getElementById("timeline-lane-nested") as HTMLButtonElement;
 const laneTreeEl = document.getElementById("timeline-lane-tree") as HTMLButtonElement;
+const momentSpineEl = document.getElementById("timeline-moment-spine") as HTMLButtonElement;
+const momentEdgesEl = document.getElementById("timeline-moment-edges") as HTMLButtonElement;
 
 const GAS = 100;
 const TUPLE_GAS = 3000;
@@ -274,11 +276,25 @@ function refreshLaneButtons(): void {
 }
 refreshLaneButtons();
 
+const MOMENT_KEY = "v2-timeline-moment-style";
+let timelineMomentStyle: "spine" | "edges" = "edges";
+try {
+  const v = sessionStorage.getItem(MOMENT_KEY);
+  if (v === "spine" || v === "edges") timelineMomentStyle = v;
+} catch { /* ignore */ }
+
+function refreshMomentButtons(): void {
+  momentSpineEl.classList.toggle("active", timelineMomentStyle === "spine");
+  momentEdgesEl.classList.toggle("active", timelineMomentStyle === "edges");
+}
+refreshMomentButtons();
+
 function renderTimelineTab(store: Store): void {
   const out = renderTimeline(store, {
     hideInternal: hideInternalEl.checked,
     orientation: timelineOrient,
     laneMode: timelineLaneMode,
+    momentStyle: timelineMomentStyle,
   });
   timelineMainEl.replaceChildren(out.main);
   timelineSidebarEl.replaceChildren(out.sidebar);
@@ -306,6 +322,16 @@ function setLaneMode(m: "compact" | "nested" | "tree"): void {
 laneCompactEl.addEventListener("click", () => setLaneMode("compact"));
 laneNestedEl.addEventListener("click", () => setLaneMode("nested"));
 laneTreeEl.addEventListener("click", () => setLaneMode("tree"));
+
+function setMomentStyle(s: "spine" | "edges"): void {
+  if (timelineMomentStyle === s) return;
+  timelineMomentStyle = s;
+  refreshMomentButtons();
+  try { sessionStorage.setItem(MOMENT_KEY, s); } catch { /* ignore */ }
+  if (lastStore !== null) renderTimelineTab(lastStore);
+}
+momentSpineEl.addEventListener("click", () => setMomentStyle("spine"));
+momentEdgesEl.addEventListener("click", () => setMomentStyle("edges"));
 
 const TAB_KEY = "v2-active-tab";
 function setActiveTab(name: "editor" | "timeline"): void {

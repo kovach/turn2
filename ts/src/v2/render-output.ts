@@ -11,6 +11,7 @@ export interface TuplesOptions {
 
 export interface TimelineOptions {
   hideInternal?: boolean;
+  momentStyle?: "spine" | "edges";
 }
 
 function escapeHtml(s: string): string {
@@ -150,6 +151,6 @@ export function renderTuples(host: HTMLElement, store: Store, opts: TuplesOption
 }
 
 export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineOptions = {}): void {
-  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal", laneMode: "tree" });
+  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal", laneMode: "tree", momentStyle: opts.momentStyle ?? "edges" });
   host.replaceChildren(out.main);
 }

@@ -41,7 +41,7 @@ activate.it.is.card:name village
 move It To
   +at It -> To
 
-~ game
+~game
   (~setup);
   (~turn .(^actor you))
 
