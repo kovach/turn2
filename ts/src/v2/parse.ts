@@ -4,9 +4,9 @@
 // the token stream into rules + schema). Hashconsing is *not* applied here —
 // callers run terms through hashcons after parsing.
 
-import type { Atom, Term, Span } from "../types.js";
+import type { Atom, Term, Span } from "./term.js";
 import type { JsDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
-import { aggregators } from "../aggregators.js";
+import { aggregators } from "./aggregators.js";
 
 export interface ParseError {
   line: number;

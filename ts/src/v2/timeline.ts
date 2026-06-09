@@ -14,7 +14,7 @@
 // `is` rows and `constrain` (`!`) rows are pulled out to the sidebar.
 // See plans/v2-timeline-view.md and plans/v2-timeline-orientation.md.
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
 import { tokenOf } from "./store.js";
 import { renderAtomShallow, renderTermShallow } from "./print.js";

@@ -5,7 +5,7 @@
 // module owns the data: which symbols/variables are candidates, and how a
 // partial token ranks them.
 
-import type { Term } from "../types.js";
+import type { Term } from "./term.js";
 import type { Program, Rule, RuleAtom } from "./types.js";
 import { isSymbolToken, isVariableToken, parse, tokenize, tokenizeTermText } from "./parse.js";
 

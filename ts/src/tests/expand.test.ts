@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { idExpand, expand, expandAll, rewriteUnboundAssertVars } from "../expand.js";
-import { parse, parsePatterns } from "../parse.js";
-import { fixpoint } from "../fixpoint.js";
-import type { BodyTree, Term, Tree } from "../types.js";
-import { treeAtomTerms, treeChildren } from "../types.js";
+import { idExpand, expand, expandAll, rewriteUnboundAssertVars } from "../v1/expand.js";
+import { parse, parsePatterns } from "../v1/parse.js";
+import { fixpoint } from "../v1/fixpoint.js";
+import type { BodyTree, Term, Tree } from "../v1/types.js";
+import { treeAtomTerms, treeChildren } from "../v1/types.js";
 
 function parseOne(input: string): BodyTree {
   const result = parse(input);

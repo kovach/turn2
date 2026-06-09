@@ -22,8 +22,8 @@
 // human-readable label (e.g. originating rule var name) without walking
 // the id body.
 
-import type { Atom, Term } from "../types.js";
-import { expandTerm, refTagOf } from "../hashcons.js";
+import type { Atom, Term } from "./term.js";
+import { expandTerm, refTagOf } from "./hashcons.js";
 import { tokenOf, type Store } from "./store.js";
 
 // Token-level equality: two terms are equal iff their hashcons tokens agree.

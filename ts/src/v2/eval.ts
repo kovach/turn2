@@ -10,10 +10,10 @@
 // by explicit IR atoms emitted at expand time. The evaluator is a flat
 // dispatch over Match / Emit / Le / AssertLt / Max / Min / Equal.
 
-import type { Atom, Term, Trail } from "../types.js";
-import { newTrail, trailLength, trailUnwind } from "../types.js";
-import { substAtom, substTerm, unifyAtoms, unifyTerms } from "../unify.js";
-import type { HashconsState } from "../hashcons.js";
+import type { Atom, Term, Trail } from "./term.js";
+import { newTrail, trailLength, trailUnwind } from "./term.js";
+import { substAtom, substTerm, unifyAtoms, unifyTerms } from "./unify.js";
+import type { HashconsState } from "./hashcons.js";
 import type { JsDef, Rule, RuleAtom } from "./types.js";
 import {
   addOrder,

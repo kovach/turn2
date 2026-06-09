@@ -9,7 +9,7 @@
 // `const` so V8 can dead-code-eliminate the unused branch.
 export const ORDER_STRATEGY: "old" | "eager" = "old";
 
-import type { Atom, Span, Term } from "../types.js";
+import type { Atom, Span, Term } from "./term.js";
 import type { Tuple } from "./types.js";
 import {
   createHashcons,
@@ -17,7 +17,7 @@ import {
   hashconsTerm,
   tokenOfId,
   type HashconsState,
-} from "../hashcons.js";
+} from "./hashcons.js";
 import { createTracker, getOrCreateHead, type StatsTracker } from "./stats.js";
 
 export interface Store {

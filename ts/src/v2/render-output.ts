@@ -1,5 +1,5 @@
-import type { Term } from "../types.js";
-import { refTagOf } from "../hashcons.js";
+import type { Term } from "./term.js";
+import { refTagOf } from "./hashcons.js";
 import { renderTermShallow } from "./print.js";
 import { lessThan, type Store } from "./store.js";
 import { renderTimeline } from "./timeline.js";

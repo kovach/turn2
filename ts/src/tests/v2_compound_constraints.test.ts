@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { parse } from "../v2/parse.js";
 import { expand } from "../v2/expand.js";
 import { runFixpoint } from "../v2/fixpoint.js";
-import type { Atom, Term } from "../types.js";
+import type { Atom, Term } from "../v2/term.js";
 import type { Store } from "../v2/store.js";
-import { expandTerm } from "../hashcons.js";
+import { expandTerm } from "../v2/hashcons.js";
 
 function ok(input: string) {
   const p = parse(input);

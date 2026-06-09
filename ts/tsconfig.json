@@ -43,5 +43,5 @@
 
     "moduleResolution": "nodenext",
   },
-  "exclude": ["src/web.ts", "dist"]
+  "exclude": ["src/v1/web.ts", "dist"]
 }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { parse } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
-import type { Atom, Term } from "../types.js";
-import { expandTerm } from "../hashcons.js";
+import type { Atom, Term } from "../v2/term.js";
+import { expandTerm } from "../v2/hashcons.js";
 import type { Store } from "../v2/store.js";
 import type { Program } from "../v2/types.js";
 

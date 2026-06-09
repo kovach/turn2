@@ -12,7 +12,7 @@
 //     `Max`, `Min`, `Equal`. Anchor manipulation is now explicit IR; the
 //     evaluator is a flat dispatch over these primitives.
 
-import type { Atom, Term, Span } from "../types.js";
+import type { Atom, Term, Span } from "./term.js";
 
 // Semi-naive evaluation tag on `Match` atoms. Set by the delta-variant pass:
 // each rule is cloned once per match position, and within one variant

@@ -24,14 +24,9 @@
   ! spirit:land A S
 
 - target
-  - ok source
-  - ok target
-  + ok
-
-- target
   - target T
   ! land T
 
-- target
+ target
   ? S
   ? T

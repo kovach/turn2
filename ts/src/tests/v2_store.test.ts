@@ -10,7 +10,7 @@ import {
   leastUpperBound,
   lessThan,
 } from "../v2/store.js";
-import type { Term } from "../types.js";
+import type { Term } from "../v2/term.js";
 
 function sym(name: string): Term { return { tag: "Symbol", name }; }
 

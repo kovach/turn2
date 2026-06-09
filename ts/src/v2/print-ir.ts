@@ -12,7 +12,7 @@
 // moment tree; the raw-IR templates here are finite, and any stray `Ref`
 // still renders as an opaque `*n` handle, so nothing unfolds unboundedly.
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Term } from "./term.js";
 import type { Program, Rule, RuleAtom } from "./types.js";
 
 export function renderTermRaw(term: Term): string {

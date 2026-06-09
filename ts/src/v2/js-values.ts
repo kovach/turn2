@@ -10,8 +10,8 @@
 // Keep this the single place that knows the mapping; the future nat-syntax
 // feature (plans/v2-nat-syntax.md) refines the numeric cases here.
 
-import type { Term } from "../types.js";
-import { refTagOf, type HashconsState } from "../hashcons.js";
+import type { Term } from "./term.js";
+import { refTagOf, type HashconsState } from "./hashcons.js";
 
 // Decode a ground Term to a JS value. Needs the hashcons store to expand Refs
 // (hashconsed compounds bound by an earlier match).

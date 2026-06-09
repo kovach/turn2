@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../v2/parse.js";
 import type { Program, Rule, RuleAtom } from "../v2/types.js";
-import type { Term } from "../types.js";
+import type { Term } from "../v2/term.js";
 
 // Alpha-equivalence over parser-output rule bodies: same structure
 // up to a consistent bijection on Variable names. Symbols, Wildcards,

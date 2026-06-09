@@ -8,21 +8,21 @@
 // plans/order-robust-unifier.md §"Differential testing".
 
 import assert from "node:assert/strict";
-import { parsePatterns } from "../parse.js";
-import { expandAll } from "../expand.js";
-import { lower } from "../lower.js";
-import { newTrail, trailLookup, type MatchingConstraint, type Term } from "../types.js";
-import { unifyConstraints, collectMatches } from "../unify.js";
-import { createHashcons, hashconsAtom, hashconsTerm } from "../hashcons.js";
+import { parsePatterns } from "../v1/parse.js";
+import { expandAll } from "../v1/expand.js";
+import { lower } from "../v1/lower.js";
+import { newTrail, trailLookup, type MatchingConstraint, type Term } from "../v1/types.js";
+import { unifyConstraints, collectMatches } from "../v1/unify.js";
+import { createHashcons, hashconsAtom, hashconsTerm } from "../v1/hashcons.js";
 import {
   emptyRefStore,
   insertRow,
   addParentChild,
   addBeforeAfter,
   type NodeRow,
-} from "../refstore.js";
-import { sym } from "../types.js";
-import type { Tree } from "../types.js";
+} from "../v1/refstore.js";
+import { sym } from "../v1/types.js";
+import type { Tree } from "../v1/types.js";
 
 // --- Tiny deterministic PRNG (mulberry32) ---
 function mulberry32(seed: number) {

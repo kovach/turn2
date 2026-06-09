@@ -19,7 +19,7 @@
 // objects, so structural unification on idTpl still recovers chain Vars —
 // just minus the redundant ones.
 
-import type { Term } from "../types.js";
+import type { Term } from "./term.js";
 import type { Rule, RuleAtom } from "./types.js";
 
 // Recursively rewrite a term: chain Variables inside any `*chain`-headed

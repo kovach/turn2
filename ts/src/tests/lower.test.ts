@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { lower } from "../lower.js";
-import { sym, vari } from "../types.js";
-import type { Constraint, Tree } from "../types.js";
+import { lower } from "../v1/lower.js";
+import { sym, vari } from "../v1/types.js";
+import type { Constraint, Tree } from "../v1/types.js";
 
 // Helpers
 const matchNode = (id: ReturnType<typeof sym>, head: string, children: Tree[] = []): Tree => ({

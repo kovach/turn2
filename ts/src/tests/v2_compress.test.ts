@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { parse } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
 import { compressRefs } from "../v2/print.js";
-import { hashconsTerm } from "../hashcons.js";
-import type { Term } from "../types.js";
+import { hashconsTerm } from "../v2/hashcons.js";
+import type { Term } from "../v2/term.js";
 
-function tupleRef(store: import("../v2/store.js").Store, atomVal: import("../types.js").Atom): Term {
+function tupleRef(store: import("../v2/store.js").Store, atomVal: import("../v2/term.js").Atom): Term {
   // Re-hashcons the row's atom to obtain its stable Ref. addTuple stores
   // the original Atom object on the Tuple; refToAtom holds canonical
   // copies. Going through hashconsTerm gives us the canonical Ref.

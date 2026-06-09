@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { fixpoint } from "../fixpoint.js";
-import { parsePatterns } from "../parse.js";
-import type { BodyTree, Tree } from "../types.js";
-import { treeAtomTerms, treeChildren } from "../types.js";
+import { fixpoint } from "../v1/fixpoint.js";
+import { parsePatterns } from "../v1/parse.js";
+import type { BodyTree, Tree } from "../v1/types.js";
+import { treeAtomTerms, treeChildren } from "../v1/types.js";
 
 function parseRules(input: string, prefix = "r"): Tree[] {
   const result = parsePatterns(input, [prefix]);

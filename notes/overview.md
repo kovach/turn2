@@ -1,3 +1,11 @@
+# clean up v1
+plan: plans/v1-cleanup.md
+
+goal:
+- move any deprecated "v1" code to a v1/ folder. ensure that it is complete (we could go back and run the v1 version if we wanted)
+- make the v2 free-standing; ensure that any lingering connections (e.g. the types file) are duplicated into v2
+- ensure that the main server application only accesses v2 functionality
+
 # CLI interface
 plan: plans/v2-cli-interface.md
 

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { parse, parsePatterns, formatTree } from "../parse.js";
-import { expandMacros, resetMacroCounter } from "../macros.js";
-import { fixpoint } from "../fixpoint.js";
-import type { BodyTree, Tree } from "../types.js";
-import { treeAtomTerms, treeChildren } from "../types.js";
+import { parse, parsePatterns, formatTree } from "../v1/parse.js";
+import { expandMacros, resetMacroCounter } from "../v1/macros.js";
+import { fixpoint } from "../v1/fixpoint.js";
+import type { BodyTree, Tree } from "../v1/types.js";
+import { treeAtomTerms, treeChildren } from "../v1/types.js";
 
 function parseOne(input: string): BodyTree {
   const result = parse(input);

@@ -16,9 +16,9 @@
 // Empty-fringe check: any component containing at least one active term but
 // no constrain rows is a programmer error (an unconstrained `?`).
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Term } from "./term.js";
 import type { BlockedChoose, ComponentOptions } from "./types.js";
-import { refTagOf } from "../hashcons.js";
+import { refTagOf } from "./hashcons.js";
 import {
   candidatesByHead,
   intern,

@@ -12,10 +12,10 @@ import {
   overlapsOf,
   priorOf,
   type RefStore,
-} from "../refstore.js";
-import { sym } from "../types.js";
-import { createHashcons, hashconsAtom, hashconsTerm } from "../hashcons.js";
-import type { NodeRow } from "../refstore.js";
+} from "../v1/refstore.js";
+import { sym } from "../v1/types.js";
+import { createHashcons, hashconsAtom, hashconsTerm } from "../v1/hashcons.js";
+import type { NodeRow } from "../v1/refstore.js";
 
 // Build a small store: parent P containing two children C1, C2, with a
 // `before:after(C1, C2)` edge between siblings, plus a sibling root R

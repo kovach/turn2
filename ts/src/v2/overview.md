@@ -1,4 +1,44 @@
-Summaries of each `.ts` file under `ts/src/v2/`, roughly following the compilation pipeline: **parse → expand → fixpoint eval (store) → render**.
+Summaries of each `.ts` file under `ts/src/v2/`, roughly following the compilation pipeline: **parse → expand → fixpoint eval (store) → render**. The first four files (`term.ts`, `hashcons.ts`, `unify.ts`, `aggregators.ts`) are the core term layer, duplicated from v1 so v2 is free-standing (see `plans/v1-cleanup.md`); the deprecated v1 originals live under `ts/src/v1/`.
+
+# term.ts
+
+The core term layer: the `Term`/`Atom` data types shared by every phase, source `Span`s, the `NodeId` token key space, and the substitution `Trail` (two parallel mutable arrays; bind = push, backtrack = truncate). Duplicated from the v1 `types.ts`, minus the v1-only `Tree`/`Constraint`/`TurnExpr` IRs.
+
+**Key terms:**
+- `Term` — the term algebra: `Symbol` | `Variable` | `Atom` | `Id` | `Wildcard` | `Ref`
+- `Atom` / `Span` — a term list; a 1-indexed source position
+- `NodeId` — integer key space for hashconsed terms (disjoint ranges per tag)
+- `Trail` — substitution trail: `newTrail`/`trailPush`/`trailLength`/`trailUnwind`/`trailLookup`
+- constructors — `sym`, `vari`, `ref`, `atom`, `idTerm`, `isId`
+
+# hashcons.ts
+
+The hashcons engine (duplicated from v1): a trie keyed by `NodeId` tokens interns `Atom`/`Id` bodies to integer-`Ref` terms, with disjoint sub-tries per tag so structurally identical `Atom` and `Id` bodies never collide. `store.ts` owns one `HashconsState` per `Store`.
+
+**Key terms:**
+- `HashconsState` / `createHashcons` — the trie + ref/sym/var id tables; factory reserves the `*atom*`/`*id*` sentinel tag tokens
+- `hashconsTerm` / `hashconsAtom` — intern a term (bottom-up) to a `Ref`; map an atom's terms
+- `tokenOfId` — `Term` → integer token (Ref +N, Wildcard 0, Symbol odd-negative, Variable even-negative)
+- `refTagOf` — whether a Ref's stored body was an `Atom` or an `Id`
+- `expandTerm` — inverse: unfold a `Ref` back to a structural term
+
+# unify.ts
+
+Trail-based term unification and substitution (the v1 `unify.ts` trimmed to its term layer — the TurnExpr/RefStore-driven `unifyConstraints`/`unifyTree` machinery stays in v1). Primitives never unwind the trail on failure; choice-point callers mark/unwind. Variables are never bound to raw atoms: bindings are substituted, groundness-checked, and hashconsed to `Ref`s first.
+
+**Key terms:**
+- `resolveVar` — chase variable bindings to the first non-Variable term (no descent into atoms)
+- `substTerm` / `substAtom` — full recursive substitution for materializing concrete terms
+- `unifyTerms` / `unifyAtoms` — structural unification over the trail; `Atom` vs `Id` never unify; `Ref`s unify by token or by stored body against a structural term
+- `unifyStats` / `resetUnifyStats` — cheap call counter used by perf experiments
+
+# aggregators.ts
+
+The aggregator registry (duplicated from v1): named fold definitions used by schema declarations (`#agg rel -> agg`). Each aggregator is a `zero` term plus a binary `fold`, with a commutativity flag consulted by the scheduler.
+
+**Key terms:**
+- `Aggregator` — `{ zero, fold, commutative }`
+- `aggregators` / `getAggregator` — the registry (`count`, `sum`, `last`, `bool`) and its throwing lookup
 
 # types.ts
 

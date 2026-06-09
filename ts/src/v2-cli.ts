@@ -16,7 +16,7 @@ import { renderProgram } from "./v2/print-ir.js";
 import { renderTimelineAscii } from "./v2/timeline.js";
 import { renderAtomShallow, renderTermShallow, renderDebugDump } from "./v2/print.js";
 import type { Program, Rule, RuleAtom } from "./v2/types.js";
-import type { Atom } from "./types.js";
+import type { Atom } from "./v2/term.js";
 import type { Store } from "./v2/store.js";
 
 // The pipeline stages, in order. This is the single source of truth: it drives

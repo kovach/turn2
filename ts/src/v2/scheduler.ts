@@ -4,9 +4,9 @@
 // `agg-result` rows. Knows nothing about rule continuations — paused work
 // lives entirely in the store.
 
-import type { Atom, Term } from "../types.js";
-import { hashconsTerm, refTagOf } from "../hashcons.js";
-import { getAggregator } from "../aggregators.js";
+import type { Atom, Term } from "./term.js";
+import { hashconsTerm, refTagOf } from "./hashcons.js";
+import { getAggregator } from "./aggregators.js";
 import {
   addOrder,
   addTuple,

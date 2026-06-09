@@ -9,7 +9,7 @@ import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/prin
 import { renderTimeline } from "./v2/timeline.js";
 import { renderTuples } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
-import type { Atom, Term } from "./types.js";
+import type { Atom, Term } from "./v2/term.js";
 import type { Store } from "./v2/store.js";
 import type { ComponentOptions, Rule, RuleAtom } from "./v2/types.js";
 import { createDefaultDisplay } from "./v2/default-display.js";

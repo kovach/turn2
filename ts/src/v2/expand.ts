@@ -8,7 +8,7 @@
 // `AssertLt`, `Max`, `Min`, `Equal`. Anchor manipulation that the evaluator
 // used to do implicitly is now explicit IR.
 
-import type { Atom, Span, Term } from "../types.js";
+import type { Atom, Span, Term } from "./term.js";
 import type { JsDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 

@@ -16,7 +16,7 @@
 // All click handlers commit via DisplayApi.commit; the returned `clicks`
 // map is empty since the module rebuilds its own DOM on internal events.
 
-import type { Atom, Term } from "../types.js";
+import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
 import type { ComponentOptions } from "./types.js";
 import { candidatesByHead, intervalContains, tokenOf } from "./store.js";

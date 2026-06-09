@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { parse, formatTree } from "../parse.js";
-import type { BodyTree, Tree } from "../types.js";
-import { treeAtom, treeAtomTerms, treeChildren, treeId } from "../types.js";
+import { parse, formatTree } from "../v1/parse.js";
+import type { BodyTree, Tree } from "../v1/types.js";
+import { treeAtom, treeAtomTerms, treeChildren, treeId } from "../v1/types.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -439,7 +439,7 @@ function getAggInfo(node: Tree) {
 
 // parsePatterns adjusts spans for multi-pattern files
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const input = "+ a\n  + b\n\n- a\n  + c";
   const result = parsePatterns(input);
   assert(!("message" in result));
@@ -459,7 +459,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: ': foo' bakes 'foo' into positive id atoms
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo\n+ bar");
   assert(!("message" in result));
   const patterns = result as Tree[];
@@ -481,7 +481,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: unnamed rules still get auto names (auto counter independent)
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo\n+ a\n\n+ b\n\n: bar\n+ c\n\n+ d");
   assert(!("message" in result));
   const patterns = result as Tree[];
@@ -499,7 +499,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: duplicate explicit name is an error
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo\n+ a\n\n: foo\n+ b");
   assert("message" in result);
   assert.match(result.message, /duplicate rule name 'foo'/);
@@ -509,7 +509,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: ':' not first content line is an error
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns("+ a\n: foo");
   assert("message" in result);
   console.log("PASS: ':' after content is error");
@@ -517,7 +517,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: ':' with no token
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(":\n+ a");
   assert("message" in result);
   assert.match(result.message, /requires a name token/);
@@ -526,7 +526,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: ':' with multiple tokens
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo bar\n+ a");
   assert("message" in result);
   assert.match(result.message, /exactly one name token/);
@@ -535,7 +535,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: reserved-shape names rejected
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   for (const [src, pat] of [
     [": _foo\n+ a", /reserved/],
     [": 42\n+ a", /all digits/],
@@ -550,7 +550,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: indented child under ':' is an error
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo\n  + a");
   assert("message" in result);
   assert.match(result.message, /cannot have child nodes/);
@@ -559,7 +559,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: round-trip via formatTree
 {
-  const { parsePatterns, formatTree } = await import("../parse.js");
+  const { parsePatterns, formatTree } = await import("../v1/parse.js");
   const src = ": foo\n+ a\n";
   const result = parsePatterns(src);
   assert(!("message" in result));
@@ -574,7 +574,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: comments around ':' are skipped
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   // Comments before, between, and after ':' should not interfere.
   const result = parsePatterns("/ leading comment\n: foo\n/ between\n- bar");
   assert(!("message" in result));
@@ -590,7 +590,7 @@ function getAggInfo(node: Tree) {
 
 // rule names: nameSegments parameter joins with '#'
 {
-  const { parsePatterns } = await import("../parse.js");
+  const { parsePatterns } = await import("../v1/parse.js");
   const result = parsePatterns(": foo\n+ a", ["ns1", "ns2"]);
   assert(!("message" in result));
   const patterns = result as Tree[];
