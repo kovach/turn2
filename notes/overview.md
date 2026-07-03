@@ -1,3 +1,62 @@
+# expansion refactoring using binary connectives
+plan: plans/v2-temporal-connectives.md (step 1: parity refactor)
+followed by: plans/v2-bound-set-anchors.md (step 2: commutative `,`, bound-set anchors; from plan review discussion)
+
+- idea: conceptually simplify the "anchor decomposition" stage of `expand.ts`
+- introduce new IR containing binary operators called *temporal connectives*
+- each connective performs a join over its children, but also joins their intervals to produce a new interval, depending on the connective in question
+  - `a , b`: succeeds if child intervals overlap; produces the overlap (replicates current behavior of `a, b`)
+  - `a / b`: succeeds if children overlap; produces interval of left child (replicates current behavior of `a, (b)`)
+  - `a /; b`: succeeds if children overlap; produces interval (x, y) where x is right endpoint of b, and y is right endpoint of a (replicates current behavior of `a, (b); ...`)
+- the point is this:
+  - it should be very easy to translate the pre-decomp RuleAtom IR into this IR
+  - it should be possible to then generate the post-decomp RuleAtom IR from this IR using a very simple syntax-directed recursive function. it should be somewhat simpler than the current implementation
+  - at the end of the day, we will have 3 irs for the 3 stages
+- this sketch is missing details and may be mistaken, so please review.
+
+# 26/07/2
+- revert to connective formulation?
+
+# 26/06/30
+# per-group reactive breakpoints (semi-naive materialization)
+plan: plans/v2-per-group-breakpoints.md
+
+- the scheduler pools every group's left endpoints and re-folds every group at
+  every pooled breakpoint, re-stamping unchanged groups (`_aggval at me a @ *22`
+  when `it` moved) — over-materialization
+- fix: a group's breakpoints are the join-closure of ITS OWN contributors; a new
+  source fact folds only the group it belongs to (semi-naive delta)
+- complementary to the read-snapshot plan: removes the re-stamp duplicate;
+  enclose-start + last still handle the self-read and genuine value selection
+
+# reactive read = last-read snapshot (enclose-the-start)
+plan: plans/v2-reactive-read-snapshot.md
+
+- a `#reactive` read in a rule body (`move A B, at A -> C`) over-matches: it
+  plain-joins every over-persisted `_aggval` row that *overlaps* the anchor and
+  never `last`-selects, so it reads the move's own caused `at` and later changes
+- should bind the value *as of the start* of the surrounding match (the `at`
+  row whose interval encloses `move_l`), i.e. a `last`-by-left-endpoint read
+- implements the consumption side v2-reactive-aggregates.md specified but never built
+
+# stratification analysis
+plan: plans/v2-stratification-analysis.md
+
+- for each `a, ..., ~b` add an edge from `a` to `b` marked `<`
+- for each `a, ..., +b` add an edge from `a` to `b` marked `<`
+- for each `a, ..., ^b` add an edge from `a` to `b` marked `=`
+- same for aggregation atoms
+
+this will be used to compute aggregates correctly, and possibly useful for other analyses later
+
+# 26/06/22
+
+# reactive aggregates?
+plan: plans/v2-reactive-aggregates.md
+
+# 26/06/21
+# 26/06/15
+
 # timeline: edge-anchored moments + pairwise arrows
 plan: plans/v2-timeline-edge-moments.md
 
@@ -27,25 +86,9 @@ installed typescript-lsp plugin
 
 # 26/06/8
 
-# bottom up aggregates
-status: beginning of sketch
-
-suppose we have a relation `p` and a subset of `p` tuples `s`
-call `s` complete for `t` if
-  - all tuples in `s` contain `t` (temporally)
-  - all tuples of `p` that contain `t` temporally are in `s`
-
-here's a plan to eagerly compute aggregate relations (bottom up):
-- whenever we insert `t` into `p`, get the complete subset for `t` (which always includes `t` itself) and compute the aggregate anchored at `t`
-
-sum { X -> Y | p X Z, q Z Y }
-
-sum { X -> Y | p X Z, count { -> N | r Z _ }, N > 0, q Z Y }
-
-
 # better aggregates
-plan: plans/v2-aggregate-comprehensions.md.
-status: paused
+plan: plans/v2-aggregate-comprehensions.md
+status: abandoned
 
 ```
 +total me 2
@@ -153,6 +196,7 @@ and it's called like:
 
 # `sum` weight parsing
 plan: plans/v2-sum-reject-invalid-weights.md
+status: unimplemented
 
 # relaxed editor freezing
 plan: plans/v2-relaxed-editor-freezing.md

@@ -26,7 +26,3 @@
 - target
   - target T
   ! land T
-
- target
-  ? S
-  ? T

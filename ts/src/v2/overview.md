@@ -132,12 +132,17 @@ The top-level evaluation driver. It expands a program, runs an inner loop firing
 
 The scheduler reads store contents at outer-loop quiescence to find blocked `_do-agg` and `_choose` rows, selects the earliest tier under the `prior` (interval-start) order, and closes earliest aggregates by computing aggregate values and emitting `_agg-result` rows. It also exports `aggregateOver`, the generic grouped-aggregation engine (shared with constraint-query).
 
+It additionally drives **reactive aggregates** (`#reactive rel -> agg`, see plans/v2-reactive-aggregates.md): instead of the demand-driven `_do-agg`/`_agg-result` path, a reactive relation's value is materialized eagerly into `_aggval` rows at the breakpoints where its step function can change. Materialization is **per group** (plans/v2-per-group-breakpoints.md): the source tuples are partitioned by group key, and each group's breakpoints are the join-closure of *that group's own* contributor left endpoints — so a sibling group's breakpoint never re-stamps an unchanged value. Each breakpoint folds the single group at the point `[bp, bp]` (key columns bound) and emits one `_aggval` row over `[bp, top]`; the value is resolved at read time by a `last`-by-left-endpoint selection. Breakpoints are processed earliest-first by the outer loop, which both stratifies non-monotone aggregation by moment and keeps an already-materialized breakpoint from going stale when an earlier contributor is added.
+
 **Key terms:**
 - `aggregateOver` — generic grouped aggregation: matches a `[head, keys…, weight]` pattern with `_free` wildcards and folds via the schema aggregator (`sum`/`count`/`last`); shared with constraint-query and default-display
 - `collectBlockedDoAggs` / `collectBlockedChooses` — find `_do-agg` rows lacking an `_agg-result`, and `_choose` rows with unresolved active terms
 - `selectEarliestTier` — minimal elements of the `prior` (interval-start) partial order
 - `closeDoAgg` — computes a blocked aggregate and emits its `_agg-result` rows
+- `collectReactiveFinalizations` — per-group pending reactive breakpoints (residual-keyed); `finalizeReactive` materializes one group's `_aggval` row at one breakpoint
+- `foldGroupAt` — folds a single reactive group (key bound) at a point; `joinClosure` — join-closure of a group's lefts (its breakpoint set)
 - `_free` — wildcard key position marking a group-by slot
+- `_aggval` — materialized reactive aggregate value row (`_aggval head key… value`), over-persisted to `[bp, top]`
 
 # constraint-query.ts
 

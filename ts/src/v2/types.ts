@@ -195,6 +195,9 @@ export interface Rule {
 export interface SchemaDecl {
   relation: string;
   aggregator: string; // "sum" | "count" | "last"
+  // True when declared with `#reactive` (eager breakpoint materialization)
+  // rather than `#agg` (demand-driven). See plans/v2-reactive-aggregates.md.
+  reactive?: boolean;
   span: Span;
 }
 
@@ -209,8 +212,13 @@ export interface JsDef {
 
 export interface Program {
   rules: Rule[];
-  // `relation -> aggregator` for weighted-query dispatch.
+  // `relation -> aggregator` for weighted-query dispatch. Holds entries for
+  // both `#agg` (demand-driven) and `#reactive` relations.
   schema: Map<string, string>;
+  // Relations declared `#reactive`: materialized eagerly into `_aggval` rows
+  // at breakpoints rather than via demand `_do-agg`/`_agg-result`. A subset
+  // of `schema`'s keys. See plans/v2-reactive-aggregates.md.
+  reactive: Set<string>;
   // `name -> definition` for `#js` functions.
   jsDefs: Map<string, JsDef>;
 }

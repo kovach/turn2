@@ -23,7 +23,7 @@ export interface ExpandStages {
 
 export function expandStages(program: Program): ExpandStages {
   const decomposed = program.rules.map((r) => {
-    const { rule, essential } = decomposeRule(r, program.jsDefs);
+    const { rule, essential } = decomposeRule(r, program.jsDefs, program.reactive);
     return pruneChains(rule, essential);
   });
   const split: Rule[] = [];
@@ -41,7 +41,7 @@ export function expandStages(program: Program): ExpandStages {
 
 export function expand(program: Program): Program {
   const { variants } = expandStages(program);
-  return { rules: variants, schema: program.schema, jsDefs: program.jsDefs };
+  return { rules: variants, schema: program.schema, reactive: program.reactive, jsDefs: program.jsDefs };
 }
 
 // ----- Semi-naive delta variants -----
@@ -166,6 +166,10 @@ interface DecState {
   jsDefs: Map<string, JsDef>;
   // Counter for fresh `_js_<k>` result Variables.
   jsCounter: number;
+  // Relations declared `#reactive`: their `head ... -> weight` reads lower to
+  // a plain Match of the `_aggval` value relation instead of the demand
+  // `_do-agg`/`_agg-result` pair. See plans/v2-reactive-aggregates.md.
+  reactive: Set<string>;
 }
 
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
@@ -182,11 +186,16 @@ const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
 const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
 const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
+const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
 const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
-function decomposeRule(rule: Rule, jsDefs: Map<string, JsDef>): { rule: Rule; essential: Set<string> } {
+function decomposeRule(
+  rule: Rule,
+  jsDefs: Map<string, JsDef>,
+  reactive: Set<string>,
+): { rule: Rule; essential: Set<string> } {
   const state: DecState = {
     ruleName: rule.name,
     out: [],
@@ -199,6 +208,7 @@ function decomposeRule(rule: Rule, jsDefs: Map<string, JsDef>): { rule: Rule; es
     anonExistCounter: 0,
     jsDefs,
     jsCounter: 0,
+    reactive,
   };
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
   return { rule: { ...rule, body: state.out }, essential: state.essential };
@@ -436,7 +446,11 @@ function decomposeBody(
         XL = next.XL;
         XR = next.XR;
       } else if (a.marker === "aggregate") {
-        const next = decomposeAggregate(a, state, XL, XR);
+        const head = a.atom.terms[0];
+        const isReactive = head !== undefined && head.tag === "Symbol" && state.reactive.has(head.name);
+        const next = isReactive
+          ? decomposeReactiveRead(a, state, XL, XR)
+          : decomposeAggregate(a, state, XL, XR);
         XL = next.XL;
         XR = next.XR;
       } else {
@@ -507,6 +521,33 @@ function decomposeMatch(
   for (const t of a.atom.terms) collectVarsTerm(t, state);
 
   return { XL: XLnext, XR: XRnext };
+}
+
+// Reactive read: a `#reactive head pat -> weight` consumer lowers to a plain
+// Match of the standing value relation `_aggval head pat... weight`, evaluated
+// at the running anchor like any ordinary match (overlap + intersection, then
+// semi-naive). There is no producer Emit — the `_aggval` rows are materialized
+// eagerly by the scheduler at breakpoints (see scheduler.ts/fixpoint.ts and
+// plans/v2-reactive-aggregates.md). A variable in the weight slot binds the
+// current value; a literal filters to where the value equals it.
+function decomposeReactiveRead(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  if (a.weight === undefined) {
+    throw new Error("internal: reactive read without weight");
+  }
+  // `[_aggval, head, key..., value]`. decomposeMatch appends the trailing
+  // universal id Wildcard, matching the scheduler-emitted row's id slot.
+  const matchAtom: Extract<RuleAtom, { tag: "Atom" }> = {
+    tag: "Atom",
+    marker: "match",
+    atom: { terms: [SYM_AGGVAL, ...a.atom.terms, a.weight] },
+    span: a.span,
+  };
+  return decomposeMatch(matchAtom, state, XL, XR);
 }
 
 // Aggregate: lowers `pat -> weight` into a paired producer `Emit (_do-agg

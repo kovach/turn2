@@ -12,6 +12,9 @@ import {
   closeDoAgg,
   collectAllBlocked,
   collectBlockedChooses,
+  collectReactiveFinalizations,
+  computeAggStrata,
+  finalizeReactive,
   selectEarliestTier,
 } from "./scheduler.js";
 import { computeComponents } from "./constraint-query.js";
@@ -31,6 +34,10 @@ export function runFixpoint(
 ): FixpointResult {
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
+  // Aggregate dependency strata: computed from the pre-expand rules (markers
+  // still present) so the outer loop can order same-moment reactive
+  // finalizations by dependency. See plans/v2-reactive-aggregates.md.
+  const strata = computeAggStrata(program.rules, program.reactive);
   const store = createStore();
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
@@ -38,7 +45,7 @@ export function runFixpoint(
   let totalIters = 0;
 
   try {
-    return runLoop(expanded, store, gas, totalIters, jsFuncs);
+    return runLoop(expanded, store, gas, totalIters, jsFuncs, strata);
   } catch (e) {
     if (e instanceof GasError) {
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
@@ -47,7 +54,7 @@ export function runFixpoint(
   }
 }
 
-function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>): FixpointResult {
+function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, strata: Map<string, number>): FixpointResult {
   let totalIters = startIters;
   while (true) {
     const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs);
@@ -56,18 +63,36 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
     }
 
-    const blocked = collectAllBlocked(store);
+    const blocked = [
+      ...collectAllBlocked(store),
+      ...collectReactiveFinalizations(store, expanded.reactive, expanded.schema),
+    ];
     if (blocked.length === 0) {
       return { store, iterations: totalIters, status: { kind: "done" } };
     }
     const tier = selectEarliestTier(store, blocked);
     const aggsInTier = tier.flatMap((b) => b.kind === "agg" ? [b.row] : []);
-    if (aggsInTier.length > 0) {
+    // Single-moment stratification: within the earliest moment, finalize only
+    // the lowest aggregate-dependency stratum present, so a consumer aggregate
+    // (e.g. `count p`) is not folded until the relation it reads (`p`) has
+    // settled at this moment. Higher strata reappear in later outer iterations.
+    // See plans/v2-reactive-aggregates.md.
+    const reactiveAll = tier.flatMap((b) => b.kind === "reactive" ? [b.row] : []);
+    const stratumOf = (r: typeof reactiveAll[number]): number =>
+      r.foo.tag === "Symbol" ? (strata.get(r.foo.name) ?? 0) : 0;
+    const minStratum = reactiveAll.reduce((m, r) => Math.min(m, stratumOf(r)), Infinity);
+    const reactiveInTier = reactiveAll.filter((r) => stratumOf(r) === minStratum);
+    if (aggsInTier.length > 0 || reactiveInTier.length > 0) {
       let progressed = false;
       for (const a of aggsInTier) {
         if (closeDoAgg(store, a, expanded.schema)) progressed = true;
       }
-      // Semi-naive: agg-result rows emitted by closeDoAgg should be the
+      // Reactive: materialize this tier's breakpoints (earliest first, so
+      // non-monotone aggregation is stratified by moment).
+      for (const r of reactiveInTier) {
+        if (finalizeReactive(store, r, expanded.schema)) progressed = true;
+      }
+      // Semi-naive: agg-result / _aggval rows emitted here should be the
       // next inner-loop pass's delta. Mirrors v1's iteration++ after
       // closeAggregates.
       if (progressed) {

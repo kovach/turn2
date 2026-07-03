@@ -27,6 +27,7 @@ type Token =
 type Command =
   | { kind: "def"; name: string; line: number }
   | { kind: "agg"; decl: SchemaDecl }
+  | { kind: "reactive"; decl: SchemaDecl }
   | { kind: "js"; name: string; params: string[]; body: string; line: number };
 
 export function parse(input: string): Program | ParseError {
@@ -268,6 +269,11 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     if ("message" in decl) return decl;
     return { kind: "agg", decl };
   }
+  if (tok.name === "reactive") {
+    const decl = parseSchemaText(tok.argText, tok.line);
+    if ("message" in decl) return decl;
+    return { kind: "reactive", decl: { ...decl, reactive: true } };
+  }
   if (tok.name === "js") {
     return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
   }
@@ -308,6 +314,7 @@ function parseJsCommand(sig: string, body: string, line: number): Command | Pars
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
+  const reactive = new Set<string>();
   const jsDefs = new Map<string, JsDef>();
   let i = 0;
 
@@ -320,11 +327,12 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const cmd = parseCommand(t);
       if ("message" in cmd) return cmd;
       i++;
-      if (cmd.kind === "agg") {
+      if (cmd.kind === "agg" || cmd.kind === "reactive") {
         if (schema.has(cmd.decl.relation)) {
           return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
         }
         schema.set(cmd.decl.relation, cmd.decl.aggregator);
+        if (cmd.kind === "reactive") reactive.add(cmd.decl.relation);
         continue;
       }
       if (cmd.kind === "js") {
@@ -462,7 +470,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const boolErr = validateBoolWeights(rules, schema);
   if (boolErr !== null) return boolErr;
 
-  return { rules, schema, jsDefs };
+  return { rules, schema, reactive, jsDefs };
 }
 
 // Enforce surface restrictions for relations declared `-> bool`:
