@@ -22,6 +22,7 @@ export interface ExpandStages {
 }
 
 export function expandStages(program: Program): ExpandStages {
+  program = applyExceptions(program);
   const decomposed = program.rules.map((r) => {
     const { rule, essential } = decomposeRule(r, program.jsDefs, program.reactive);
     return pruneChains(rule, essential);
@@ -42,6 +43,265 @@ export function expandStages(program: Program): ExpandStages {
 export function expand(program: Program): Program {
   const { variants } = expandStages(program);
   return { rules: variants, schema: program.schema, reactive: program.reactive, jsDefs: program.jsDefs };
+}
+
+// ----- Exceptions pass (plans/v2-exceptions.md) -----
+//
+// Source-to-source elimination of `{p t1..tn => e}` Exception atoms, run
+// before any other expansion. Maintains a working set `S` of exception-free
+// rules; rewrites and generated rules only ever touch `S`, so a pending
+// exception's RHS is invisible to earlier exceptions and exposed to later
+// ones only after it is spliced into its generated rule (the chaining
+// mechanism — see the plan's worked examples).
+
+type AtomRA = Extract<RuleAtom, { tag: "Atom" }>;
+type ExceptionRA = Extract<RuleAtom, { tag: "Exception" }>;
+
+export function applyExceptions(program: Program): Program {
+  const hasExc = (r: Rule): boolean => findFirstException(r.body) !== null;
+  const pending = program.rules.filter(hasExc);
+  if (pending.length === 0) return program;
+  const S: Rule[] = program.rules.filter((r) => !hasExc(r));
+  const usedSyms = collectProgramSymbols(program);
+  const usedRuleNames = new Set(program.rules.map((r) => r.name));
+
+  for (const R of pending) {
+    // Per-rule numbering for `<name>_exn<j>` / `<name>_default<j>`.
+    let j = 1;
+    for (;;) {
+      const found = findFirstException(R.body);
+      if (found === null) break;
+      const { container, index } = found;
+      const exc = container[index] as ExceptionRA;
+      const pTerm = exc.left.terms[0]!;
+      if (pTerm.tag !== "Symbol") throw new Error("internal: exception LHS head is not a Symbol");
+      const p = pTerm.name;
+      const tTerms = exc.left.terms.slice(1);
+
+      // 1. Context vars V1..Vm = (vars(e) ∩ vars(prefix(R))) \ vars(t1..tn),
+      // in prefix first-seen order.
+      const prefixVars: string[] = [];
+      collectPrefixVars(R.body, exc, new Set<string>(), prefixVars);
+      const eVars = new Set<string>();
+      collectBodyVars(exc.right, eVars);
+      const tVars = new Set<string>();
+      for (const t of tTerms) collectVarNames(t, tVars);
+      const V = prefixVars.filter((n) => eVars.has(n) && !tVars.has(n));
+
+      // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>`.
+      let k = 1;
+      while (usedSyms.has(`_${p}_prime${k}`) || usedSyms.has(`_${p}_exn${k}`)) k++;
+      const primeName = `_${p}_prime${k}`;
+      const exnName = `_${p}_exn${k}`;
+      usedSyms.add(primeName);
+      usedSyms.add(exnName);
+
+      // 2. Flag schema.
+      program.schema.set(exnName, "bool");
+
+      // 3. Rewrite emitting occurrences of `p` to `p'` across S. Arity is
+      // part of the predicate identity for this feature: only emits with
+      // exactly the LHS's arity are renamed — a `^p x` is a different
+      // predicate from `{p => e}`'s arity-0 `p` and passes through.
+      for (const rule of S) rewriteEmitHeads(rule.body, p, tTerms.length, primeName);
+
+      // 4. Replace the Exception atom in R with [match p' t.., anchor
+      // p_exn V.. -> 1].
+      const span = exc.span;
+      const sym = (name: string): Term => ({ tag: "Symbol", name });
+      const vars = (names: string[]): Term[] => names.map((n) => ({ tag: "Variable", name: n }));
+      const matchInR: AtomRA = {
+        tag: "Atom", marker: "match",
+        atom: { terms: [sym(primeName), ...tTerms] }, span,
+      };
+      const flagEmit: AtomRA = {
+        tag: "Atom", marker: "anchor",
+        atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span,
+      };
+      container.splice(index, 1, matchInR, flagEmit);
+
+      // Generated rule names, skipping to the next free integer on collision.
+      while (usedRuleNames.has(`${R.name}_exn${j}`) || usedRuleNames.has(`${R.name}_default${j}`)) j++;
+      const exnRuleName = `${R.name}_exn${j}`;
+      const defaultRuleName = `${R.name}_default${j}`;
+      j++;
+      usedRuleNames.add(exnRuleName);
+      usedRuleNames.add(defaultRuleName);
+
+      // 5. Exception rule: match p' t.., aggregate p_exn V.. -> 1, e.
+      S.push({
+        name: exnRuleName,
+        span,
+        body: [
+          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
+          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
+          ...exc.right,
+        ],
+      });
+
+      // 6. Default rule: match p' W.., aggregate p_exn _.._ -> 0,
+      // anchor p W..  (fresh W1..Wn, m wildcards).
+      const W: Term[] = tTerms.map((_, i) => ({ tag: "Variable", name: `_w${i + 1}` }));
+      const flagWilds: Term[] = V.map(() => ({ tag: "Wildcard" }));
+      S.push({
+        name: defaultRuleName,
+        span,
+        body: [
+          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...W] }, span },
+          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...flagWilds] }, weight: sym("0"), span },
+          { tag: "Atom", marker: "anchor", atom: { terms: [sym(p), ...W] }, span },
+        ],
+      });
+    }
+    // 7. R is now in normal form.
+    S.push(R);
+  }
+  return { ...program, rules: S };
+}
+
+// First remaining Exception atom in pre-order, with a mutable handle on its
+// containing array so it can be replaced in place. Exception RHS fragments
+// are not descended into (they contain no Exceptions by construction).
+function findFirstException(
+  body: RuleAtom[],
+): { container: RuleAtom[]; index: number } | null {
+  for (let i = 0; i < body.length; i++) {
+    const a = body[i]!;
+    if (a.tag === "Exception") return { container: body, index: i };
+    if (a.tag === "Sub") {
+      const inner = findFirstException(a.body);
+      if (inner !== null) return inner;
+    }
+  }
+  return null;
+}
+
+// Collect Variable names appearing in R's body pre-order, stopping at the
+// given Exception atom (exclusive). Returns true when the stop atom was hit.
+function collectPrefixVars(
+  body: RuleAtom[],
+  stopAt: RuleAtom,
+  seen: Set<string>,
+  out: string[],
+): boolean {
+  for (const a of body) {
+    if (a === stopAt) return true;
+    if (a.tag === "Sub") {
+      if (collectPrefixVars(a.body, stopAt, seen, out)) return true;
+      continue;
+    }
+    collectAtomVarsOrdered(a, seen, out);
+  }
+  return false;
+}
+
+function collectAtomVarsOrdered(a: RuleAtom, seen: Set<string>, out: string[]): void {
+  const push = (t: Term): void => {
+    if (t.tag === "Variable") {
+      if (t.name !== "_" && !seen.has(t.name)) { seen.add(t.name); out.push(t.name); }
+    } else if (t.tag === "Atom" || t.tag === "Id") {
+      for (const x of t.atom.terms) push(x);
+    }
+  };
+  if (a.tag === "Atom") {
+    if (a.subAtoms !== undefined) {
+      for (const s of a.subAtoms) for (const t of s.atom.terms) push(t);
+    } else {
+      for (const t of a.atom.terms) push(t);
+    }
+    if (a.weight !== undefined) push(a.weight);
+    if (a.lLit !== undefined) push(a.lLit);
+    if (a.rLit !== undefined) push(a.rLit);
+  } else if (a.tag === "Equal") {
+    push(a.lhs);
+    push(a.rhs);
+  } else if (a.tag === "Exception") {
+    // An earlier Exception cannot occur (they are processed first-to-last),
+    // but keep the walk total: its in-place replacement contributes vars
+    // via the Atom arm after processing.
+  }
+}
+
+// Variable names anywhere in a body fragment (order-insensitive).
+function collectBodyVars(body: RuleAtom[], out: Set<string>): void {
+  const dummy: string[] = [];
+  const push = (a: RuleAtom): void => {
+    if (a.tag === "Sub") { collectBodyVars(a.body, out); return; }
+    if (a.tag === "Exception") {
+      for (const t of a.left.terms) collectVarNames(t, out);
+      collectBodyVars(a.right, out);
+      return;
+    }
+    collectAtomVarsOrdered(a, out, dummy);
+  };
+  for (const a of body) push(a);
+}
+
+function collectVarNames(t: Term, out: Set<string>): void {
+  if (t.tag === "Variable") {
+    if (t.name !== "_") out.add(t.name);
+  } else if (t.tag === "Atom" || t.tag === "Id") {
+    for (const x of t.atom.terms) collectVarNames(x, out);
+  }
+}
+
+// Rewrite the head of every emitting (`fact`/`episode`/`anchor`) atom whose
+// head Symbol is `p` *and* whose arity matches the exception LHS to
+// `primeName`, in place. Matches / aggregates / constrains / asks stay
+// untouched, as do emits of `p` at other arities (distinct predicates for
+// this feature — the generated match/default rules are arity-exact, so a
+// renamed off-arity emit would be orphaned).
+function rewriteEmitHeads(body: RuleAtom[], p: string, arity: number, primeName: string): void {
+  for (const a of body) {
+    if (a.tag === "Sub") { rewriteEmitHeads(a.body, p, arity, primeName); continue; }
+    if (a.tag !== "Atom") continue;
+    if (a.marker !== "fact" && a.marker !== "episode" && a.marker !== "anchor") continue;
+    // Weighted emits (`+p .. -> w`, aggregate-relation assertions) store the
+    // weight in a trailing slot — renaming one would orphan it the same way
+    // an off-arity emit would. They are not interceptable.
+    if (a.weight !== undefined) continue;
+    if (a.atom.terms.length !== arity + 1) continue;
+    const head = a.atom.terms[0];
+    if (head !== undefined && head.tag === "Symbol" && head.name === p) {
+      a.atom.terms[0] = { tag: "Symbol", name: primeName };
+    }
+  }
+}
+
+// Every Symbol name occurring in the program (rule bodies, schema keys,
+// #js names). Used to mint fresh `_<p>_prime<k>` / `_<p>_exn<k>` names.
+function collectProgramSymbols(program: Program): Set<string> {
+  const out = new Set<string>();
+  const term = (t: Term): void => {
+    if (t.tag === "Symbol") out.add(t.name);
+    else if (t.tag === "Atom" || t.tag === "Id") {
+      for (const x of t.atom.terms) term(x);
+    }
+  };
+  const walk = (body: RuleAtom[]): void => {
+    for (const a of body) {
+      if (a.tag === "Sub") { walk(a.body); continue; }
+      if (a.tag === "Exception") {
+        for (const t of a.left.terms) term(t);
+        walk(a.right);
+        continue;
+      }
+      if (a.tag === "Equal") { term(a.lhs); term(a.rhs); continue; }
+      if (a.tag !== "Atom") continue;
+      if (a.subAtoms !== undefined) {
+        for (const s of a.subAtoms) for (const t of s.atom.terms) term(t);
+      } else {
+        for (const t of a.atom.terms) term(t);
+      }
+      if (a.weight !== undefined) term(a.weight);
+      if (a.lLit !== undefined) term(a.lLit);
+      if (a.rLit !== undefined) term(a.rLit);
+    }
+  };
+  for (const r of program.rules) walk(r.body);
+  for (const key of program.schema.keys()) out.add(key);
+  for (const key of program.jsDefs.keys()) out.add(key);
+  return out;
 }
 
 // ----- Semi-naive delta variants -----
@@ -459,6 +719,9 @@ function decomposeBody(
         XR = next.XR;
       }
       continue;
+    }
+    if (a.tag === "Exception") {
+      throw new Error("internal: Exception atom reached decomposition (applyExceptions missing?)");
     }
     // Post-expand cases shouldn't occur at this stage, but pass through.
     state.out.push(a);

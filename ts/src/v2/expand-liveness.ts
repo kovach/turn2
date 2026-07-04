@@ -66,6 +66,7 @@ function rewriteAtom(a: RuleAtom, live: Set<string>, essential: Set<string>): Ru
       return { ...a, args: a.args.map(rw), out: rw(a.out) };
     case "Atom":
     case "Sub":
+    case "Exception":
       // Pre-expand kinds shouldn't reach this pass. Pass through unchanged.
       return a;
   }
@@ -95,6 +96,7 @@ function addUses(a: RuleAtom, live: Set<string>): void {
       break;
     case "Atom":
     case "Sub":
+    case "Exception":
       break;
   }
 }

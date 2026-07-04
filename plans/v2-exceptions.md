@@ -18,7 +18,7 @@ activate.it.is misfits
   ~choose.it _X, !in-supply _X;
   is _X X
   ~play-card.it.^is X
-    {move X _ => nope}
+    {move X _ => ~nope}
 ```
 
 The feature is a **source-to-source transformation** run once before
@@ -35,7 +35,7 @@ Initially `S` = all rules that contain no exception expression. Rules
 that do contain exceptions sit outside `S` until each of their
 exceptions has been processed in turn, at which point they join `S`.
 
-The two consequences worth keeping in mind:
+The consequences worth keeping in mind:
 
 - A rewrite (step 3 below) only ever touches rules in `S`. It never
   descends into a pending exception's `Exception.right` (`e`), because
@@ -48,8 +48,21 @@ The two consequences worth keeping in mind:
   into the generated exception rule (step 5). From that point on, `e`'s
   `^p`s are rewritten by *future* exceptions in the normal way —
   exactly the chaining mechanism described below.
+- **Rewrite scope is `S`-at-processing-time, by design.** An emit is
+  intercepted by exception `E` iff, when `E`'s step 3 runs, the emit
+  sits on a rule already in `S`. Accepted consequences (not bugs):
+  a rule's own emits are *not* intercepted by its own exceptions (the
+  rule is outside `S` while its exceptions are processed); emits on a
+  rule with pending exceptions escape every exception processed before
+  that rule joins `S`; and an exception's RHS is subject only to
+  exceptions processed *after* its owner. Rules that want their emits
+  intercepted should be written without exceptions of their own (as in
+  the `misfits` example, whose emits `~choose`/`~play-card` are
+  untouched by its own `{move X _ => nope}` — only the downstream
+  `move` producers, which live on exception-free rules, are rewritten).
 
-Process exceptions **in source order**. For each `{p t1..tn => e}` in
+Process exceptions **in source order** — pre-order within a rule,
+program rule order across rules. For each `{p t1..tn => e}` in
 rule `R`, with two fresh symbols minted per-exception (call them `p'`
 and `p_exn`; concrete name scheme below):
 
@@ -66,9 +79,18 @@ and `p_exn`; concrete name scheme below):
    `#acc p_exn v1..vm -> bool`; the `m` arg terms are ignored — the
    schema map only stores `name → aggregator`.)
 
-3. **Rewrite** every positive (`fact`/`episode`/`anchor`/`ask`)
-   occurrence of `p` to `p'` **across `S`**. Match / aggregate /
-   constrain queries stay as `p`. (`S` already includes every
+3. **Rewrite** every emitting (`fact`/`episode`/`anchor`)
+   occurrence of `p` **with exactly the LHS's arity** to `p'` **across
+   `S`**. Arity is part of the predicate identity for this feature
+   [decision 26/07/03]: an emit of `p` at a different arity is a
+   distinct predicate and passes through untouched — the generated
+   match/default rules are arity-exact, so renaming an off-arity emit
+   would orphan its tuples (renamed but invisible to every generated
+   rule). Weighted emits (`+p .. -> w`, aggregate-relation assertions)
+   are likewise never rewritten: their stored rows carry the weight in
+   a trailing slot and are not interceptable. Match / aggregate /
+   constrain queries stay as `p`; `ask` atoms are untouched (asks bind
+   choices, they don't produce `p` tuples). (`S` already includes every
    exception/default rule from earlier-processed exceptions and every
    rule whose exceptions are all done; it never includes pending
    Exception RHS fragments.)
@@ -89,7 +111,10 @@ and `p_exn`; concrete name scheme below):
    any `p'`, fires when the flag is unset, re-emits the real `p`.
 
 7. **If this was `R`'s last exception**, `R` is now in normal form;
-   add `R` to `S`.
+   add `R` to `S`. From here on `R`'s own emits (and the inserted
+   `anchor p_exn -> 1` flags, whose `_`-prefixed heads no source
+   exception can name anyway) are rewritten by future exceptions like
+   any other rule's.
 
 Step-3 happens before steps 4–6 add anything to `S`, so the `^p` and
 spliced `e` join the set already containing literal `p`. A later
@@ -349,7 +374,7 @@ Skip to the next free integer on collision.
   rule set to be ordered so a rule later than exception `E` is not
   rewritten by it.
 
-## Tests (`ts/data/v2/exceptions.t`)
+## Tests (`ts/src/tests/v2_exceptions.test.ts`; editor demo at `ts/data/v2/exceptions.t`)
 
 1. Basic override (`m=0`): a producer in the exception context runs
    `e`; one in a disjoint moment range stays `p`.
@@ -392,13 +417,115 @@ Skip to the next free integer on collision.
     to a `{...}` block.
 11. No-exception program is unchanged through `applyExceptions`.
 
+### Characterization tests: temporal semantics (maybe-issue 3)
+
+These pin down behavior the plan asserts but doesn't derive. First
+implementation pass: run them, record the *actual* output as the
+expected output, and revisit. Each is a "what does it do", not a
+"what must it do" — except the per-tuple mutual-exclusion invariant
+(never both `e` and `p` for one intercepted tuple), which must hold
+in every case.
+
+12. **Flag interval vs. exception placement.** One producer rule
+    `go X, ^p X` driven from two disjoint episodes, and three variants
+    of the intercepting rule with the same `{p X => +e X}` placed:
+    (a) at rule top level after a plain match (`phase1 {p X => +e X}`),
+    (b) nested inside a sub (`world (phase1, {p X => +e X})`),
+    (c) after a `;` step (`world, (phase1); {p X => +e X}`).
+    For each variant emit one `p` inside `phase1` and one in a later
+    disjoint episode. Record which tuples are intercepted in each
+    placement — this exhibits what interval `anchor p_exn -> 1`
+    actually receives when the exception isn't at the rule's outermost
+    anchor. Assert mutual exclusion per tuple in all variants.
+
+13. **Marker round-trip through the default rule.** For each producer
+    marker `+p a`, `~p a`, `^p a`: a program containing an exception
+    on `p` whose context never holds (flag never set), and the same
+    program with the exception rule deleted as baseline. Assert the
+    final db's user-visible rows are identical to baseline —
+    same `p a` interval endpoints and persistence — with only
+    `_`-internal rows differing. This checks that
+    `+p → +p' → anchor p` (etc.) reproduces the original tuple's
+    temporal extent; if it doesn't, the recorded diff documents the
+    drift.
+
+14. **Flag scheduling (`-> 0` as negation-over-time).** The flag-setter
+    fires late: the intercepting rule's context match is derived
+    through a chain of rules (and, in a second variant, through an
+    aggregate) so `p_exn` is set several fixpoint iterations after
+    `p'` first exists. Assert the tuple is still intercepted and the
+    default never fires prematurely (no transient real `p`). Third
+    variant: the flag's interval only *partially* overlaps the `p'`
+    tuple's interval — record which of exception/default fires (or
+    both, which would break exclusion and needs a fix, not a
+    recording).
+
 ## File touch list
 
 | File                       | Change                                                                 |
 |----------------------------|------------------------------------------------------------------------|
 | `ts/src/v2/types.ts`       | Add pre-expand `Exception` `RuleAtom` variant                          |
 | `ts/src/v2/parse.ts`       | Tokenize `{`/`}`; parse exception block; `parseBodyFragment` helper; reject nested exception, LHS aggregate, dot-adjacent block; thread `Exception` through `collectUsedNames` / `desugarBody` |
-| `ts/src/v2/expand.ts`      | `applyExceptions` pass at top of `expand`                              |
-| `ts/data/v2/exceptions.t`  | New test cases                                                          |
+| `ts/src/v2/expand.ts`      | `applyExceptions` pass at top of `expandStages`                        |
+| `ts/src/v2/fixpoint.ts`    | Call `applyExceptions` before `computeAggStrata` sees the rules        |
+| `ts/src/tests/v2_exceptions.test.ts` | Tests 1–14                                                    |
+| `ts/data/v2/exceptions.t`  | Editor demo program                                                     |
+| `ts/src/v2/{print-ir,eval,expand-liveness,autocomplete}.ts` | `Exception` arms in RuleAtom walks   |
+| `ts/src/v2/overview.md`    | Note the new parse form and `applyExceptions`                          |
 
-No changes to `eval.ts`, `scheduler.ts`, `aggregators.ts`, `fixpoint.ts`.
+No changes to `eval.ts` (beyond the guard arm), `scheduler.ts`, `aggregators.ts`.
+
+
+
+# maybe issues
+
+
+
+Yes — the plan is unusually tight (the worked examples pin down the chaining mechanics precisely), but reading it closely I see a few genuine ambiguities or gaps. Ranked by how load-bearing they are:
+
+1. [decision 26/07/03: accepted as intended semantics, not an issue — rewrite scope is `S`-at-processing-time; see the bullet under **Desugaring**. A rule that wants its emits intercepted should carry no exceptions of its own.] Rules that join S late are never retroactively rewritten — producers can escape an exception entirely. Step 3 rewrites positive p occurrences "across S", and runs exactly once per exception. But any rule with its own pending exception sits outside S at that moment, and step 7 just adds it to S — nothing says to re-apply earlier exceptions' rewrites when it joins. Consequences the plan never addresses:
+
+- If R itself contains an ordinary producer ^p a b and an exception {p X => e}, R's own ^p is not rewritten by its own exception (R is outside S during its own processing). Is a rule's exception supposed to intercept the rule's own productions? The informal semantics ("wherever p would have been produced") suggests yes; the algorithm says no.
+- Same for a different rule R2 with an unrelated pending exception: if R2 contains ^p and joins S after {p => e} was processed, its ^p emits the real p, bypassing the exception.
+- Similarly, a later exception's RHS e escapes all earlier exceptions on other predicates (the plan explicitly notes RHS fragments are only rewritten by future exceptions, and frames that as a feature — but for same-p intra-rule chaining it's what you want, while for cross-predicate cases it's just a hole).
+
+The worked examples never exercise any of these (their RHSs are nope/boom and the rules have no ordinary p producers), so the tests as specified wouldn't catch whichever behavior is unintended.
+
+2. Variables in e bound only after the exception. V is computed from prefix(R) — bindings before the exception. If e references a variable bound later in R, it's silently not in V and becomes a dangling/fresh variable in the generated exception rule. The overview states the requirement ("generated rules should have no dangling references") but the plan neither errors on this case nor defines what it means.
+
+3. [26/07/03: characterization tests 12–14 under **Tests** exhibit the actual behavior for each spot; iterate after the first implementation pass. The `ask` sub-point is resolved differently: `ask` is *not* a rewritten marker — asks bind choices, they don't produce `p` tuples — so step 3 now covers `fact`/`episode`/`anchor` only.]
+
+   **First-pass findings** (from `ts/src/tests/v2_exceptions.test.ts`, 26/07/03):
+   - Mutual exclusion is **containment**, not overlap: `aggregateOver`
+     (scheduler.ts) selects candidates whose interval *contains* the query
+     anchor. So the flag intercepts a `p'` tuple iff the flag's interval
+     contains the tuple's interval. A flag narrowed by a context fact
+     minted mid-interval (e.g. `~ctx` then `+tag ...` inside the same
+     rule) contains neither the exception query's anchor nor the
+     default's → the tuple leaks through the default (`-> 0` sees no
+     flag). Test 9's seed orders `+tag` before `~ctx` for this reason.
+   - CHAR 12 (placement): top-level and inside-sub exceptions intercept
+     the in-phase producer and pass the out-of-phase one — as intended.
+     The after-`;` placement intercepted *neither* producer (not even the
+     later-phase one it plausibly covers) — investigate next pass.
+   - CHAR 13 (marker round-trip): `+p`/`~p`/`^p` all survive a
+     never-firing exception with identical intervals vs. baseline.
+   - CHAR 14 (flag scheduling): a flag-setter gated only by a *rule
+     chain* works — no premature default, tuple intercepted. A
+     flag-setter gated by an *aggregate read* loses the tier race: the
+     `p_exn -> 0` default closes in the same tier before the flag exists
+     → real `p` forwarded. This is the `-> 0`-as-negation-over-time
+     hazard; stratifying `p_exn` reads after flag-setter reads would fix
+     it.
+   - CHAR 14 (partial overlap): the default fires (containment again — a
+     partially-overlapping flag is not seen by either query).
+
+   Temporal semantics are asserted, not specified. Two spots:
+
+- What interval does anchor p_exn ... -> 1 get when the exception sits nested inside a sub or partway through a dot-chain rule (test 9's case)? Mutual exclusion is "moment-overlap of the two bool queries", but whether the flag's interval actually covers the intercepted tuple's moment when the exception isn't at the rule's top-level anchor is program-dependent and unstated.
+- The default rule re-emits with the anchor marker regardless of what the original producer's marker was (+ fact vs ~ episode vs ? ask). For facts/episodes this plausibly round-trips because the matched interval carries the persistence, but that argument is never made — and for a rewritten ask (?p → ?p', listed as rewritten in step 3), what "re-emitting the real p" means for the choice machinery isn't discussed at all.
+- Relatedly, the -> 0 query is negation-over-time: correctness needs the scheduler to resolve all potential flag-setters before the default rule's aggregate read fires. The plan says "no changes to eval/scheduler" and leans entirely on the bool-aggregate semantics; that dependency is assumed rather than argued.
+
+Minor: fresh-symbol minting says "smallest k with names unused in the program" without saying whether "the program" includes names generated by earlier exceptions in the same pass (presumably yes); and cross-rule "source order" for the exception queue is only implied to be program rule order.
+
+If you want to tighten the plan cheaply, item 1 is the one I'd resolve explicitly — either "a rule's atoms are rewritten by all previously-processed exceptions at the moment it joins S" or "exceptions only apply to rules already in normal form, by design" — plus an error (or explicit non-error) for item 2, and one test each.

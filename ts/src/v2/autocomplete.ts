@@ -108,6 +108,9 @@ function collectVarsFromBody(body: RuleAtom[], out: Set<string>): void {
       }
     } else if (a.tag === "Sub") {
       collectVarsFromBody(a.body, out);
+    } else if (a.tag === "Exception") {
+      for (const t of a.left.terms) collectVarsFromTerm(t, out);
+      collectVarsFromBody(a.right, out);
     } else if (a.tag === "Equal") {
       collectVarsFromTerm(a.lhs, out);
       collectVarsFromTerm(a.rhs, out);

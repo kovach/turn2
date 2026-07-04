@@ -90,6 +90,17 @@ export type RuleAtom =
       sequence: boolean;
       span: Span;
     }
+  // Exception expression `{p t1..tn => e}` (plans/v2-exceptions.md).
+  // `left` is the single unmarked LHS atom (Symbol head, no aggregate);
+  // `right` is the RHS body fragment (no nested Exception). Eliminated by
+  // `applyExceptions` before decomposition — never reaches splitRule or
+  // the evaluator.
+  | {
+      tag: "Exception";
+      left: Atom;
+      right: RuleAtom[];
+      span: Span;
+    }
   // ----- Both phases -----
   //
   // Equality / unification atom: `= <lhs> <rhs>`. Unifies two terms against

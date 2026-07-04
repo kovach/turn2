@@ -17,6 +17,9 @@ type Token =
   | { tag: "open"; line: number }
   | { tag: "close"; sequence: boolean; line: number }
   | { tag: "atom"; marker: Marker; text: string; line: number }
+  // Exception block `{...}` (plans/v2-exceptions.md). `text` is the inner
+  // text, braces stripped.
+  | { tag: "exception"; text: string; line: number }
   | { tag: "equal"; text: string; line: number }
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
@@ -119,6 +122,30 @@ export function tokenize(input: string): Token[] | ParseError {
         atomStart = true;
         continue;
       }
+      if (ch === "{") {
+        // Exception block `{p t1..tn => e}` (plans/v2-exceptions.md).
+        // Scan to the matching `}` on this line, tracking brace depth.
+        let braceDepth = 0;
+        let end = -1;
+        for (let j = pos; j < raw.length; j++) {
+          const c = raw[j]!;
+          if (c === "{") braceDepth++;
+          else if (c === "}") {
+            braceDepth--;
+            if (braceDepth === 0) { end = j; break; }
+          }
+        }
+        if (end < 0) {
+          return { line: lineno, message: "unterminated '{' (exception block must close on the same line)" };
+        }
+        tokens.push({ tag: "exception", text: raw.slice(pos + 1, end).trim(), line: lineno });
+        pos = end + 1;
+        atomStart = true;
+        continue;
+      }
+      if (ch === "}") {
+        return { line: lineno, message: "stray '}'" };
+      }
       if (atomStart && ch === "#") {
         const rest = raw.slice(pos + 1);
         const trimmed = rest.trimStart();
@@ -207,7 +234,7 @@ export function tokenize(input: string): Token[] | ParseError {
       let depth = 0;
       while (pos < raw.length) {
         const c = raw[pos]!;
-        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";")) break;
+        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}")) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
         pos++;
@@ -245,7 +272,11 @@ export function tokenize(input: string): Token[] | ParseError {
 type BodyItem =
   | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom" or "Equal"
   | { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span }
-  | { kind: "dot"; line: number };
+  | { kind: "dot"; line: number }
+  // Exception block. `right` is still BodyItems so `desugarBody` can
+  // resolve the fragment's dots with the containing rule's shared
+  // fresh-name minting (no `_dotN` capture between rule and fragment).
+  | { kind: "exception"; left: Atom; right: BodyItem[]; span: Span };
 
 type AtomItem = Extract<RuleAtom, { tag: "Atom" }>;
 
@@ -356,100 +387,11 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       }
     }
 
-    const body: BodyItem[] = [];
-    // Each stack frame is the inner body of the enclosing sub (or the
-    // outer rule body at index 0). We also track each open sub so its
-    // `sequence` flag and span can be patched at the matching close.
-    // `wrapStart` marks the items-index where the current line's
-    // content began in this frame; a bare `;` wraps items from
-    // wrapStart..end into a sequence sub. `lastLine` triggers the
-    // wrapStart reset when execution crosses a line boundary.
-    // `needsContent` is true at line-start and immediately after a
-    // semi; it gates errors like `; a`, `a; ;`, `(;)`.
-    type Frame = { items: BodyItem[]; wrapStart: number; lastLine: number; needsContent: boolean };
-    const stack: Frame[] = [{ items: body, wrapStart: 0, lastLine: startLine, needsContent: true }];
-    const openSubs: { item: { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span } }[] = [];
-    let depth = 0;
-
-    while (i < tokens.length) {
-      const tok = tokens[i]!;
-      if (tok.tag === "ruleEnd") {
-        if (depth > 0) { i++; continue; }
-        break;
-      }
-      if (tok.tag === "command") {
-        if (depth > 0) return { line: tok.line, message: `'#${tok.name}' command not allowed inside a sub-rule` };
-        break;
-      }
-      // Line-change reset: a `;` only wraps content emitted on the
-      // current line within this frame, so realign wrapStart on every
-      // line boundary.
-      const top = stack[stack.length - 1]!;
-      if (tok.line !== top.lastLine) {
-        top.wrapStart = top.items.length;
-        top.lastLine = tok.line;
-        top.needsContent = true;
-      }
-      if (tok.tag === "open") {
-        const inner: BodyItem[] = [];
-        const subItem = { kind: "sub" as const, inner, sequence: false, span: { line: tok.line } };
-        top.items.push(subItem);
-        top.needsContent = false;
-        stack.push({ items: inner, wrapStart: 0, lastLine: tok.line, needsContent: true });
-        openSubs.push({ item: subItem });
-        depth++;
-        i++;
-        continue;
-      }
-      if (tok.tag === "close") {
-        if (depth === 0) return { line: tok.line, message: "unmatched ')'" };
-        stack.pop();
-        const opened = openSubs.pop()!;
-        if (tok.sequence) opened.item.sequence = true;
-        depth--;
-        i++;
-        continue;
-      }
-      if (tok.tag === "semi") {
-        if (top.needsContent) {
-          return { line: tok.line, message: "';' with no content on this line" };
-        }
-        const last = top.items[top.items.length - 1]!;
-        if (last.kind === "dot") {
-          return { line: tok.line, message: "';' after '.' is not allowed" };
-        }
-        const wrapped = top.items.splice(top.wrapStart, top.items.length - top.wrapStart);
-        top.items.push({ kind: "sub", inner: wrapped, sequence: true, span: { line: tok.line } });
-        // wrapStart stays put: a following `;` on the same line wraps
-        // the new sub plus any items appended after it.
-        top.needsContent = true;
-        i++;
-        continue;
-      }
-      if (tok.tag === "dot") {
-        top.items.push({ kind: "dot", line: tok.line });
-        i++;
-        continue;
-      }
-      if (tok.tag === "equal") {
-        const parsedEq = parseEqualText(tok.text, tok.line);
-        if ("message" in parsedEq) return parsedEq;
-        top.items.push({ kind: "atom", atom: parsedEq });
-        top.needsContent = false;
-        i++;
-        continue;
-      }
-      const parsed = parseAtomText(tok.text, tok.marker, tok.line);
-      if ("message" in parsed) return parsed;
-      top.items.push({ kind: "atom", atom: parsed });
-      top.needsContent = false;
-      i++;
-    }
-
-    if (depth > 0) {
-      const ln = openSubs[openSubs.length - 1]!.item.span.line;
-      return { line: ln, message: "unmatched '('" };
-    }
+    const pos = { i };
+    const bodyRes = parseBodyItems(tokens, pos, startLine, false);
+    if (!Array.isArray(bodyRes)) return bodyRes;
+    i = pos.i;
+    const body = bodyRes;
     if (body.length > 0) {
       const usedNames = new Set<string>();
       collectUsedNames(body, usedNames);
@@ -473,6 +415,189 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   return { rules, schema, reactive, jsDefs };
 }
 
+// Parse one rule body's tokens into `BodyItem`s. Consumes from `pos.i`
+// until a rule boundary (`ruleEnd` / command at depth 0) or end of
+// tokens; `pos.i` is left at the terminator. With `fragment` set (parsing
+// an exception RHS), rule boundaries cannot occur and nested exception
+// blocks / commands are errors.
+function parseBodyItems(
+  tokens: Token[],
+  pos: { i: number },
+  startLine: number,
+  fragment: boolean,
+): BodyItem[] | ParseError {
+  const body: BodyItem[] = [];
+  // Each stack frame is the inner body of the enclosing sub (or the
+  // outer rule body at index 0). We also track each open sub so its
+  // `sequence` flag and span can be patched at the matching close.
+  // `wrapStart` marks the items-index where the current line's
+  // content began in this frame; a bare `;` wraps items from
+  // wrapStart..end into a sequence sub. `lastLine` triggers the
+  // wrapStart reset when execution crosses a line boundary.
+  // `needsContent` is true at line-start and immediately after a
+  // semi; it gates errors like `; a`, `a; ;`, `(;)`.
+  type Frame = { items: BodyItem[]; wrapStart: number; lastLine: number; needsContent: boolean };
+  const stack: Frame[] = [{ items: body, wrapStart: 0, lastLine: startLine, needsContent: true }];
+  const openSubs: { item: { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span } }[] = [];
+  let depth = 0;
+
+  while (pos.i < tokens.length) {
+    const tok = tokens[pos.i]!;
+    if (tok.tag === "ruleEnd") {
+      if (fragment || depth > 0) { pos.i++; continue; }
+      break;
+    }
+    if (tok.tag === "command") {
+      if (fragment) return { line: tok.line, message: `'#${tok.name}' command not allowed in an exception block` };
+      if (depth > 0) return { line: tok.line, message: `'#${tok.name}' command not allowed inside a sub-rule` };
+      break;
+    }
+    // Line-change reset: a `;` only wraps content emitted on the
+    // current line within this frame, so realign wrapStart on every
+    // line boundary.
+    const top = stack[stack.length - 1]!;
+    if (tok.line !== top.lastLine) {
+      top.wrapStart = top.items.length;
+      top.lastLine = tok.line;
+      top.needsContent = true;
+    }
+    if (tok.tag === "open") {
+      const inner: BodyItem[] = [];
+      const subItem = { kind: "sub" as const, inner, sequence: false, span: { line: tok.line } };
+      top.items.push(subItem);
+      top.needsContent = false;
+      stack.push({ items: inner, wrapStart: 0, lastLine: tok.line, needsContent: true });
+      openSubs.push({ item: subItem });
+      depth++;
+      pos.i++;
+      continue;
+    }
+    if (tok.tag === "close") {
+      if (depth === 0) return { line: tok.line, message: "unmatched ')'" };
+      stack.pop();
+      const opened = openSubs.pop()!;
+      if (tok.sequence) opened.item.sequence = true;
+      depth--;
+      pos.i++;
+      continue;
+    }
+    if (tok.tag === "semi") {
+      if (top.needsContent) {
+        return { line: tok.line, message: "';' with no content on this line" };
+      }
+      const last = top.items[top.items.length - 1]!;
+      if (last.kind === "dot") {
+        return { line: tok.line, message: "';' after '.' is not allowed" };
+      }
+      const wrapped = top.items.splice(top.wrapStart, top.items.length - top.wrapStart);
+      top.items.push({ kind: "sub", inner: wrapped, sequence: true, span: { line: tok.line } });
+      // wrapStart stays put: a following `;` on the same line wraps
+      // the new sub plus any items appended after it.
+      top.needsContent = true;
+      pos.i++;
+      continue;
+    }
+    if (tok.tag === "dot") {
+      top.items.push({ kind: "dot", line: tok.line });
+      pos.i++;
+      continue;
+    }
+    if (tok.tag === "exception") {
+      if (fragment) return { line: tok.line, message: "exception RHS may not contain an exception" };
+      const exc = parseExceptionBlock(tok.text, tok.line);
+      if ("message" in exc) return exc;
+      top.items.push(exc);
+      top.needsContent = false;
+      pos.i++;
+      continue;
+    }
+    if (tok.tag === "equal") {
+      const parsedEq = parseEqualText(tok.text, tok.line);
+      if ("message" in parsedEq) return parsedEq;
+      top.items.push({ kind: "atom", atom: parsedEq });
+      top.needsContent = false;
+      pos.i++;
+      continue;
+    }
+    const parsed = parseAtomText(tok.text, tok.marker, tok.line);
+    if ("message" in parsed) return parsed;
+    top.items.push({ kind: "atom", atom: parsed });
+    top.needsContent = false;
+    pos.i++;
+  }
+
+  if (depth > 0) {
+    const ln = openSubs[openSubs.length - 1]!.item.span.line;
+    return { line: ln, message: "unmatched '('" };
+  }
+  return body;
+}
+
+// Parse the inner text of a `{p t1..tn => e}` exception block (braces
+// already stripped by the tokenizer). See plans/v2-exceptions.md.
+function parseExceptionBlock(text: string, line: number): BodyItem | ParseError {
+  const arrow = findTopFatArrow(text);
+  if (arrow < 0) return { line, message: "exception block requires '=>'" };
+  const lhsText = text.slice(0, arrow).trim();
+  const rhsText = text.slice(arrow + 2).trim();
+  if (lhsText.length === 0) return { line, message: "exception LHS is empty" };
+  if (rhsText.length === 0) return { line, message: "exception RHS is empty" };
+  const c0 = lhsText[0]!;
+  if (c0 === "{") {
+    return { line, message: "exception LHS may not contain an exception" };
+  }
+  if (isMarkerChar(c0) || c0 === "=") {
+    return { line, message: "exception LHS cannot carry a marker" };
+  }
+  if (findTopArrow(lhsText) >= 0) {
+    return { line, message: "exception LHS cannot be an aggregate ('-> weight')" };
+  }
+  const terms = parseTerms(tokenizeTermText(lhsText), line);
+  if ("message" in terms) return terms;
+  if (terms.length === 0) return { line, message: "exception LHS is empty" };
+  const head = terms[0]!;
+  if (head.tag !== "Symbol") {
+    return { line, message: "exception LHS head must be a symbol" };
+  }
+  if (head.name.startsWith("*")) {
+    return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
+  }
+  // RHS: same machinery as a normal rule body. Errors and spans from the
+  // fragment carry sub-tokenizer line numbers (always 1 — the block is a
+  // single line); remap both to the block's source line.
+  const rhsToks = tokenize(rhsText);
+  if (!Array.isArray(rhsToks)) return { line, message: rhsToks.message };
+  const pos = { i: 0 };
+  const right = parseBodyItems(rhsToks, pos, line, true);
+  if (!Array.isArray(right)) return { line, message: right.message };
+  if (right.length === 0) return { line, message: "exception RHS is empty" };
+  remapItemLines(right, line);
+  return { kind: "exception", left: { terms }, right, span: { line } };
+}
+
+// Stamp `line` onto every span in a fragment parsed from single-line text.
+function remapItemLines(items: BodyItem[], line: number): void {
+  for (const it of items) {
+    if (it.kind === "dot") { it.line = line; continue; }
+    if (it.kind === "sub") { it.span.line = line; remapItemLines(it.inner, line); continue; }
+    if (it.kind === "exception") { it.span.line = line; remapItemLines(it.right, line); continue; }
+    it.atom.span.line = line;
+  }
+}
+
+// Find the index of a top-level (paren- and brace-depth 0) `=>` in `text`,
+// or -1.
+function findTopFatArrow(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length - 1; i++) {
+    const c = text[i]!;
+    if (c === "(" || c === "{") depth++;
+    else if (c === ")" || c === "}") depth--;
+    else if (depth === 0 && c === "=" && text[i + 1] === ">") return i;
+  }
+  return -1;
+}
+
 // Enforce surface restrictions for relations declared `-> bool`:
 // assertions must be literal `-> 1`; queries must be `-> 0` / `-> 1`
 // / a Variable. See plans/v2-bool-aggregate.md.
@@ -488,6 +613,11 @@ function walkBoolValidate(body: RuleAtom[], schema: Map<string, string>): ParseE
   for (const a of body) {
     if (a.tag === "Sub") {
       const err = walkBoolValidate(a.body, schema);
+      if (err !== null) return err;
+      continue;
+    }
+    if (a.tag === "Exception") {
+      const err = walkBoolValidate(a.right, schema);
       if (err !== null) return err;
       continue;
     }
@@ -571,6 +701,11 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
       collectUsedNames(it.inner, out);
       continue;
     }
+    if (it.kind === "exception") {
+      for (const t of it.left.terms) collectVarsInTerm(t, out);
+      collectUsedNames(it.right, out);
+      continue;
+    }
     const a = it.atom;
     if (a.tag === "Atom") {
       if (a.subAtoms !== undefined) {
@@ -646,9 +781,28 @@ function desugarBody(
   const out: RuleAtom[] = [];
   const frame: Frame = { anchor: null, freshVar: null, pendingDot: false, dotLine: 0 };
   let incomingPending = incoming !== undefined;
+  // Set after an exception block so a following `.` errors specifically
+  // (an Exception is not a frame anchor — see plans/v2-exceptions.md).
+  let afterException = false;
 
   for (const it of items) {
+    if (it.kind === "exception") {
+      if (incomingPending) {
+        return { line: incoming!.dotLine, message: "'.' cannot be adjacent to an exception block" };
+      }
+      if (frame.pendingDot) {
+        return { line: frame.dotLine, message: "'.' cannot be adjacent to an exception block" };
+      }
+      const inner = desugarBody(it.right, usedNames, counter, undefined);
+      if (!Array.isArray(inner)) return inner;
+      out.push({ tag: "Exception", left: it.left, right: inner, span: it.span });
+      afterException = true;
+      continue;
+    }
     if (it.kind === "dot") {
+      if (afterException) {
+        return { line: it.line, message: "'.' cannot be adjacent to an exception block" };
+      }
       if (incomingPending) {
         return { line: it.line, message: "dot must follow an atom" };
       }
@@ -667,6 +821,7 @@ function desugarBody(
     }
 
     if (it.kind === "atom") {
+      afterException = false;
       const ra = it.atom;
       // Right-of-dot must be a plain Atom (not Equal). Sub is handled
       // by its own BodyItem branch below.
@@ -711,6 +866,7 @@ function desugarBody(
     }
 
     // it.kind === "sub"
+    afterException = false;
     let subIncoming: Frame | undefined;
     if (incomingPending) {
       // Outer's pending dot crosses two sub-boundaries. Pass the outer

@@ -97,6 +97,7 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
     case "JsCall":     evalJsCall(a, ctx, next); return;
     case "Atom":
     case "Sub":
+    case "Exception":
       throw new Error(`internal: pre-expand RuleAtom '${a.tag}' reached evaluator (decomposition pass missing?)`);
   }
 }

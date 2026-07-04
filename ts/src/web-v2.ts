@@ -6,8 +6,7 @@
 import { parse } from "./v2/parse.js";
 import { runFixpoint } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
-import { renderTimeline } from "./v2/timeline.js";
-import { renderTuples } from "./v2/render-output.js";
+import { renderTuples, renderTimelineH } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import type { Atom, Term } from "./v2/term.js";
 import type { Store } from "./v2/store.js";
@@ -56,19 +55,9 @@ const statusEl = document.getElementById("status-line") as HTMLSpanElement;
 const fileNameEl = document.getElementById("file-name") as HTMLSpanElement;
 const hideInternalEl = document.getElementById("hide-internal") as HTMLInputElement;
 const dbTemporalEl = document.getElementById("db-temporal") as HTMLInputElement;
-const editorTabEl = document.getElementById("editor-tab") as HTMLDivElement;
-const timelineTabEl = document.getElementById("timeline-tab") as HTMLDivElement;
-const timelineMainEl = document.getElementById("timeline-main") as HTMLDivElement;
-const timelineSidebarEl = document.getElementById("timeline-sidebar-host") as HTMLDivElement;
-const tabBtnEditor = document.getElementById("tab-editor") as HTMLButtonElement;
-const tabBtnTimeline = document.getElementById("tab-timeline") as HTMLButtonElement;
-const orientHEl = document.getElementById("timeline-orient-h") as HTMLButtonElement;
-const orientVEl = document.getElementById("timeline-orient-v") as HTMLButtonElement;
-const laneCompactEl = document.getElementById("timeline-lane-compact") as HTMLButtonElement;
-const laneNestedEl = document.getElementById("timeline-lane-nested") as HTMLButtonElement;
-const laneTreeEl = document.getElementById("timeline-lane-tree") as HTMLButtonElement;
-const momentSpineEl = document.getElementById("timeline-moment-spine") as HTMLButtonElement;
-const momentEdgesEl = document.getElementById("timeline-moment-edges") as HTMLButtonElement;
+const timelineInlineEl = document.getElementById("timeline-inline") as HTMLDivElement;
+const dbViewDatabaseEl = document.getElementById("db-view-database") as HTMLButtonElement;
+const dbViewTimelineEl = document.getElementById("db-view-timeline") as HTMLButtonElement;
 
 const GAS = 100;
 const TUPLE_GAS = 3000;
@@ -242,108 +231,44 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function renderDatabase(store: Store): void {
-  renderTuples(dbEl, store, {
-    hideInternal: hideInternalEl.checked,
-    temporal: dbTemporalEl.checked,
-  });
-}
-
-const ORIENT_KEY = "v2-timeline-orientation";
-let timelineOrient: "horizontal" | "vertical" = "horizontal";
+// The db pane toggles between the tuple database and an inline timeline
+// (renderTimelineH). Only the active view is rendered on each run; switching
+// re-renders the newly visible view from `lastStore`.
+const DB_VIEW_KEY = "v2-db-view";
+let dbView: "database" | "timeline" = "database";
 try {
-  const v = sessionStorage.getItem(ORIENT_KEY);
-  if (v === "vertical" || v === "horizontal") timelineOrient = v;
+  const v = sessionStorage.getItem(DB_VIEW_KEY);
+  if (v === "database" || v === "timeline") dbView = v;
 } catch { /* ignore */ }
 
-const LANE_KEY = "v2-timeline-lane-mode";
-let timelineLaneMode: "compact" | "nested" | "tree" = "tree";
-try {
-  const v = sessionStorage.getItem(LANE_KEY);
-  if (v === "compact" || v === "nested" || v === "tree") timelineLaneMode = v;
-} catch { /* ignore */ }
-
-function refreshOrientButtons(): void {
-  orientHEl.classList.toggle("active", timelineOrient === "horizontal");
-  orientVEl.classList.toggle("active", timelineOrient === "vertical");
+function refreshDbViewButtons(): void {
+  dbViewDatabaseEl.classList.toggle("active", dbView === "database");
+  dbViewTimelineEl.classList.toggle("active", dbView === "timeline");
+  dbEl.classList.toggle("hidden", dbView !== "database");
+  timelineInlineEl.classList.toggle("hidden", dbView !== "timeline");
 }
-refreshOrientButtons();
+refreshDbViewButtons();
 
-function refreshLaneButtons(): void {
-  laneCompactEl.classList.toggle("active", timelineLaneMode === "compact");
-  laneNestedEl.classList.toggle("active", timelineLaneMode === "nested");
-  laneTreeEl.classList.toggle("active", timelineLaneMode === "tree");
-}
-refreshLaneButtons();
-
-const MOMENT_KEY = "v2-timeline-moment-style";
-let timelineMomentStyle: "spine" | "edges" = "edges";
-try {
-  const v = sessionStorage.getItem(MOMENT_KEY);
-  if (v === "spine" || v === "edges") timelineMomentStyle = v;
-} catch { /* ignore */ }
-
-function refreshMomentButtons(): void {
-  momentSpineEl.classList.toggle("active", timelineMomentStyle === "spine");
-  momentEdgesEl.classList.toggle("active", timelineMomentStyle === "edges");
-}
-refreshMomentButtons();
-
-function renderTimelineTab(store: Store): void {
-  const out = renderTimeline(store, {
-    hideInternal: hideInternalEl.checked,
-    orientation: timelineOrient,
-    laneMode: timelineLaneMode,
-    momentStyle: timelineMomentStyle,
-  });
-  timelineMainEl.replaceChildren(out.main);
-  timelineSidebarEl.replaceChildren(out.sidebar);
+function renderDbPane(store: Store): void {
+  if (dbView === "timeline") {
+    renderTimelineH(timelineInlineEl, store, { hideInternal: hideInternalEl.checked });
+  } else {
+    renderTuples(dbEl, store, {
+      hideInternal: hideInternalEl.checked,
+      temporal: dbTemporalEl.checked,
+    });
+  }
 }
 
-function setOrient(o: "horizontal" | "vertical"): void {
-  if (timelineOrient === o) return;
-  timelineOrient = o;
-  refreshOrientButtons();
-  try { sessionStorage.setItem(ORIENT_KEY, o); } catch { /* ignore */ }
-  if (lastStore !== null) renderTimelineTab(lastStore);
-  timelineMainEl.scrollLeft = 0;
-  timelineMainEl.scrollTop = 0;
+function setDbView(v: "database" | "timeline"): void {
+  if (dbView === v) return;
+  dbView = v;
+  refreshDbViewButtons();
+  try { sessionStorage.setItem(DB_VIEW_KEY, v); } catch { /* ignore */ }
+  if (lastStore !== null) renderDbPane(lastStore);
 }
-orientHEl.addEventListener("click", () => setOrient("horizontal"));
-orientVEl.addEventListener("click", () => setOrient("vertical"));
-
-function setLaneMode(m: "compact" | "nested" | "tree"): void {
-  if (timelineLaneMode === m) return;
-  timelineLaneMode = m;
-  refreshLaneButtons();
-  try { sessionStorage.setItem(LANE_KEY, m); } catch { /* ignore */ }
-  if (lastStore !== null) renderTimelineTab(lastStore);
-}
-laneCompactEl.addEventListener("click", () => setLaneMode("compact"));
-laneNestedEl.addEventListener("click", () => setLaneMode("nested"));
-laneTreeEl.addEventListener("click", () => setLaneMode("tree"));
-
-function setMomentStyle(s: "spine" | "edges"): void {
-  if (timelineMomentStyle === s) return;
-  timelineMomentStyle = s;
-  refreshMomentButtons();
-  try { sessionStorage.setItem(MOMENT_KEY, s); } catch { /* ignore */ }
-  if (lastStore !== null) renderTimelineTab(lastStore);
-}
-momentSpineEl.addEventListener("click", () => setMomentStyle("spine"));
-momentEdgesEl.addEventListener("click", () => setMomentStyle("edges"));
-
-const TAB_KEY = "v2-active-tab";
-function setActiveTab(name: "editor" | "timeline"): void {
-  const isEditor = name === "editor";
-  editorTabEl.classList.toggle("hidden", !isEditor);
-  timelineTabEl.classList.toggle("hidden", isEditor);
-  tabBtnEditor.classList.toggle("active", isEditor);
-  tabBtnTimeline.classList.toggle("active", !isEditor);
-  try { sessionStorage.setItem(TAB_KEY, name); } catch { /* ignore */ }
-}
-tabBtnEditor.addEventListener("click", () => setActiveTab("editor"));
-tabBtnTimeline.addEventListener("click", () => setActiveTab("timeline"));
+dbViewDatabaseEl.addEventListener("click", () => setDbView("database"));
+dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
 
 function handleClick(intent: ClickIntent): void {
   if (lastStore === null) return;
@@ -401,8 +326,7 @@ async function run(): Promise<void> {
   const { store, status, iterations } = result;
   lastStore = store;
 
-  renderDatabase(store);
-  renderTimelineTab(store);
+  renderDbPane(store);
   highlightDbFromSource();
 
   // Status line.
@@ -625,7 +549,7 @@ hideInternalEl.addEventListener("change", () => {
 });
 
 dbTemporalEl.addEventListener("change", () => {
-  if (lastStore !== null) renderDatabase(lastStore);
+  if (lastStore !== null) renderDbPane(lastStore);
 });
 
 // Bootstrap: try to load `data/v2/ttt.t` from the server. If unavailable
@@ -657,10 +581,6 @@ async function bootstrap(): Promise<void> {
       // No server — stay detached; edits won't save.
     }
   }
-  try {
-    const saved = sessionStorage.getItem(TAB_KEY);
-    if (saved === "timeline") setActiveTab("timeline");
-  } catch { /* ignore */ }
   await run();
   sourceEl.focus();
   sourceEl.setSelectionRange(0, 0);

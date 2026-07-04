@@ -56,6 +56,10 @@ export function renderRuleAtom(atom: RuleAtom): string {
       const inner = atom.body.map(renderRuleAtom).join("; ");
       return `Sub${atom.sequence ? "(seq)" : ""} (${inner})`;
     }
+    case "Exception": {
+      const inner = atom.right.map(renderRuleAtom).join("; ");
+      return `Exception {${renderAtomRaw(atom.left)} => ${inner}}`;
+    }
     case "Equal":
       return `Equal ${renderTermRaw(atom.lhs)} = ${renderTermRaw(atom.rhs)}`;
     case "JsCall":

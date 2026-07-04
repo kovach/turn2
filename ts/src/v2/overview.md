@@ -45,7 +45,7 @@ The aggregator registry (duplicated from v1): named fold definitions used by sch
 Defines the v2 intermediate representation (IR): the `RuleAtom` algebra spanning both pre-expand (parser output) and post-expand (evaluator input) phases, the `Rule`/`Program` containers, stored `Tuple`s, and the result types for a fixpoint run including blocked-choice reporting. It documents the compilation pipeline (parse → expand → fixpoint eval → Store) and how source markers desugar into explicit anchor IR.
 
 **Key terms:**
-- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`)
+- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`, `Exception`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`)
 - `Marker` — pre-expand source marker (`match`/`episode`/`fact`/`anchor`/`ask`/`constrain`/`aggregate`) driving desugaring
 - `MatchConstraint` — semi-naive eval tag (`"any" | "delta" | "old"`) on `Match` atoms
 - `Rule` / `Program` — named rule (body + delta fields) and the top-level container (`rules`, `schema`, `jsDefs`)
@@ -63,6 +63,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - marker chars — `-~+^!?` map to a `Marker`
 - dot-notation desugaring — threads fresh anchor vars across atoms/subs
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
+- `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
 - bool-weight validation — enforces `-> bool` weight restrictions
 - `#def`/`#agg` commands — rule naming and schema declarations
 
@@ -71,8 +72,9 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 The expansion pipeline that lowers parsed pre-expand rules into the flat post-expand IR: it runs anchor decomposition (`decomposeRule` + `pruneChains`), universal rule-splitting on every `Emit`, dead-slice filtering, and semi-naive delta-variant generation. The core anchor-decomposition pass threads SSA running-anchor variables and a `*chain` fingerprint, lowering each marker (match/episode/fact/anchor/ask/constrain/aggregate) into the right combination of `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal`.
 
 **Key terms:**
-- `expand` — top-level pipeline: decompose → prune → split → filter → delta-variants
+- `expand` — top-level pipeline: exceptions → decompose → prune → split → filter → delta-variants
 - `expandStages` — same pipeline returning each named intermediate rule-list (`decomposed`/`split`/`filtered`/`variants`); `expand` is its `variants`. Used by the `v2-cli.ts` `--stage` dumps
+- `applyExceptions` — source-to-source elimination of `{p t1..tn => e}` `Exception` atoms before any other pass: renames emitting `p` occurrences to a fresh `_<p>_prime<k>` across the working set, sets a `bool` flag relation `_<p>_exn<k>`, and generates paired `<rule>_exn<j>` / `<rule>_default<j>` rules (plans/v2-exceptions.md). Also invoked directly by `runFixpoint` so `computeAggStrata` sees exception-free rules
 - `decomposeRule` — anchor-decomposition pass; threads SSA anchor vars and a `*chain` fingerprint, lowering each `Marker` to post-expand atoms
 - `splitRule` — slices a rule at every `Emit` into producer/consumer halves
 - delta-variants — semi-naive cloning; tags one `Match` as `delta` and sets `deltaHead`/`deltaSafeSkip`

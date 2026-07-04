@@ -7,7 +7,7 @@
 import type { FixpointStatus, Program } from "./types.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { type Store, createStore, GasError } from "./store.js";
-import { expand } from "./expand.js";
+import { applyExceptions, expand } from "./expand.js";
 import {
   closeDoAgg,
   collectAllBlocked,
@@ -32,6 +32,9 @@ export function runFixpoint(
   tupleGas = 5000,
   options?: { stats?: boolean },
 ): FixpointResult {
+  // Eliminate `{...}` exception atoms first so the pre-expand rules handed
+  // to computeAggStrata below (and expand itself) are exception-free.
+  program = applyExceptions(program);
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
   // Aggregate dependency strata: computed from the pre-expand rules (markers
