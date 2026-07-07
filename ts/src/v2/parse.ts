@@ -31,7 +31,8 @@ type Command =
   | { kind: "def"; name: string; line: number }
   | { kind: "agg"; decl: SchemaDecl }
   | { kind: "reactive"; decl: SchemaDecl }
-  | { kind: "js"; name: string; params: string[]; body: string; line: number };
+  | { kind: "js"; name: string; params: string[]; body: string; line: number }
+  | { kind: "exit"; line: number };
 
 export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
@@ -308,6 +309,12 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
   if (tok.name === "js") {
     return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
   }
+  if (tok.name === "exit") {
+    if (tok.argText.trim().length > 0) {
+      return { line: tok.line, message: "'#exit' takes no arguments" };
+    }
+    return { kind: "exit", line: tok.line };
+  }
   return { line: tok.line, message: `unknown command '#${tok.name}'` };
 }
 
@@ -365,6 +372,10 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         schema.set(cmd.decl.relation, cmd.decl.aggregator);
         if (cmd.kind === "reactive") reactive.add(cmd.decl.relation);
         continue;
+      }
+      if (cmd.kind === "exit") {
+        // Drop every rule/command occurring after this point.
+        break;
       }
       if (cmd.kind === "js") {
         if (jsDefs.has(cmd.name)) {

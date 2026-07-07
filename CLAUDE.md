@@ -1,6 +1,6 @@
 - `ts/src/v2/overview.md` has an up-to-date technical overview of the project; but doesn't yet include the `ts/src/pres` sub-project
-  - the deprecated "v1" code lives at `ts/src/v1/` (self-contained; v2 has its own copies of the shared term layer, see plans/v1-cleanup.md)
-- notes/overview.md has a log of all plans that were used to create the project
+  - the deprecated "v1" code lives at `ts/src/v1/`
+- `notes/overview.md` has a log of all plans that were used to create the project
 - when told to read a section like `# some task or problem`, it refers to the top of notes/overview.md.
   - if it contains a line like `plan: TODO`, write an implementation plan at a new file under `plans/` and replace TODO with its filename
   - if the change adds files, include a note in the plan to update `ts/src/v2/overview.md`
