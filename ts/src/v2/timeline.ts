@@ -17,7 +17,7 @@
 import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
 import { tokenOf } from "./store.js";
-import { renderAtomShallow, renderTermShallow } from "./print.js";
+import { renderAtom, renderTerm, renderTermShallow } from "./print.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -308,7 +308,7 @@ export function layoutTimeline(
     const t = store.tuples[i]!;
     const lTok = tokenOf(store, t.l);
     const rTok = tokenOf(store, t.r);
-    const full = renderAtomShallow(store, t.atom);
+    const full = renderAtom(store, t.atom);
     const label = truncate(full, opts.barLabelMaxLen);
     if (rTok === topTok) {
       let bucket = factsByMoment.get(lTok);
@@ -375,13 +375,13 @@ export function layoutTimeline(
   const constrainRows: { label: string; full: string }[] = [];
   for (const { idx, head } of sidebarTuples) {
     const t = store.tuples[idx]!;
-    const full = renderAtomShallow(store, t.atom);
+    const full = renderAtom(store, t.atom);
     if (head === "is") {
       const choice = t.atom.terms[1];
       const value = t.atom.terms[2];
       if (choice !== undefined && value !== undefined) {
         isRows.push({
-          label: `${renderTermShallow(store, choice)} ↦ ${renderTermShallow(store, value)}`,
+          label: `${renderTerm(store, choice)} ↦ ${renderTerm(store, value)}`,
           full,
         });
       } else {

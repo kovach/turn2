@@ -228,6 +228,11 @@ export class Editor {
       this.indentSelection(ev.shiftKey);
       return;
     }
+    if (ev.key === "/" && (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      this.toggleComment();
+      return;
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       this.insertAutoIndent();
@@ -285,6 +290,88 @@ export class Editor {
           shift -= Math.min(colWithin, removed);
         } else {
           shift += 2;
+        }
+        break;
+      }
+      return p + shift;
+    };
+
+    const newStart = mapOffset(selStart);
+    const newEnd = mapOffset(selEnd);
+    this.ta.focus();
+    this.ta.setSelectionRange(start, endLine);
+    document.execCommand("insertText", false, replacement);
+    this.ta.setSelectionRange(newStart, newEnd);
+  }
+
+  // Toggle `-- ` line comments over the selected lines (Ctrl/Cmd-/). If every
+  // non-blank selected line is already commented, uncomment; otherwise comment
+  // all non-blank lines, inserting the marker at each line's indent. Blank lines
+  // are left untouched. The `-- ` sits after leading whitespace so nesting reads
+  // cleanly. Selection is preserved via the same per-line offset map as indent.
+  private toggleComment(): void {
+    const value = this.ta.value;
+    const selStart = this.ta.selectionStart;
+    const selEnd = this.ta.selectionEnd;
+    const first = lineBoundsAt(value, selStart);
+    const last = lineBoundsAt(value, selEnd);
+    const start = first.start;
+    const endLine = last.end;
+    const slice = value.slice(start, endLine);
+    const lines = slice.split("\n");
+
+    const lineStartsOrig: number[] = [];
+    let cur = start;
+    for (const ln of lines) {
+      lineStartsOrig.push(cur);
+      cur += ln.length + 1;
+    }
+
+    const indentOf = (ln: string): number => ln.match(/^[ \t]*/)![0]!.length;
+    const nonBlank = lines.filter((ln) => ln.trim().length > 0);
+    const uncomment =
+      nonBlank.length > 0 &&
+      nonBlank.every((ln) => ln.slice(indentOf(ln)).startsWith("--"));
+
+    // Per line: column (within line) where the edit lands and its signed length.
+    const editCol: number[] = [];
+    const delta: number[] = [];
+    const out = lines.map((ln) => {
+      const ind = indentOf(ln);
+      if (ln.trim().length === 0) {
+        editCol.push(ind);
+        delta.push(0);
+        return ln;
+      }
+      if (uncomment) {
+        const rem = ln.slice(ind).match(/^-- ?/)![0]!.length;
+        editCol.push(ind);
+        delta.push(-rem);
+        return ln.slice(0, ind) + ln.slice(ind + rem);
+      }
+      editCol.push(ind);
+      delta.push(3);
+      return ln.slice(0, ind) + "-- " + ln.slice(ind);
+    });
+    const replacement = out.join("\n");
+
+    const mapOffset = (p: number): number => {
+      if (p <= start) return p;
+      if (p >= endLine) return p + (replacement.length - slice.length);
+      let shift = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const ls = lineStartsOrig[i]!;
+        const le = ls + lines[i]!.length;
+        if (p > le) { shift += delta[i]!; continue; }
+        const col = p - ls;
+        const c = editCol[i]!;
+        const d = delta[i]!;
+        if (d > 0) {
+          if (col >= c) shift += d;
+        } else if (d < 0) {
+          const rem = -d;
+          if (col >= c + rem) shift += d;
+          else if (col > c) shift -= col - c;
         }
         break;
       }

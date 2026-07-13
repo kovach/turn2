@@ -1,6 +1,9 @@
+# 26/07/7
+
 # expansion refactoring using binary connectives
 plan: plans/v2-temporal-connectives.md (step 1: parity refactor)
 followed by: plans/v2-bound-set-anchors.md (step 2: commutative `,`, bound-set anchors; from plan review discussion)
+status: pending
 
 - idea: conceptually simplify the "anchor decomposition" stage of `expand.ts`
 - introduce new IR containing binary operators called *temporal connectives*

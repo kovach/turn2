@@ -76,9 +76,12 @@ export function userTerms(atom: Atom): readonly Term[] {
 }
 
 // Shallow variant of `renderTerm`: stops at any `Ref` boundary, printing it
-// as `*<id>` instead of recursively expanding the stored body. Useful for
-// info-panel display where deeply nested moment chains explode visually.
-// Id literals are also rendered opaquely.
+// as `*<id>` instead of recursively expanding the stored body. Used for
+// moment/interval endpoints (the timeline's dot titles, the db view's
+// `[l, r]` column), where the Ref *is* the moment identity and expanding its
+// backing chain adds noise rather than information. Atom/fact content should
+// use the full `renderAtom`/`renderTerm` so user data terms like `(s z)`
+// display unfolded. Id literals are also rendered opaquely.
 export function renderTermShallow(store: Store, term: Term): string {
   switch (term.tag) {
     case "Symbol": return term.name;
