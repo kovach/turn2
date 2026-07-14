@@ -4,10 +4,11 @@
 // at construction time. A chain entry is droppable only if it's both
 // non-essential (does not carry per-firing identity) and dead (not
 // referenced by any later atom). The essential set is supplied by
-// `decomposeRule` and contains the user-Variable names whose values
-// distinguish firings of the rule; everything else in the chain
-// (endpoint slots `_l_K` / `_r_K`, anchor SSA `_xl_K` / `_xr_K`) is
-// downstream-recoverable or a pure reduction of other entries.
+// `decomposeRule` and contains the names whose values distinguish
+// firings of the rule (user Variables and endpoint slots `_l_K` /
+// `_r_K`); everything else in the chain (anchor SSA `_xl_K` / `_xr_K`,
+// minted only by match intersections) is a pure reduction of other
+// entries.
 //
 // The universal `emitIdTpl` doubles as a per-firing dedup fingerprint on
 // stored rows, so essential entries must stay in chains regardless of

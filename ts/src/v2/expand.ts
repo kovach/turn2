@@ -432,7 +432,8 @@ interface DecState {
   // template lexPos for fresh-* templates too.
   lexPos: number;
   // Running counter for synthetic anchor SSA variables (`_xl_<k>` /
-  // `_xr_<k>`). Independent of lexPos.
+  // `_xr_<k>`). Independent of lexPos. Minted only by decomposeMatch's
+  // anchor intersection; emits and sequence-subs reduce statically.
   anchorCounter: number;
   // Variables currently in scope (in chain order). Used to materialize
   // fresh-* templates for unbound user vars in Emits.
@@ -453,10 +454,11 @@ interface DecState {
   // load-bearing for per-firing uniqueness — i.e., dropping them would
   // let two distinct firings collide on the emitted row's universal id
   // slot (causing dedup to coalesce them). Populated at chain pushes
-  // corresponding to user Variables; not populated for endpoint slots
-  // (`_l_K` / `_r_K`) or anchor SSA (`_xl_K` / `_xr_K`), which are
-  // either downstream-recoverable or pure reductions of other entries.
-  // Consumed by `pruneChains` in expand-liveness.ts.
+  // for user Variables and endpoint slots (`_l_K` / `_r_K`, which
+  // distinguish firings on different stored rows); not populated for
+  // anchor SSA (`_xl_K` / `_xr_K`, minted only at matches), which are
+  // pure reductions of other entries. Consumed by `pruneChains` in
+  // expand-liveness.ts.
   essential: Set<string>;
   // `#js` function table (for `@js(...)` lowering: existence + arity checks).
   jsDefs: Map<string, JsDef>;
@@ -515,8 +517,11 @@ function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
   const name = `_${kind}_${k}`;
   const v: Term = { tag: "Variable", name };
   // Push onto chain so atoms in a downstream consumer split-rule
-  // (e.g. Sub-closing `Max XL_pre-sub …`) can recover this anchor SSA
-  // from the matched row's trailing idTpl via structural unification.
+  // (e.g. a later match's intersection `Max XL lVar` / `Min XR rVar`)
+  // can recover this anchor SSA from the matched row's trailing idTpl
+  // via structural unification. Only decomposeMatch mints these now —
+  // a matched tuple's endpoints have no static ordering relationship
+  // to the running anchor, so its Max/Min are genuinely dynamic.
   state.seen.add(name);
   state.chain.push(v);
   return v;
@@ -727,9 +732,14 @@ function decomposeBody(
     if (a.tag === "Sub") {
       const inner = decomposeBody(a.body, state, XL, XR);
       if (a.sequence) {
-        const XLseq = freshAnchorVar(state, "xl");
-        state.out.push({ tag: "Max", a: XL, b: inner.XR, out: XLseq, span: a.span });
-        XL = XLseq;
+        // Statically-reduced sequence close — no Max atom. The inner
+        // block ran from (XL, XR); by the running-anchor invariant
+        // `XL <= inner-final-XL <= inner.XR`, so the `Max(XL, inner.XR)`
+        // formerly emitted here always picked `inner.XR`, and its
+        // comparability check could never fail (each lessEq link in the
+        // chain is an order-graph path or a bot/top sentinel, and
+        // `lessThanTok` finds the composition by path concatenation).
+        XL = inner.XR;
       }
       // Non-sequence: outer XL/XR unchanged. The inner's atoms produced
       // their own SSA running-anchor vars internally; nothing leaks.
@@ -1042,7 +1052,6 @@ function decomposeEmit(
   // emit contributes its own slots, matching today's assignIds order.
   // We push lVar/rVar onto the chain at the end of this function.
   let emitL: Term, emitR: Term;
-  let updateAnchor = true;
   switch (a.marker) {
     case "fact":
     case "ask":
@@ -1075,8 +1084,6 @@ function decomposeEmit(
       state.out.push({ tag: "Equal", lhs: rVar, rhs: XR, span: a.span });
       emitL = XL;
       emitR = XR;
-      // Anchor unchanged after `^` — Max/Min would be no-ops.
-      updateAnchor = false;
       break;
     }
     default:
@@ -1139,13 +1146,25 @@ function decomposeEmit(
   state.chain.push(rVar);
   state.essential.add(rName);
 
-  // Anchor update.
-  if (updateAnchor) {
-    const XLnext = freshAnchorVar(state, "xl");
-    const XRnext = freshAnchorVar(state, "xr");
-    state.out.push({ tag: "Max", a: XL, b: emitL, out: XLnext, span: a.span });
-    state.out.push({ tag: "Min", a: XR, b: emitR, out: XRnext, span: a.span });
-    return { XL: XLnext, XR: XRnext };
+  // Statically-reduced anchor update — no Max/Min atoms. The running
+  // anchor obeys `XL <= XR` on every live trail, with XL non-decreasing
+  // and XR non-increasing over the body. The AssertLt atoms above
+  // *impose* order edges (`evalAssertLt` calls `addOrder`), so after a
+  // fact emit `XL < lVar < XR` and after an episode `XL < lVar < rVar <
+  // XR` hold by construction; the `Max(XL, emitL)` / `Min(XR, emitR)`
+  // pair formerly emitted here could only ever pick `(lVar, XR)` resp.
+  // `(lVar, rVar)` (fact's emitR is `top`, so `Min(XR, top) = XR`).
+  // Their comparability check could never fail either: each lessEq fact
+  // above is a direct addOrder edge or involves the bot/top sentinels,
+  // which `lessThanTok` special-cases as universally comparable. The
+  // atoms were pure no-ops — don't re-add them defensively. The anchor
+  // (`^`) case emits no asserts and leaves the anchor untouched.
+  switch (a.marker) {
+    case "episode":
+      return { XL: lVar, XR: rVar };
+    case "anchor":
+      return { XL, XR };
+    default: // fact / ask / constrain
+      return { XL: lVar, XR };
   }
-  return { XL, XR };
 }

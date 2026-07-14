@@ -144,6 +144,33 @@ pipeline.
     so value-level discrimination *within* one moment is out of
     scope, same as the original design.)
 
+## First-pass findings (26/07/13)
+
+- **CHAR 12(c) diagnosed** (after-`;` placement intercepting nothing).
+  The watcher makes the geometry visible: the ctx episode spans
+  `phase1_r .. world_r`. The phase1 tuple touches it only at the
+  shared endpoint, giving a degenerate flag interval that contains
+  nothing (arguably correct — that tuple predates the window). The
+  phase2 tuple lies strictly inside the window by transitivity
+  (`phase1_r < phase2_l < phase2_r < world_r`), yet the watcher join
+  never fires — and a hand-written equivalent reproduces it without
+  exceptions at all:
+
+  ```
+  ~world
+  world, ~phase1; ~phase2
+  phase2, ^q b
+  #def r
+    world
+    (phase1); ^ctx2
+  ctx2, q X, ^flag X        -- flag b is never derived
+  ```
+
+  So the evaluator does not derive overlap between a post-`;` anchor
+  interval and a tuple minted under another rule's later step — a
+  general moment-order/join question, not an exceptions one. Fixing
+  it fixes CHAR 12(c) for free.
+
 ## Docs
 
 - `ts/src/v2/overview.md`: update the `applyExceptions` bullet

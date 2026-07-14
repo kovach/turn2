@@ -69,7 +69,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 
 # expand.ts
 
-The expansion pipeline that lowers parsed pre-expand rules into the flat post-expand IR: it runs anchor decomposition (`decomposeRule` + `pruneChains`), universal rule-splitting on every `Emit`, dead-slice filtering, and semi-naive delta-variant generation. The core anchor-decomposition pass threads SSA running-anchor variables and a `*chain` fingerprint, lowering each marker (match/episode/fact/anchor/ask/constrain/aggregate) into the right combination of `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal`.
+The expansion pipeline that lowers parsed pre-expand rules into the flat post-expand IR: it runs anchor decomposition (`decomposeRule` + `pruneChains`), universal rule-splitting on every `Emit`, dead-slice filtering, and semi-naive delta-variant generation. The core anchor-decomposition pass threads SSA running-anchor variables and a `*chain` fingerprint, lowering each marker (match/episode/fact/anchor/ask/constrain/aggregate) into the right combination of `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal`. `Max`/`Min` appear only at matches (the anchor intersection with a stored tuple's endpoints); emit and sequence-sub anchor updates are statically determined by the running-anchor invariant and emit no atoms.
 
 **Key terms:**
 - `expand` — top-level pipeline: exceptions → decompose → prune → split → filter → delta-variants

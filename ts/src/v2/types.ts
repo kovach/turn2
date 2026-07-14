@@ -23,8 +23,10 @@ export type MatchConstraint = "any" | "delta" | "old";
 
 // Pre-expand source-side marker. Drives the desugaring rules in expand:
 //   match     -> Match + Le/Le/Max/Min (overlap with running anchor)
-//   episode   -> Equal/Equal + AssertLt*3 + Emit + Max/Min
-//   fact      -> Equal + AssertLt*2 + Emit at (l, top) + Max/Min
+//   episode   -> Equal/Equal + AssertLt*3 + Emit (anchor becomes (l, r)
+//                statically; only matches emit Max/Min)
+//   fact      -> Equal + AssertLt*2 + Emit at (l, top) (anchor becomes
+//                (l, XR) statically)
 //   anchor    -> Emit at (XL, XR) (no fresh moments, no anchor update)
 //   ask       -> like fact, with wrapped (_choose chooseId atom) row
 //   constrain -> like fact, with wrapped (_constrain atom) row
