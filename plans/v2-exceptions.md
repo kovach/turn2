@@ -1,5 +1,11 @@
 # exceptions
 
+> **Amended 26/07/13 by [[v2-exception-watchers]]** (`plans/v2-exception-watchers.md`):
+> step 4's in-place `match p', anchor p_exn -> 1` is replaced by a plain
+> `anchor p_ctx U..` broadcast plus a generated watcher rule, so exceptions
+> no longer gate `;` progression and their LHS vars are exception-local.
+> The V-scoping worked example below (e2 reading exc1's X) is retired.
+
 *Exceptions* let a rule locally override what a predicate does. An
 **exception expression** `{p t1..tn => e}` in a rule body means: in this
 context, wherever `p t1..tn` would have been produced, do `e` instead.

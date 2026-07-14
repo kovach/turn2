@@ -1,4 +1,5 @@
-# 26/07/7
+# 26/07/13
+- see `# exceptions`
 
 # expansion refactoring using binary connectives
 plan: plans/v2-temporal-connectives.md (step 1: parity refactor)
@@ -260,6 +261,7 @@ todo
 
 # exceptions
 plan: plans/v2-exceptions.md
+amended: plans/v2-exception-watchers.md (26/07/13 — non-gating watcher desugaring; exception LHS vars are local)
 
 *exceptions* are rules that override default behavior in some sense
 ```

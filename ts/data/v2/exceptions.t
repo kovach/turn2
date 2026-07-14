@@ -13,3 +13,9 @@ phase2, ^p b
 #def r
   phase1
   {p X => ^e X}
+
+-- Watchers (plans/v2-exception-watchers.md): an exception is a
+-- listener, not a gate. With no `q` producer anywhere, this rule
+-- still steps through to `stage2` — the exception no longer stalls
+-- the `;` progression.
+( ~stage1, {q X => ^oops X} ); ~stage2

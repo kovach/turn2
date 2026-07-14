@@ -45,7 +45,8 @@ export function expand(program: Program): Program {
   return { rules: variants, schema: program.schema, reactive: program.reactive, jsDefs: program.jsDefs };
 }
 
-// ----- Exceptions pass (plans/v2-exceptions.md) -----
+// ----- Exceptions pass (plans/v2-exceptions.md, amended by
+// plans/v2-exception-watchers.md) -----
 //
 // Source-to-source elimination of `{p t1..tn => e}` Exception atoms, run
 // before any other expansion. Maintains a working set `S` of exception-free
@@ -53,6 +54,15 @@ export function expand(program: Program): Program {
 // exception's RHS is invisible to earlier exceptions and exposed to later
 // ones only after it is spliced into its generated rule (the chaining
 // mechanism — see the plan's worked examples).
+//
+// The host rule never matches `p'` itself (a match would gate `;`
+// progression — the stall the watcher amendment removes). It broadcasts its
+// context with a plain `anchor p_ctx U..` emit; a generated watcher rule
+// joins that episode with `p'` tuples and sets the flag over the
+// intersection, which is exactly the interval the old inline recognition
+// produced. Exception LHS variables are therefore local to the exception,
+// except that prefix-bound ones travel through the ctx payload and re-unify
+// in the watcher (preserving their filter meaning).
 
 type AtomRA = Extract<RuleAtom, { tag: "Atom" }>;
 type ExceptionRA = Extract<RuleAtom, { tag: "Exception" }>;
@@ -78,8 +88,10 @@ export function applyExceptions(program: Program): Program {
       const p = pTerm.name;
       const tTerms = exc.left.terms.slice(1);
 
-      // 1. Context vars V1..Vm = (vars(e) ∩ vars(prefix(R))) \ vars(t1..tn),
-      // in prefix first-seen order.
+      // 1. Flag payload Ve = (vars(e) ∩ vars(prefix(R))) \ vars(t1..tn) and
+      // ctx payload U = (vars(t1..tn) ∪ vars(e)) ∩ vars(prefix(R)), both in
+      // prefix first-seen order. Prefix-bound t-vars (Vt) ride the ctx
+      // payload so the watcher re-unifies them with the tuple.
       const prefixVars: string[] = [];
       collectPrefixVars(R.body, exc, new Set<string>(), prefixVars);
       const eVars = new Set<string>();
@@ -87,14 +99,21 @@ export function applyExceptions(program: Program): Program {
       const tVars = new Set<string>();
       for (const t of tTerms) collectVarNames(t, tVars);
       const V = prefixVars.filter((n) => eVars.has(n) && !tVars.has(n));
+      const U = prefixVars.filter((n) => eVars.has(n) || tVars.has(n));
 
-      // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>`.
+      // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>` / `_<p>_ctx<k>`.
       let k = 1;
-      while (usedSyms.has(`_${p}_prime${k}`) || usedSyms.has(`_${p}_exn${k}`)) k++;
+      while (
+        usedSyms.has(`_${p}_prime${k}`) ||
+        usedSyms.has(`_${p}_exn${k}`) ||
+        usedSyms.has(`_${p}_ctx${k}`)
+      ) k++;
       const primeName = `_${p}_prime${k}`;
       const exnName = `_${p}_exn${k}`;
+      const ctxName = `_${p}_ctx${k}`;
       usedSyms.add(primeName);
       usedSyms.add(exnName);
+      usedSyms.add(ctxName);
 
       // 2. Flag schema.
       program.schema.set(exnName, "bool");
@@ -105,30 +124,47 @@ export function applyExceptions(program: Program): Program {
       // predicate from `{p => e}`'s arity-0 `p` and passes through.
       for (const rule of S) rewriteEmitHeads(rule.body, p, tTerms.length, primeName);
 
-      // 4. Replace the Exception atom in R with [match p' t.., anchor
-      // p_exn V.. -> 1].
+      // 4. Replace the Exception atom in R with the single emit
+      // `anchor p_ctx U..` — no match, so nothing gates `;` progression.
+      // An anchor emit lands exactly on R's running anchor interval at
+      // this body position.
       const span = exc.span;
       const sym = (name: string): Term => ({ tag: "Symbol", name });
       const vars = (names: string[]): Term[] => names.map((n) => ({ tag: "Variable", name: n }));
-      const matchInR: AtomRA = {
-        tag: "Atom", marker: "match",
-        atom: { terms: [sym(primeName), ...tTerms] }, span,
-      };
-      const flagEmit: AtomRA = {
+      const ctxEmit: AtomRA = {
         tag: "Atom", marker: "anchor",
-        atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span,
+        atom: { terms: [sym(ctxName), ...vars(U)] }, span,
       };
-      container.splice(index, 1, matchInR, flagEmit);
+      container.splice(index, 1, ctxEmit);
 
       // Generated rule names, skipping to the next free integer on collision.
-      while (usedRuleNames.has(`${R.name}_exn${j}`) || usedRuleNames.has(`${R.name}_default${j}`)) j++;
+      while (
+        usedRuleNames.has(`${R.name}_watch${j}`) ||
+        usedRuleNames.has(`${R.name}_exn${j}`) ||
+        usedRuleNames.has(`${R.name}_default${j}`)
+      ) j++;
+      const watchRuleName = `${R.name}_watch${j}`;
       const exnRuleName = `${R.name}_exn${j}`;
       const defaultRuleName = `${R.name}_default${j}`;
       j++;
+      usedRuleNames.add(watchRuleName);
       usedRuleNames.add(exnRuleName);
       usedRuleNames.add(defaultRuleName);
 
-      // 5. Exception rule: match p' t.., aggregate p_exn V.. -> 1, e.
+      // 5. Watcher rule: match p_ctx U.., match p' t.., anchor p_exn V.. -> 1.
+      // The two matches intersect, so the flag covers ctx ∩ tuple — the same
+      // interval the old inline recognition emitted it over.
+      S.push({
+        name: watchRuleName,
+        span,
+        body: [
+          { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
+          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
+          { tag: "Atom", marker: "anchor", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
+        ],
+      });
+
+      // 6. Exception rule: match p' t.., aggregate p_exn V.. -> 1, e.
       S.push({
         name: exnRuleName,
         span,
@@ -139,7 +175,7 @@ export function applyExceptions(program: Program): Program {
         ],
       });
 
-      // 6. Default rule: match p' W.., aggregate p_exn _.._ -> 0,
+      // 7. Default rule: match p' W.., aggregate p_exn _.._ -> 0,
       // anchor p W..  (fresh W1..Wn, m wildcards).
       const W: Term[] = tTerms.map((_, i) => ({ tag: "Variable", name: `_w${i + 1}` }));
       const flagWilds: Term[] = V.map(() => ({ tag: "Wildcard" }));
@@ -153,7 +189,7 @@ export function applyExceptions(program: Program): Program {
         ],
       });
     }
-    // 7. R is now in normal form.
+    // 8. R is now in normal form.
     S.push(R);
   }
   return { ...program, rules: S };

@@ -1,6 +1,9 @@
-// Tests for the exceptions transform (plans/v2-exceptions.md):
-// `{p t1..tn => e}` desugars, before expansion, into a p→p' rename plus
-// exception/default rules gated by a bool flag relation.
+// Tests for the exceptions transform (plans/v2-exceptions.md, amended by
+// plans/v2-exception-watchers.md): `{p t1..tn => e}` desugars, before
+// expansion, into a p→p' rename plus watcher/exception/default rules gated
+// by a bool flag relation. The host rule only broadcasts its context
+// (`anchor p_ctx U..`) — it never matches p', so exceptions don't gate
+// `;` progression and their LHS vars are local.
 //
 // Tests 12–14 are characterization tests for the temporal questions
 // recorded in the plan ("maybe issues" item 3): they assert the hard
@@ -122,34 +125,40 @@ ctx, ^p a
   console.log("PASS: multi-atom RHS");
 }
 
-// 4) V-scoping (intra-rule, different predicates) — structural. The
-// worked example from the plan: second exception's RHS references a var
-// bound by the first's in-place match.
+// 4) V-scoping (intra-rule, different predicates) — structural. Watcher
+// shape: R broadcasts `anchor p_ctx U..`; the watcher joins ctx with p'
+// and sets the flag. Prefix-bound LHS vars (X) ride the ctx payload;
+// e2's context var (Y) rides both ctx and flag. (The original plan's
+// cross-exception V-scoping — e2 reading exc1's X — is retired by
+// plans/v2-exception-watchers.md: LHS vars are exception-local now.)
 {
   const prog = ok(`
 #def r
   is1 _X X
   {p X => ^e1 X}
   is2 _Y Y
-  {q Z => ^e2 X Z}
+  {q Z => ^e2 Y Z}
 `);
   const out = applyExceptions(prog);
   const byName = new Map(out.rules.map((r) => [r.name, r]));
   assert.deepEqual(
     [...byName.keys()].sort(),
-    ["r", "r_default1", "r_default2", "r_exn1", "r_exn2"],
+    ["r", "r_default1", "r_default2", "r_exn1", "r_exn2", "r_watch1", "r_watch2"],
     `rule set: ${[...byName.keys()].join(", ")}`,
   );
   const render = (name: string): string[] =>
     byName.get(name)!.body.map(renderRuleAtom);
   assert.deepEqual(render("r"), [
     "Atom[match] is1 ?_X ?X",
+    "Atom[anchor] _p_ctx1 ?X",
+    "Atom[match] is2 ?_Y ?Y",
+    "Atom[anchor] _q_ctx1 ?Y",
+  ], `r body:\n${render("r").join("\n")}`);
+  assert.deepEqual(render("r_watch1"), [
+    "Atom[match] _p_ctx1 ?X",
     "Atom[match] _p_prime1 ?X",
     "Atom[anchor] _p_exn1 -> 1",
-    "Atom[match] is2 ?_Y ?Y",
-    "Atom[match] _q_prime1 ?Z",
-    "Atom[anchor] _q_exn1 ?X -> 1",
-  ], `r body:\n${render("r").join("\n")}`);
+  ]);
   assert.deepEqual(render("r_exn1"), [
     "Atom[match] _p_prime1 ?X",
     "Atom[aggregate] _p_exn1 -> 1",
@@ -160,10 +169,15 @@ ctx, ^p a
     "Atom[aggregate] _p_exn1 -> 0",
     "Atom[anchor] p ?_w1",
   ]);
+  assert.deepEqual(render("r_watch2"), [
+    "Atom[match] _q_ctx1 ?Y",
+    "Atom[match] _q_prime1 ?Z",
+    "Atom[anchor] _q_exn1 ?Y -> 1",
+  ]);
   assert.deepEqual(render("r_exn2"), [
     "Atom[match] _q_prime1 ?Z",
-    "Atom[aggregate] _q_exn1 ?X -> 1",
-    "Atom[anchor] e2 ?X ?Z",
+    "Atom[aggregate] _q_exn1 ?Y -> 1",
+    "Atom[anchor] e2 ?Y ?Z",
   ]);
   assert.deepEqual(render("r_default2"), [
     "Atom[match] _q_prime1 ?_w1",
@@ -172,11 +186,11 @@ ctx, ^p a
   ]);
   assert.equal(out.schema.get("_p_exn1"), "bool");
   assert.equal(out.schema.get("_q_exn1"), "bool");
-  console.log("PASS: V-scoping structural (worked example 1)");
+  console.log("PASS: watcher structural (worked example 1)");
 }
 
-// 4b) V-scoping end-to-end: X (bound by exc1's in-place match) is
-// transported to e2 via the flag.
+// 4b) V-scoping end-to-end: Y (a genuine prefix var) is transported to
+// e2 via ctx payload and flag; prefix-bound X filters exc1's LHS.
 {
   const tuples = run(`
 +is1 s1 xv
@@ -192,10 +206,10 @@ ctx, ^q zv
   is1 _X X
   {p X => ^e1 X}
   is2 _Y Y
-  {q Z => ^e2 X Z}
+  {q Z => ^e2 Y Z}
 `);
   assert(tuples.includes("e1 xv"), `missing 'e1 xv': ${tuples.join(" | ")}`);
-  assert(tuples.includes("e2 xv zv"), `missing 'e2 xv zv': ${tuples.join(" | ")}`);
+  assert(tuples.includes("e2 yv zv"), `missing 'e2 yv zv': ${tuples.join(" | ")}`);
   assert(!tuples.includes("p xv"), `'p xv' should be intercepted: ${tuples.join(" | ")}`);
   assert(!tuples.includes("q zv"), `'q zv' should be intercepted: ${tuples.join(" | ")}`);
   console.log("PASS: V-scoping end-to-end");
@@ -218,12 +232,15 @@ ctx, ^q zv
     byName.get(name)!.body.map(renderRuleAtom);
   assert.deepEqual(render("r"), [
     "Atom[match] is1 ?_X ?X",
+    "Atom[anchor] _move_ctx1 ?X",
+    "Atom[match] is2 ?_Y ?Y",
+    "Atom[anchor] _move_ctx2 ?Y",
+  ], `r body:\n${render("r").join("\n")}`);
+  assert.deepEqual(render("r_watch1"), [
+    "Atom[match] _move_ctx1 ?X",
     "Atom[match] _move_prime1 ?X _",
     "Atom[anchor] _move_exn1 -> 1",
-    "Atom[match] is2 ?_Y ?Y",
-    "Atom[match] _move_prime2 ?Y _",
-    "Atom[anchor] _move_exn2 -> 1",
-  ], `r body:\n${render("r").join("\n")}`);
+  ]);
   assert.deepEqual(render("r_default1"), [
     "Atom[match] _move_prime1 ?_w1 ?_w2",
     "Atom[aggregate] _move_exn1 -> 0",
@@ -349,8 +366,8 @@ ctx, ~p x
   console.log("PASS: arity split");
 }
 
-// 8) Naming: `#def f` with two exceptions yields f, f_exn1, f_default1,
-// f_exn2, f_default2.
+// 8) Naming: `#def f` with two exceptions yields f plus per-exception
+// watch/exn/default triples.
 {
   const prog = ok(`
 #def f
@@ -362,7 +379,7 @@ ctx, ~p x
   const out = applyExceptions(prog);
   assert.deepEqual(
     out.rules.map((r) => r.name).sort(),
-    ["f", "f_default1", "f_default2", "f_exn1", "f_exn2"],
+    ["f", "f_default1", "f_default2", "f_exn1", "f_exn2", "f_watch1", "f_watch2"],
   );
   console.log("PASS: naming");
 }
@@ -425,6 +442,87 @@ ctx, ^p a
   const out = applyExceptions(prog);
   assert.equal(out, prog);
   console.log("PASS: no-exception program unchanged");
+}
+
+// 15) Stall regression (plans/v2-exception-watchers.md): an exception is
+// a listener, not a gate. With no `move` producer at all, both steps of
+// the `;` rule still run.
+{
+  const t1 = run(`
+play A
+
+( ~play x, {move X => ~foo X} );
+( ~play y, {move Y => ~bar Y} )
+`);
+  assert(t1.includes("play x"), `missing 'play x': ${t1.join(" | ")}`);
+  assert(t1.includes("play y"), `stall: missing 'play y': ${t1.join(" | ")}`);
+  assert(!t1.includes("foo x") && !t1.includes("bar y"),
+    `no move producer, nothing to intercept: ${t1.join(" | ")}`);
+
+  // With a producer, each step's exception intercepts its own move.
+  const t2 = run(`
+play A, ~move A
+
+( ~play x, {move X => ~foo X} );
+( ~play y, {move Y => ~bar Y} )
+`);
+  assert(t2.includes("foo x"), `missing 'foo x': ${t2.join(" | ")}`);
+  assert(t2.includes("bar y"), `missing 'bar y': ${t2.join(" | ")}`);
+  assert(!t2.includes("move x") && !t2.includes("move y"),
+    `moves should be intercepted: ${t2.join(" | ")}`);
+  console.log("PASS: stall regression (exceptions don't gate)");
+}
+
+// 16) LHS variable locality: two exceptions in one rule spelling their
+// LHS var the same way no longer unify — X is local to each exception.
+{
+  const tuples = run(`
+play A, ~move A
+
+( ~play x, {move X => ~foo X} ); ( ~play y, {move X => ~bar X} )
+`);
+  assert(tuples.includes("foo x"), `missing 'foo x': ${tuples.join(" | ")}`);
+  assert(tuples.includes("bar y"), `shared-X capture: missing 'bar y': ${tuples.join(" | ")}`);
+  assert(!tuples.includes("move y"), `'move y' should be intercepted: ${tuples.join(" | ")}`);
+  console.log("PASS: LHS variable locality");
+}
+
+// 17) Prefix-bound LHS var still filters: X bound by `first X` rides the
+// ctx payload and re-unifies in the watcher, so the flag is only set when
+// a *matching* tuple exists. (Interception itself stays temporal — two
+// tuples sharing one moment share one flag, per the containment note on
+// test 9 — so the sharp test is the flag NOT being set: without Vt
+// transport the watcher's X would bind c and intercept.)
+{
+  const t1 = run(`
++first a
+~ctx
+
+ctx, ^move c d
+
+#def r
+  ctx
+  first X
+  {move X _ => ^nope}
+`);
+  assert(t1.includes("move c d"), `'move c d' should pass through: ${t1.join(" | ")}`);
+  assert(!t1.includes("nope"), `'nope' must not fire for a non-matching move: ${t1.join(" | ")}`);
+
+  // Positive companion: a matching move is intercepted.
+  const t2 = run(`
++first a
+~ctx
+
+ctx, ^move a b
+
+#def r
+  ctx
+  first X
+  {move X _ => ^nope}
+`);
+  assert(t2.includes("nope"), `missing 'nope': ${t2.join(" | ")}`);
+  assert(!t2.includes("move a b"), `'move a b' should be intercepted: ${t2.join(" | ")}`);
+  console.log("PASS: prefix-bound LHS var filters");
 }
 
 // ---------------------------------------------------------------------
