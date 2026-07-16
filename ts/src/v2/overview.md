@@ -63,7 +63,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - marker chars — `-~+^!?` map to a `Marker`
 - dot-notation desugaring — threads fresh anchor vars across atoms/subs
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
-- `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
+- `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency; may be empty = bare suppression); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
 - bool-weight validation — enforces `-> bool` weight restrictions
 - `#def`/`#agg` commands — rule naming and schema declarations
 
@@ -74,7 +74,7 @@ The expansion pipeline that lowers parsed pre-expand rules into the flat post-ex
 **Key terms:**
 - `expand` — top-level pipeline: exceptions → decompose → prune → split → filter → delta-variants
 - `expandStages` — same pipeline returning each named intermediate rule-list (`decomposed`/`split`/`filtered`/`variants`); `expand` is its `variants`. Used by the `v2-cli.ts` `--stage` dumps
-- `applyExceptions` — source-to-source elimination of `{p t1..tn => e}` `Exception` atoms before any other pass: renames emitting `p` occurrences to a fresh `_<p>_prime<k>` across the working set, has the host rule broadcast its context via a plain `_<p>_ctx<k>` anchor emit (exceptions never gate `;` progression; LHS vars are exception-local, with prefix-bound ones re-unified via the ctx payload), and generates `<rule>_watch<j>` / `<rule>_exn<j>` / `<rule>_default<j>` rules around a `bool` flag relation `_<p>_exn<k>` (plans/v2-exceptions.md, amended by plans/v2-exception-watchers.md). Also invoked directly by `runFixpoint` so `computeAggStrata` sees exception-free rules
+- `applyExceptions` — source-to-source elimination of `{p t1..tn => e}` `Exception` atoms before any other pass: renames emitting `p` occurrences to a fresh `_<p>_prime<k>` across the working set, has the host rule broadcast its context via a plain `_<p>_ctx<k>` anchor emit (exceptions never gate `;` progression; LHS vars are exception-local, with prefix-bound ones re-unified via the ctx payload), and generates `<rule>_watch<j>` / `<rule>_exn<j>` / `<rule>_default<j>` rules around a `bool` flag relation `_<p>_exn<k>` (the `_exn` rule is skipped for an empty RHS — bare suppression) (plans/v2-exceptions.md, amended by plans/v2-exception-watchers.md). Also invoked directly by `runFixpoint` so `computeAggStrata` sees exception-free rules
 - `decomposeRule` — anchor-decomposition pass; threads SSA anchor vars and a `*chain` fingerprint, lowering each `Marker` to post-expand atoms
 - `splitRule` — slices a rule at every `Emit` into producer/consumer halves
 - delta-variants — semi-naive cloning; tags one `Match` as `delta` and sets `deltaHead`/`deltaSafeSkip`

@@ -165,15 +165,19 @@ export function applyExceptions(program: Program): Program {
       });
 
       // 6. Exception rule: match p' t.., aggregate p_exn V.. -> 1, e.
-      S.push({
-        name: exnRuleName,
-        span,
-        body: [
-          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
-          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
-          ...exc.right,
-        ],
-      });
+      // An empty RHS means bare suppression — the flag still gates the
+      // default rule, but there is no exception case to run.
+      if (exc.right.length > 0) {
+        S.push({
+          name: exnRuleName,
+          span,
+          body: [
+            { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
+            { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
+            ...exc.right,
+          ],
+        });
+      }
 
       // 7. Default rule: match p' W.., aggregate p_exn _.._ -> 0,
       // anchor p W..  (fresh W1..Wn, m wildcards).

@@ -552,7 +552,6 @@ function parseExceptionBlock(text: string, line: number): BodyItem | ParseError 
   const lhsText = text.slice(0, arrow).trim();
   const rhsText = text.slice(arrow + 2).trim();
   if (lhsText.length === 0) return { line, message: "exception LHS is empty" };
-  if (rhsText.length === 0) return { line, message: "exception RHS is empty" };
   const c0 = lhsText[0]!;
   if (c0 === "{") {
     return { line, message: "exception LHS may not contain an exception" };
@@ -575,14 +574,19 @@ function parseExceptionBlock(text: string, line: number): BodyItem | ParseError 
   }
   // RHS: same machinery as a normal rule body. Errors and spans from the
   // fragment carry sub-tokenizer line numbers (always 1 — the block is a
-  // single line); remap both to the block's source line.
-  const rhsToks = tokenize(rhsText);
-  if (!Array.isArray(rhsToks)) return { line, message: rhsToks.message };
-  const pos = { i: 0 };
-  const right = parseBodyItems(rhsToks, pos, line, true);
-  if (!Array.isArray(right)) return { line, message: right.message };
-  if (right.length === 0) return { line, message: "exception RHS is empty" };
-  remapItemLines(right, line);
+  // single line); remap both to the block's source line. An empty RHS is
+  // allowed: `{p t1..tn =>}` suppresses `p` in this context (expand skips
+  // the exception-case rule).
+  let right: BodyItem[] = [];
+  if (rhsText.length > 0) {
+    const rhsToks = tokenize(rhsText);
+    if (!Array.isArray(rhsToks)) return { line, message: rhsToks.message };
+    const pos = { i: 0 };
+    const parsed = parseBodyItems(rhsToks, pos, line, true);
+    if (!Array.isArray(parsed)) return { line, message: parsed.message };
+    right = parsed;
+    remapItemLines(right, line);
+  }
   return { kind: "exception", left: { terms }, right, span: { line } };
 }
 

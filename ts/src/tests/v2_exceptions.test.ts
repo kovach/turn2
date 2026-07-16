@@ -420,7 +420,6 @@ ctx, ^move c1 supply
     ["ctx {+p a => ^q}", "exception LHS cannot carry a marker"],
     ["ctx {p q}", "exception block requires '=>'"],
     ["ctx { => ^q}", "exception LHS is empty"],
-    ["ctx {p => }", "exception RHS is empty"],
     ["foo . {p => ^q}", "'.' cannot be adjacent to an exception block"],
     ["foo {p => ^q} . bar", "'.' cannot be adjacent to an exception block"],
     ["ctx {p => ^q", "unterminated '{' (exception block must close on the same line)"],
@@ -431,6 +430,29 @@ ctx, ^move c1 supply
     assert.equal(err.message, msg, `for source: ${src}`);
   }
   console.log("PASS: errors");
+}
+
+// 10b) Empty RHS = bare suppression: the tuple is intercepted in-context
+// (no exception result is emitted either), and the default rule still
+// re-emits the real relation out-of-context. No `_exn` rule is generated.
+{
+  const tuples = run(`
+complete-set X, ~score X 1
+
+late Y, ~score Y 2
+
+( ~complete-set x, {score X _ =>} )
++late q
+`);
+  assert(!tuples.includes("score x 1"), `'score x 1' should be suppressed: ${tuples.join(" | ")}`);
+  assert(tuples.includes("score q 2"), `missing 'score q 2': ${tuples.join(" | ")}`);
+
+  const out = applyExceptions(ok("( ~ctx, {p =>} )"));
+  const names = out.rules.map((r) => r.name);
+  assert(names.some((n) => n.endsWith("_watch1")), `missing watcher: ${names.join(" | ")}`);
+  assert(names.some((n) => n.endsWith("_default1")), `missing default: ${names.join(" | ")}`);
+  assert(!names.some((n) => n.endsWith("_exn1")), `unexpected exn rule: ${names.join(" | ")}`);
+  console.log("PASS: empty RHS suppression");
 }
 
 // 11) No-exception program passes through applyExceptions unchanged.
