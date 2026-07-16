@@ -569,6 +569,10 @@ export class Editor {
     const lineH = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4;
     const left = ta.offsetLeft + marker.offsetLeft - ta.scrollLeft;
     const top = ta.offsetTop + marker.offsetTop - ta.scrollTop + lineH;
+    // Empty the mirror once measured: its text (everything up to the caret)
+    // can be taller than the pane, and lingering overflow gives the document
+    // a scroll range that lets caret-reveal/scrollIntoView shift the page.
+    mirror.textContent = "";
     return { left, top };
   }
 }
