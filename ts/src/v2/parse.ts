@@ -409,6 +409,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const counter = { n: 1 };
       const desugared = desugarBody(body, usedNames, counter, undefined);
       if (!Array.isArray(desugared)) return desugared;
+      saturateArity(desugared);
       const rule: Rule = { name: "", body: desugared, span: { line: startLine } };
       if (explicitName !== undefined) rule.explicitName = explicitName;
       rules.push(rule);
@@ -909,6 +910,62 @@ function desugarBody(
     return { line: incoming!.dotLine, message: "'.' before empty sub-block" };
   }
   return out;
+}
+
+// Auto-fill trailing wildcards so every Symbol-headed atom reaches its lexical
+// arity. Arity = (number of ':' in the head symbol) + 1. A trailing `-> weight`
+// counts as the atom's last argument (so `+ dmg -> 3` ≡ `+ dmg 3`, already
+// saturated at arity 1 — no fresh-id column). Runs on the dot-desugared body,
+// so dot-threaded linking vars are already counted. Over-arity atoms are left
+// untouched (non-strict; see plans/v2-arity-auto-wildcard.md).
+function saturateArity(body: RuleAtom[]): void {
+  for (const a of body) {
+    if (a.tag === "Sub") { saturateArity(a.body); continue; }
+    if (a.tag === "Exception") {
+      saturateHead(a.left.terms, false);
+      saturateArity(a.right);
+      continue;
+    }
+    if (a.tag !== "Atom") continue; // Equal / Match / Emit / etc. have no head arity
+    if (a.subAtoms !== undefined) {
+      // `!(...)` block. `agg` subs fold the weight into the trailing term slot,
+      // so it is already counted; pad before it. `plain` subs have no weight.
+      // The `atom` field is a placeholder alias of the first sub — skip it.
+      for (const s of a.subAtoms) {
+        if (s.kind === "agg") saturateAggSub(s.atom.terms);
+        else saturateHead(s.atom.terms, false);
+      }
+      continue;
+    }
+    // The trailing `-> weight` lives in `a.weight`, not in `atom.terms`; it
+    // counts as one argument, so a weighted atom needs one fewer padded term.
+    saturateHead(a.atom.terms, a.weight !== undefined);
+  }
+}
+
+// Pad `terms` (`[head, ...args]`, weight held separately) with trailing
+// wildcards up to arity. A present weight fills one argument slot.
+function saturateHead(terms: Term[], hasWeight: boolean): void {
+  const head = terms[0];
+  if (head === undefined || head.tag !== "Symbol" || head.name.startsWith("*")) return;
+  // want terms.length = head + (colons + 1) args, minus the weight's slot.
+  const want = colonCount(head.name) + 2 - (hasWeight ? 1 : 0);
+  while (terms.length < want) terms.push({ tag: "Wildcard" });
+}
+
+// Pad a `!(...)` aggregate sub-atom `[head, ...args, weight]` by inserting
+// wildcards before the trailing weight term (which counts as an argument).
+function saturateAggSub(terms: Term[]): void {
+  const head = terms[0];
+  if (head === undefined || head.tag !== "Symbol" || head.name.startsWith("*")) return;
+  const want = colonCount(head.name) + 2; // head + (colons + 1) args, weight included
+  while (terms.length < want) terms.splice(terms.length - 1, 0, { tag: "Wildcard" });
+}
+
+function colonCount(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) if (s[i] === ":") n++;
+  return n;
 }
 
 function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {

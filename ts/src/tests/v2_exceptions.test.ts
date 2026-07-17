@@ -54,6 +54,13 @@ function listTuples(store: Store): string[] {
   return store.tuples.map((t) => renderAtom(store, t.atom));
 }
 
+// A tuple renders as `head arg...`. Match by head token so a predicate that
+// auto-fills to arity 1 (bare `~nope` -> `nope <id>`) still matches without
+// pinning the generated id (plans/v2-arity-auto-wildcard.md).
+function hasHead(list: string[], head: string): boolean {
+  return list.some((t) => t === head || t.startsWith(head + " "));
+}
+
 function run(src: string): string[] {
   const { store } = runFixpoint(ok(src));
   return listTuples(store);
@@ -272,8 +279,8 @@ ctx, ^move a b
   second Y
   {move Y _ => ^boom}
 `);
-  assert(t1.includes("nope"), `missing 'nope': ${t1.join(" | ")}`);
-  assert(!t1.includes("boom"), `'boom' should not fire: ${t1.join(" | ")}`);
+  assert(hasHead(t1, "nope"), `missing 'nope': ${t1.join(" | ")}`);
+  assert(!hasHead(t1, "boom"), `'boom' should not fire: ${t1.join(" | ")}`);
   assert(!t1.includes("move a b"), `'move a b' should be intercepted: ${t1.join(" | ")}`);
 
   // Neither context holds: the tuple falls through both defaults
@@ -291,8 +298,8 @@ ctx, ^move a b
   {move Y _ => ^boom}
 `);
   assert(t2.includes("move a b"), `missing 'move a b': ${t2.join(" | ")}`);
-  assert(!t2.includes("nope"), `'nope' should not fire: ${t2.join(" | ")}`);
-  assert(!t2.includes("boom"), `'boom' should not fire: ${t2.join(" | ")}`);
+  assert(!hasHead(t2, "nope"), `'nope' should not fire: ${t2.join(" | ")}`);
+  assert(!hasHead(t2, "boom"), `'boom' should not fire: ${t2.join(" | ")}`);
   console.log("PASS: same-predicate behavioral (priority + fall-through)");
 }
 
@@ -346,23 +353,25 @@ ctx, ^p a c
 }
 
 // 7b) Arity split: each arity of `p` is a distinct predicate for this
-// feature. An arity-0 exception intercepts only arity-0 emits; `p x`
-// passes through untouched (previously it was renamed and orphaned).
+// feature. An arity-1 exception intercepts only arity-1 emits; the arity-2
+// `p x y` passes through untouched (previously it was renamed and orphaned).
+// (Under the arity rule `p` is nominally arity 1; the arity-2 use is an
+// over-arity emit, left as-is — plans/v2-arity-auto-wildcard.md.)
 {
   const tuples = run(`
 ~ctx
 
-ctx, ~p
-
 ctx, ~p x
+
+ctx, ~p x y
 
 #def r
   ctx
-  {p => ~q}
+  {p X => ~q X}
 `);
-  assert(tuples.includes("q"), `missing 'q': ${tuples.join(" | ")}`);
-  assert(!tuples.includes("p"), `arity-0 'p' should be intercepted: ${tuples.join(" | ")}`);
-  assert(tuples.includes("p x"), `'p x' (arity 1) should pass through: ${tuples.join(" | ")}`);
+  assert(hasHead(tuples, "q"), `missing 'q': ${tuples.join(" | ")}`);
+  assert(!tuples.includes("p x"), `arity-1 'p x' should be intercepted: ${tuples.join(" | ")}`);
+  assert(tuples.includes("p x y"), `'p x y' (arity 2) should pass through: ${tuples.join(" | ")}`);
   console.log("PASS: arity split");
 }
 
@@ -405,7 +414,7 @@ ctx, ^move c1 supply
   play-card.tag misfits
   {move X _ => ^nope}
 `);
-  assert(tuples.includes("nope"), `missing 'nope': ${tuples.join(" | ")}`);
+  assert(hasHead(tuples, "nope"), `missing 'nope': ${tuples.join(" | ")}`);
   assert(!tuples.includes("move c1 supply"), `'move c1 supply' should be intercepted: ${tuples.join(" | ")}`);
   assert(tuples.includes("play-card c1"), `missing 'play-card c1': ${tuples.join(" | ")}`);
   console.log("PASS: reduced misfits (dot-chain rule)");
@@ -528,7 +537,7 @@ ctx, ^move c d
   {move X _ => ^nope}
 `);
   assert(t1.includes("move c d"), `'move c d' should pass through: ${t1.join(" | ")}`);
-  assert(!t1.includes("nope"), `'nope' must not fire for a non-matching move: ${t1.join(" | ")}`);
+  assert(!hasHead(t1, "nope"), `'nope' must not fire for a non-matching move: ${t1.join(" | ")}`);
 
   // Positive companion: a matching move is intercepted.
   const t2 = run(`
@@ -542,7 +551,7 @@ ctx, ^move a b
   first X
   {move X _ => ^nope}
 `);
-  assert(t2.includes("nope"), `missing 'nope': ${t2.join(" | ")}`);
+  assert(hasHead(t2, "nope"), `missing 'nope': ${t2.join(" | ")}`);
   assert(!t2.includes("move a b"), `'move a b' should be intercepted: ${t2.join(" | ")}`);
   console.log("PASS: prefix-bound LHS var filters");
 }

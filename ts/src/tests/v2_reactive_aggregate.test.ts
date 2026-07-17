@@ -148,10 +148,10 @@ function aggvalLefts(store: Store, head: string, value: string): number[] {
 + dmg -> 4
 
 dmg -> 7
-+ lethal
++ lethal x
 `));
   const all = tuples(store);
-  assert.ok(all.includes("lethal"), `expected 'lethal' (dmg reached 7): ${all.join(" | ")}`);
+  assert.ok(all.includes("lethal x"), `expected 'lethal' (dmg reached 7): ${all.join(" | ")}`);
   console.log("PASS: reactive consumer reaction fires at the threshold breakpoint");
 }
 
@@ -164,10 +164,10 @@ dmg -> 7
 + dmg -> 4
 
 dmg -> 99
-+ impossible
++ impossible x
 `));
   const all = tuples(store);
-  assert.ok(!all.includes("impossible"), `'impossible' must not fire (sum never 99): ${all.join(" | ")}`);
+  assert.ok(!all.includes("impossible x"), `'impossible' must not fire (sum never 99): ${all.join(" | ")}`);
   console.log("PASS: reactive consumer does not fire for an unreached value");
 }
 
@@ -270,11 +270,11 @@ c, +p -> ()
 
 p -> X, ~hi X
 
-p -> (s (s (s (s z)))), ~done
+p -> (s (s (s (s z)))), ~done d
 `));
   assert.equal(status.kind, "done", `expected clean termination, got ${status.kind}`);
   const all = tuples(store);
-  assert.ok(all.includes("done"), `expected 'done' (count reached 4 at the join): ${all.join(" | ")}`);
+  assert.ok(all.includes("done d"), `expected 'done' (count reached 4 at the join): ${all.join(" | ")}`);
   console.log("PASS: count reaches 4 only at the join of two incomparable inputs (end-to-end)");
 }
 

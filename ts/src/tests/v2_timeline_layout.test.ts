@@ -39,8 +39,10 @@ assert.equal(
 );
 
 // game on lane 0, the four steps/looks on lane 1, the prints on lane 2.
+// Key by head token: `~game` etc. auto-fill to arity 1, so labels now carry a
+// trailing id (`game *4`) — plans/v2-arity-auto-wildcard.md.
 const laneOf = new Map<string, number>();
-for (const b of layout.bars) laneOf.set(b.label, b.lane);
+for (const b of layout.bars) laneOf.set(b.label.split(" ")[0]!, b.lane);
 assert.equal(laneOf.get("game"), 0, `game on lane 0, got ${laneOf.get("game")}`);
 
 console.log("PASS: tree mode collapses game/step/look/print to 3 lanes");

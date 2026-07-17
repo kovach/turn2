@@ -1,3 +1,21 @@
+# arity + auto `_` insertion
+plan: plans/v2-arity-auto-wildcard.md
+
+- idea: predicate arity determined by number of `:` characters occurring.
+  this is already followed to some extent by convention, but this would make it part of the language
+  so `turn` has arity 1, `player:hand` has arity 2, and so on
+  (we essentially never use nullary predicates, except in cases that we are now ok promoting to arity 1 because of the next bullet point)
+- the reason is to enable a shorthand for (unary) temporal predicates where we usually don't care about their argument, but sometimes need it
+  e.g. we can write
+  `turn, (~draw; ~play)`
+  which expands to
+  `turn _, (~draw _; ~play _)`
+  and later write
+  `play, ~do-something`
+  as well as
+  `play E, some-predicate P, ^played:card E P`
+
+# 26/07/16
 # 26/07/13
 - see `# exceptions`
 

@@ -62,6 +62,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - `parse` — top-level entry (tokenize → `parseProgram`); returns a `Program` or a `ParseError` (`{ line, message }`)
 - marker chars — `-~+^!?` map to a `Marker`
 - dot-notation desugaring — threads fresh anchor vars across atoms/subs
+- arity saturation — `saturateArity` pads each Symbol-headed atom with trailing wildcards up to its lexical arity (`:`-count + 1), run after dot-desugaring; over-arity atoms are left as-is (plans/v2-arity-auto-wildcard.md)
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
 - `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency; may be empty = bare suppression); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
 - bool-weight validation — enforces `-> bool` weight restrictions

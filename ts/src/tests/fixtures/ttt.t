@@ -57,13 +57,13 @@ setup
 -- a cell is eligible for a turn if it hasn't been filled in this game
 turn
   ( ~ el-check );
-  ~ choice
- 
+  ~ do-choice
+
 turn
   ( el-check, cell R C, fills (cell R C) -> z )
   ^ eligible (cell R C)
 
-choice
+do-choice
   ? C
   ^ choice C
   ! eligible C

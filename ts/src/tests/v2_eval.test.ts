@@ -59,15 +59,15 @@ it E Card
 // 2) foo, + bar
 {
   const src = `
-+ foo
++ foo a
 
-foo
-+ bar
+foo a
++ bar a
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("foo"));
-  assert(tuples.includes("bar"));
+  assert(tuples.includes("foo a"));
+  assert(tuples.includes("bar a"));
   console.log("PASS: foo, + bar");
 }
 
@@ -130,20 +130,20 @@ episode E
 // 5) sequencing: foo ( ~ e1 ); ~ e2
 {
   const src = `
-+ foo
++ foo a
 
-foo
-  ( ~ e1 );
-  ~ e2
+foo a
+  ( ~ e1 a );
+  ~ e2 a
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("foo"));
-  assert(tuples.includes("e1"));
-  assert(tuples.includes("e2"));
+  assert(tuples.includes("foo a"));
+  assert(tuples.includes("e1 a"));
+  assert(tuples.includes("e2 a"));
   // Find the e1 and e2 tuples and verify e1.r < e2.l.
-  const e1 = store.tuples.find((t) => renderAtom(store, t.atom) === "e1")!;
-  const e2 = store.tuples.find((t) => renderAtom(store, t.atom) === "e2")!;
+  const e1 = store.tuples.find((t) => renderAtom(store, t.atom) === "e1 a")!;
+  const e2 = store.tuples.find((t) => renderAtom(store, t.atom) === "e2 a")!;
   // Build a token-level check via the order relation.
   // (Just verify they're in different intervals; precise ordering is checked
   // by the fact that the assertion succeeded with the modified anchor.)
@@ -278,11 +278,11 @@ foo X
 
 foo X
   ( = X bar
-    + ok )
+    + ok X )
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("ok"), `missing 'ok': ${tuples}`);
+  assert(tuples.includes("ok bar"), `missing 'ok bar': ${tuples}`);
   console.log("PASS: = inside sub-rule");
 }
 
@@ -370,11 +370,11 @@ look
 
 +p a -> 1
 p a -> 1
-+ok-present
++ok-present x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("ok-present"), `expected 'ok-present', got: ${tuples.join(" | ")}`);
+  assert(tuples.includes("ok-present x"), `expected 'ok-present x', got: ${tuples.join(" | ")}`);
   console.log("PASS: bool aggregate present -> 1");
 }
 
@@ -384,11 +384,11 @@ p a -> 1
 #agg p -> bool
 
 p a -> 0
-+ok-absent
++ok-absent x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("ok-absent"), `expected 'ok-absent', got: ${tuples.join(" | ")}`);
+  assert(tuples.includes("ok-absent x"), `expected 'ok-absent x', got: ${tuples.join(" | ")}`);
   console.log("PASS: bool aggregate absent -> 0");
 }
 
