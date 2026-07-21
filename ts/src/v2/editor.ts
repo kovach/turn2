@@ -233,6 +233,17 @@ export class Editor {
       this.toggleComment();
       return;
     }
+    if (ev.key === "x" && (ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey) {
+      // With a selection, native cut applies. With no selection, select the
+      // current line (including its terminal newline) and let the native cut
+      // proceed so clipboard and undo behave normally.
+      if (this.ta.selectionStart === this.ta.selectionEnd) {
+        const { start, end } = lineBoundsAt(this.ta.value, this.ta.selectionStart);
+        const cutEnd = end < this.ta.value.length ? end + 1 : end;
+        if (start !== cutEnd) this.ta.setSelectionRange(start, cutEnd);
+      }
+      return;
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       this.insertAutoIndent();
