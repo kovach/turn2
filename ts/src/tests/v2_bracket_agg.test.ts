@@ -477,4 +477,37 @@ assert.throws(
 );
 console.log("PASS: output-variable errors");
 
+// ----- an empty aggregate must not stall later ones -----
+
+{
+  // `nothing` has no tuples, and grouping by `T` means the empty-input
+  // policy yields no result row at all. Its `_do-aggc` producer is closed
+  // with the `*agg-empty` sentinel; without that it stays blocked forever
+  // at the earliest moment, and since the outer loop only works the
+  // earliest tier, every later aggregate goes unclosed and the run still
+  // reports `done`.
+  const src = `
++ score 1, + score 2, + go
+
+go
+[ score X | sum X ]
+^ first X
+
+go
+[ nothing I T | count I ]
+^ never I T
+
+first X
+[ score Y | sum Y ]
+^ second Y
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "first"), ["first 3"]);
+  assert.deepEqual(rowsWithHead(store, "never"), []);
+  // The payoff: an aggregate downstream of the empty one still runs.
+  assert.deepEqual(rowsWithHead(store, "second"), ["second 3"]);
+  console.log("PASS: an empty aggregate does not stall later aggregates");
+}
+
 console.log("v2_bracket_agg: all tests passed");

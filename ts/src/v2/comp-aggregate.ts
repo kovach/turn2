@@ -39,6 +39,18 @@ import {
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
 const SYM_AGG_RESULTC: Term = { tag: "Symbol", name: "_agg-resultc" };
 
+// Payload of the "decided, and empty" sentinel result row. An aggregate can
+// legitimately produce no rows at all — `last` over nothing, or count/sum
+// with a nonempty group key and no groups. Without a row the producer's id
+// stays unresolved forever, and since the outer loop only works the earliest
+// blocked tier, one such aggregate silently halts every later aggregate in
+// the program (fixpoint.ts's no-progress bail-out). Emitting this sentinel
+// resolves the id and keeps the loop moving. It is a Symbol, while every
+// consumer `Match` pattern is an Atom of the result row's arity, so it never
+// unifies — the consumer simply does not fire, which is the intended
+// meaning of an empty aggregate.
+export const SYM_AGG_EMPTY: Term = { tag: "Symbol", name: "*agg-empty" };
+
 // A do-aggc row whose matching agg-resultc row does not yet exist.
 export interface BlockedDoAggC {
   rowIndex: number;
@@ -96,6 +108,18 @@ export function closeDoAggC(store: Store, blocked: BlockedDoAggC): boolean {
     // Copy the source _do-aggc's trailing id over so the consumer Match's
     // structural unification on idTpl finds this row.
     const atom: Atom = { terms: [SYM_AGG_RESULTC, inner, blocked.id] };
+    if (addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex])) {
+      addOrder(store, blocked.l, blocked.r);
+      any = true;
+    }
+  }
+  if (!any) {
+    // Nothing emitted: the aggregate is decided and empty. Mark the producer
+    // resolved with the sentinel so the outer loop makes progress. (`any` is
+    // false exactly when no row was emitted for this id: a blocked producer
+    // has no `_agg-resultc` row yet, and the id is part of every row's atom,
+    // so a real result could not have deduplicated away.)
+    const atom: Atom = { terms: [SYM_AGG_RESULTC, SYM_AGG_EMPTY, blocked.id] };
     if (addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex])) {
       addOrder(store, blocked.l, blocked.r);
       any = true;

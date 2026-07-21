@@ -20,7 +20,7 @@ import {
   type Store,
 } from "./store.js";
 import type { BlockedChoose, Rule, RuleAtom } from "./types.js";
-import { collectBlockedDoAggCs, type BlockedDoAggC } from "./comp-aggregate.js";
+import { collectBlockedDoAggCs, SYM_AGG_EMPTY, type BlockedDoAggC } from "./comp-aggregate.js";
 
 const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
 const SYM_AGGVAL_ID: Term = { tag: "Symbol", name: "*aggval-id" };
@@ -171,8 +171,9 @@ export function collectAllBlocked(store: Store): Blocked[] {
 }
 
 // Close one do-agg row by computing its aggregate and emitting agg-result.
-// Returns true if a result was emitted (count/sum always emit; last may emit
-// 0+ rows depending on candidates).
+// Always returns true: count/sum emit a result, `last` may legitimately have
+// nothing to emit, and that case is closed with the `*agg-empty` sentinel so
+// the producer stops blocking the outer loop (see SYM_AGG_EMPTY).
 export function closeDoAgg(
   store: Store,
   blocked: BlockedDoAgg,
@@ -183,6 +184,14 @@ export function closeDoAgg(
   let any = false;
   for (const r of results) {
     if (emitAggResultRow(store, blocked, wrapped, r.rep, r.weight)) any = true;
+  }
+  if (!any) {
+    const sym: Term = { tag: "Symbol", name: "_agg-result" };
+    const atom: Atom = { terms: [sym, SYM_AGG_EMPTY, blocked.id] };
+    if (addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex])) {
+      addOrder(store, blocked.l, blocked.r);
+      any = true;
+    }
   }
   return any;
 }

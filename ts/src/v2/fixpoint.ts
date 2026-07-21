@@ -112,9 +112,13 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
         swapHeads(store);
       }
       if (!progressed) {
-        // Earliest aggs all empty (e.g., `last` on empty contribution sets).
-        // Drop them by examining the next tier — but for now, halt to avoid
-        // an infinite loop. A future pass might emit a sentinel agg-result.
+        // Safety net against an infinite outer loop. Aggregates no longer
+        // reach here: an empty one closes with the `*agg-empty` sentinel
+        // (see SYM_AGG_EMPTY in comp-aggregate.ts), which resolves its
+        // producer so the blocked set strictly shrinks. Before that, an
+        // empty aggregate at an early moment stalled the whole program —
+        // the outer loop only works the earliest tier, so every later
+        // aggregate went unclosed and the run reported `done`.
         return { store, iterations: totalIters, status: { kind: "done" } };
       }
       continue;
