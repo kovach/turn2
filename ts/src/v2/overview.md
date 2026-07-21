@@ -64,7 +64,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - dot-notation desugaring — threads fresh anchor vars across atoms/subs
 - arity saturation — `saturateArity` pads each Symbol-headed atom with trailing wildcards up to its lexical arity (`:`-count + 1), run after dot-desugaring; over-arity atoms are left as-is (plans/v2-arity-auto-wildcard.md)
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
-- `[ Q | op V ]` bracket aggregation — tokenized as a (possibly multi-line) `aggcomp` token, mini-parsed into a pre-expand `AggComp` atom (query items = plain match atoms or nested `[...]`; reduction op ∈ count/sum/last) (plans/v2-bracket-aggregation.md)
+- `[ Q | op V ]` bracket aggregation — tokenized as a (possibly multi-line) `aggcomp` token, mini-parsed into a pre-expand `AggComp` atom (query items = plain match atoms or nested `[...]`, chainable with `.` dot notation via the shared `desugarBody` pass; reduction op ∈ count/sum/last) (plans/v2-bracket-aggregation.md)
 - `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency; may be empty = bare suppression); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
 - bool-weight validation — enforces `-> bool` weight restrictions
 - `#def`/`#agg` commands — rule naming and schema declarations

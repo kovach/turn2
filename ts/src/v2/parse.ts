@@ -321,9 +321,13 @@ export function tokenize(input: string): Token[] | ParseError {
 // fresh var into the sub's first atom across the recursion. Final
 // `desugarBody` produces a real `RuleAtom[]`.
 type BodyItem =
-  | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom", "Equal", or "AggComp"
+  | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom" or "Equal"
   | { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span }
   | { kind: "dot"; line: number }
+  // Bracket aggregation `[ Q | op V ]`. `items` is still BodyItems (query
+  // atoms plus `dot` markers) so `desugarBody` resolves dots inside `Q`
+  // with the containing rule's shared fresh-name minting.
+  | { kind: "aggcomp"; items: BodyItem[]; reduce: { op: string; varName: string }; span: Span }
   // Exception block. `right` is still BodyItems so `desugarBody` can
   // resolve the fragment's dots with the containing rule's shared
   // fresh-name minting (no `_dotN` capture between rule and fragment).
@@ -576,7 +580,7 @@ function parseBodyItems(
     if (tok.tag === "aggcomp") {
       const parsedComp = parseAggCompText(tok.text, tok.line);
       if ("message" in parsedComp) return parsedComp;
-      top.items.push({ kind: "atom", atom: parsedComp });
+      top.items.push(parsedComp);
       top.needsContent = false;
       pos.i++;
       continue;
@@ -655,16 +659,8 @@ function remapItemLines(items: BodyItem[], line: number): void {
     if (it.kind === "dot") { it.line = line; continue; }
     if (it.kind === "sub") { it.span.line = line; remapItemLines(it.inner, line); continue; }
     if (it.kind === "exception") { it.span.line = line; remapItemLines(it.right, line); continue; }
-    if (it.atom.tag === "AggComp") { remapAggCompLines(it.atom, line); continue; }
+    if (it.kind === "aggcomp") { it.span.line = line; remapItemLines(it.items, line); continue; }
     it.atom.span.line = line;
-  }
-}
-
-function remapAggCompLines(comp: Extract<RuleAtom, { tag: "AggComp" }>, line: number): void {
-  comp.span.line = line;
-  for (const b of comp.body) {
-    if (b.tag === "AggComp") remapAggCompLines(b, line);
-    else b.span.line = line;
   }
 }
 
@@ -789,6 +785,10 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
       collectUsedNames(it.right, out);
       continue;
     }
+    if (it.kind === "aggcomp") {
+      collectUsedNames(it.items, out);
+      continue;
+    }
     const a = it.atom;
     if (a.tag === "Atom") {
       if (a.subAtoms !== undefined) {
@@ -804,21 +804,6 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
     } else if (a.tag === "Equal") {
       collectVarsInTerm(a.lhs, out);
       collectVarsInTerm(a.rhs, out);
-    } else if (a.tag === "AggComp") {
-      collectAggCompVarNames(a, out);
-    }
-  }
-}
-
-function collectAggCompVarNames(
-  comp: Extract<RuleAtom, { tag: "AggComp" }>,
-  out: Set<string>,
-): void {
-  for (const b of comp.body) {
-    if (b.tag === "AggComp") {
-      collectAggCompVarNames(b, out);
-    } else if (b.tag === "Atom") {
-      for (const t of b.atom.terms) collectVarsInTerm(t, out);
     }
   }
 }
@@ -915,6 +900,23 @@ function desugarBody(
       }
       frame.pendingDot = true;
       frame.dotLine = it.line;
+      continue;
+    }
+
+    if (it.kind === "aggcomp") {
+      afterException = false;
+      // A bracket aggregation never participates in a surrounding dot
+      // chain (it binds no single anchor atom), and it does not advance
+      // the local anchor — like `=`.
+      if (incomingPending || frame.pendingDot) {
+        const ln = frame.pendingDot ? frame.dotLine : incoming!.dotLine;
+        return { line: ln, message: "right of '.' must be a plain atom (not '[')" };
+      }
+      // Dots *inside* `Q` resolve against a fresh frame, sharing the
+      // rule's name minting so `_dotN` vars can't collide.
+      const inner = desugarBody(it.items, usedNames, counter, undefined);
+      if (!Array.isArray(inner)) return inner;
+      out.push({ tag: "AggComp", body: inner, reduce: it.reduce, span: it.span });
       continue;
     }
 
@@ -1231,10 +1233,14 @@ const AGG_COMP_OPS = new Set(["count", "sum", "last"]);
 // Parse the inner text of a `[ Q | op V ]` bracket aggregation (brackets
 // already stripped by the tokenizer; possibly joined from several source
 // lines). `Q` is a comma-separated list of plain match atoms and nested
-// `[...]` expressions; the reduction is `op V` with op in AGG_COMP_OPS.
+// `[...]` expressions, optionally chained with `.` dot notation (resolved
+// later by `desugarBody`); the reduction is `op V` with op in AGG_COMP_OPS.
 // Reduce-var binding restrictions (occurs in Q, not bound earlier in the
 // rule) are checked at decompose time, where the prefix-bound set is known.
-function parseAggCompText(text: string, line: number): RuleAtom | ParseError {
+function parseAggCompText(
+  text: string,
+  line: number,
+): Extract<BodyItem, { kind: "aggcomp" }> | ParseError {
   // Locate the single top-level `|` (outside `(...)` and `[...]`).
   let depth = 0;
   let pipe = -1;
@@ -1272,20 +1278,24 @@ function parseAggCompText(text: string, line: number): RuleAtom | ParseError {
     return { line, message: `reduction must name a variable (got '${vTok}')` };
   }
 
-  // Query items.
-  const body: RuleAtom[] = [];
-  for (const pieceRaw of splitTopLevelCommasBrackets(qText)) {
-    const piece = pieceRaw.trim();
-    if (piece.length === 0) {
-      return { line, message: "empty item in aggregate query" };
+  // Query items. `,` and `.` both separate items at top level; the `.`s
+  // survive as `dot` BodyItems for the shared dot-desugar pass.
+  const items: BodyItem[] = [];
+  const pieces = splitCompItems(qText, line);
+  if (!Array.isArray(pieces)) return pieces;
+  for (const p of pieces) {
+    if (p === ".") {
+      items.push({ kind: "dot", line });
+      continue;
     }
+    const piece = p;
     if (piece.startsWith("[")) {
       if (!piece.endsWith("]")) {
         return { line, message: "unbalanced '[' in aggregate query" };
       }
       const inner = parseAggCompText(piece.slice(1, -1), line);
       if ("message" in inner) return inner;
-      body.push(inner);
+      items.push(inner);
       continue;
     }
     if (piece.includes("[") || piece.includes("]")) {
@@ -1297,9 +1307,6 @@ function parseAggCompText(text: string, line: number): RuleAtom | ParseError {
     }
     if (findTopArrow(piece) >= 0) {
       return { line, message: "aggregate query atoms cannot carry '-> weight'" };
-    }
-    if (piece.includes(".")) {
-      return { line, message: "'.' is not allowed inside an aggregate query" };
     }
     if (piece.includes(";") || piece.includes("{") || piece.includes("}")) {
       return { line, message: "aggregate query atoms must be plain atoms" };
@@ -1313,29 +1320,48 @@ function parseAggCompText(text: string, line: number): RuleAtom | ParseError {
     if (head.tag === "Symbol" && head.name.startsWith("*")) {
       return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
     }
-    body.push({ tag: "Atom", marker: "match", atom: { terms }, span: { line } });
+    items.push({ kind: "atom", atom: { tag: "Atom", marker: "match", atom: { terms }, span: { line } } });
   }
-  if (body.length === 0) {
+  if (items.length === 0) {
     return { line, message: "aggregate query must contain at least one item" };
   }
-  return { tag: "AggComp", body, reduce: { op, varName: vTok }, span: { line } };
+  return { kind: "aggcomp", items, reduce: { op, varName: vTok }, span: { line } };
 }
 
-// Split on top-level commas where depth counts both `(...)` and `[...]`.
-function splitTopLevelCommasBrackets(text: string): string[] {
+// Split an aggregate query into items separated by top-level `,` and `.`
+// (depth counts both `(...)` and `[...]`). Dots are returned as the literal
+// `"."` marker; every other entry is a nonempty trimmed item text. An empty
+// stretch around a `.` is left to `desugarBody` to diagnose (it owns the
+// "dot must follow an atom" / "trailing '.'" messages).
+function splitCompItems(text: string, line: number): Array<string> | ParseError {
   const out: string[] = [];
   let depth = 0;
   let start = 0;
+  const flush = (end: number, sep: "," | "." | "eof"): ParseError | null => {
+    const piece = text.slice(start, end).trim();
+    if (piece.length === 0) {
+      // Around a dot an empty stretch is a dot-placement error, reported
+      // downstream by `desugarBody`; anywhere else it's an empty item.
+      if (sep === "." || out[out.length - 1] === ".") return null;
+      if (sep === "eof" && out.length === 0) return null;
+      return { line, message: "empty item in aggregate query" };
+    }
+    out.push(piece);
+    return null;
+  };
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!;
     if (c === "(" || c === "[") depth++;
     else if (c === ")" || c === "]") depth--;
-    else if (c === "," && depth === 0) {
-      out.push(text.slice(start, i));
+    else if (depth === 0 && (c === "," || c === ".")) {
+      const err = flush(i, c as "," | ".");
+      if (err !== null) return err;
+      if (c === ".") out.push(".");
       start = i + 1;
     }
   }
-  out.push(text.slice(start));
+  const err = flush(text.length, "eof");
+  if (err !== null) return err;
   return out;
 }
 

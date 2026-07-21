@@ -23,9 +23,11 @@ single-atom form may later be re-expressed in terms of this one — out of scope
 
 - `[Q | op V]` occurs inside a rule at a point where the running anchor is
   `(XL, XR)`. `Q` is a plain join query — a comma-separated sequence of
-  unmarked match atoms and nested `[...]` expressions. No temporal markers, no
-  `->` weights, no `.` dot-notation, no `;`, no `=`, no `!`/`?`/`{...}` inside
-  the brackets (parse errors).
+  unmarked match atoms and nested `[...]` expressions, optionally chained
+  with `.` dot notation (same desugaring as a rule body — the linking var is
+  an ordinary free variable of `Q`; a `[...]` item may not sit on either side
+  of a `.`). No temporal markers, no `->` weights, no `;`, no `=`, no
+  `!`/`?`/`{...}` inside the brackets (parse errors).
 - Every candidate tuple matched by an atom of `Q` must have an interval that
   **contains the anchor** `[XL, XR]` (`intervalContains`, exactly the
   restriction `aggregateOver` applies today).
@@ -89,8 +91,13 @@ single-atom form may later be re-expressed in terms of this one — out of scope
   - Left of `|`: comma-separated items; each item is either a nested
     `[ ... ]` (recurse) or an atom parsed with the existing term parser
     (`parseAtomText` or equivalent — compound `(...)` terms allowed). Run
-    `saturateArity` on atoms as elsewhere. Reject markers, `->`, `.`, `;`,
+    `saturateArity` on atoms as elsewhere. Reject markers, `->`, `;`,
     `=`, `{`.
+  - Top-level `.`s split items too and survive as `dot` `BodyItem`s: the
+    comp is a `{ kind: "aggcomp"; items: BodyItem[] }` pre-desugar item, and
+    `desugarBody` recurses into `items` with the rule's shared
+    `usedNames`/`counter` so `_dotN` names never collide. A comp neither
+    receives nor advances a dot anchor (like `=`).
   - Right of `|`: exactly `op V` where `op` ∈ {count, sum, last} and `V` is a
     Variable token. Validate op name here.
 - New pre-expand `RuleAtom` variant (types.ts):
@@ -233,7 +240,8 @@ Run with `./run-tests.sh v2_bracket_agg` (sandbox: `node --import tsx`).
 
 ## Out of scope (recorded for later)
 
-- Dot-notation, weighted atoms, or temporal markers inside `Q`.
+- Weighted atoms or temporal markers inside `Q`; dot chains crossing a
+  nested `[...]` boundary.
 - A `bool` reduction op; user-defined reduction ops.
 - Re-expressing the old single-atom `#agg` consumption form via this
   mechanism; `#reactive` interaction (a comp reading a `#reactive` relation

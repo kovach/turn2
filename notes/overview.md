@@ -1,5 +1,5 @@
 # aggregation synonyms
-plan: TODO
+plan: plans/v2-aggregation-synonyms.md
 
 we want to create macros that expand into bracket aggregate expressions (plans/v2-bracket-aggregation)
 
@@ -11,7 +11,9 @@ activate push, target L, land:count L X, ~something X
 ```
 
 - implementation:
-  - simply rewrite occurrences of the macro (`land:count X Y`) with the body (`[[at A B | last B] | count A]`), substituting the variables appropriately.
+  - simply rewrite occurrences of the macro (`land:count X Y`) with the body (`[[at A B | last B] | count A]`)
+    - freshen all variables in the body
+    - append `=` nodes that unify the locals with the parameters (`= X B, = Y A`)
   - assume macros are accessible throughout the source file (definition may follow use)
 - static check: ensure macros are not recursive (directly or indirectly). compile time error
 

@@ -59,7 +59,13 @@ assert.match(err(`\nfoo, [ p X | count p ]\n`), /reduction must name a variable/
 assert.match(err(`\nfoo, [ p X | count ]\n`), /reduction must be '<op> <Var>'/);
 assert.match(err(`\nfoo, [ +p X | count X ]\n`), /cannot carry a marker/);
 assert.match(err(`\nfoo, [ p X -> W | count W ]\n`), /cannot carry '-> weight'/);
-assert.match(err(`\nfoo, [ p . q | count X ]\n`), /'\.' is not allowed/);
+assert.match(err(`\nfoo, [ . p X | count X ]\n`), /dot must follow an atom/);
+assert.match(err(`\nfoo, [ p X . | count X ]\n`), /trailing '\.' with no right-hand atom/);
+assert.match(err(`\nfoo, [ p X . . q Y | count X ]\n`), /consecutive '\.'/);
+assert.match(
+  err(`\nfoo, [ p X . [ q Y | count Y ] | count X ]\n`),
+  /right of '\.' must be a plain atom/,
+);
 assert.match(err(`\nfoo, [ | count X ]\n`), /empty item|at least one item/);
 assert.match(err(`\nfoo [ p X | count X ]\n`), /'\[' must start a query item/);
 console.log("PASS: parse errors");
@@ -239,6 +245,55 @@ go
   // Bindings over {V}: just {v} — the `_` positions are projected away.
   assert.deepEqual(rowsWithHead(store, "num"), ["num (s z)"]);
   console.log("PASS: set semantics over free variables");
+}
+
+// ----- dot notation inside the query -----
+{
+  // `p X . q Y` links p's id into q's first slot, exactly as in a rule
+  // body; the linking var is an ordinary free variable of the query.
+  const src = `
++ p 1 . + q 10, + p 2 . + q 5, + p 3, + go
+
+go
+[ p X . q Y | sum Y ]
+^ out Y
+`;
+  const { store } = runFixpoint(ok(src));
+  // One group per (X, link) pair; `p 3` has no q and contributes nothing.
+  assert.deepEqual(rowsWithHead(store, "out"), ["out 10", "out 5"]);
+  console.log("PASS: dot notation in aggregate query");
+}
+
+{
+  // The dot form desugars to the explicit link-variable form.
+  const dotted = ok(`\ngo\n[ p X . q Y | sum Y ]\n^ out Y\n`);
+  const spelled = ok(`\ngo\n[ p X L, q L Y | sum Y ]\n^ out Y\n`);
+  // Alpha-normalize: rename variables to v1, v2, ... in first-occurrence order.
+  const alpha = (body: unknown) => {
+    const names = new Map<string, string>();
+    return JSON.stringify(body).replace(/"tag":"Variable","name":"([^"]+)"/g, (_m, n: string) => {
+      if (!names.has(n)) names.set(n, `v${names.size + 1}`);
+      return `"tag":"Variable","name":"${names.get(n)}"`;
+    });
+  };
+  assert.equal(alpha(dotted.rules[0]!.body), alpha(spelled.rules[0]!.body));
+  console.log("PASS: dot form matches explicit link variable");
+}
+
+{
+  // Dots inside a nested expression resolve independently.
+  const src = `
++ p 1 . + q a, + p 2 . + q b, + go
+
+go
+[ [ p X . q L | last L ] | count X ]
+^ num X
+`;
+  const { store } = runFixpoint(ok(src));
+  // The dot's linking variable is a free variable of the inner query, so it
+  // stays in the outer group key: one group per (link, L) pair, each of size 1.
+  assert.deepEqual(rowsWithHead(store, "num"), ["num (s z)", "num (s z)"]);
+  console.log("PASS: dot notation inside a nested expression");
 }
 
 console.log("v2_bracket_agg: all tests passed");
