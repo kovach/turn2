@@ -20,6 +20,7 @@ import {
   type Store,
 } from "./store.js";
 import type { BlockedChoose, Rule, RuleAtom } from "./types.js";
+import { collectBlockedDoAggCs, type BlockedDoAggC } from "./comp-aggregate.js";
 
 const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
 const SYM_AGGVAL_ID: Term = { tag: "Symbol", name: "*aggval-id" };
@@ -53,6 +54,7 @@ export interface ReactiveFinalization {
 
 type Blocked =
   | { kind: "agg"; row: BlockedDoAgg }
+  | { kind: "aggc"; row: BlockedDoAggC }
   | { kind: "choose"; row: BlockedChoose }
   | { kind: "reactive"; row: ReactiveFinalization };
 
@@ -163,6 +165,7 @@ export function selectEarliestTier(store: Store, items: Blocked[]): Blocked[] {
 export function collectAllBlocked(store: Store): Blocked[] {
   const out: Blocked[] = [];
   for (const a of collectBlockedDoAggs(store)) out.push({ kind: "agg", row: a });
+  for (const c of collectBlockedDoAggCs(store)) out.push({ kind: "aggc", row: c });
   for (const c of collectBlockedChooses(store)) out.push({ kind: "choose", row: c });
   return out;
 }
@@ -598,6 +601,11 @@ export function computeAggStrata(rules: Rule[], reactive: Set<string>): Map<stri
   const collect = (atoms: RuleAtom[], reads: string[], produces: string[]): void => {
     for (const a of atoms) {
       if (a.tag === "Sub") { collect(a.body, reads, produces); continue; }
+      if (a.tag === "AggComp") {
+        // Every atom head inside a bracket aggregation is a read.
+        collectAggCompReads(a.body, reads);
+        continue;
+      }
       if (a.tag !== "Atom") continue;
       const head = a.atom.terms[0];
       if (head === undefined || head.tag !== "Symbol") continue;
@@ -610,6 +618,15 @@ export function computeAggStrata(rules: Rule[], reactive: Set<string>): Map<stri
     const produces: string[] = [];
     collect(rule.body, reads, produces);
     for (const r of reads) for (const h of produces) addEdge(r, h);
+  }
+
+  function collectAggCompReads(body: RuleAtom[], reads: string[]): void {
+    for (const b of body) {
+      if (b.tag === "AggComp") { collectAggCompReads(b.body, reads); continue; }
+      if (b.tag !== "Atom") continue;
+      const head = b.atom.terms[0];
+      if (head !== undefined && head.tag === "Symbol") reads.push(head.name);
+    }
   }
   // Transitive reachability over the general graph.
   const allNodes = new Set<string>(reactive);

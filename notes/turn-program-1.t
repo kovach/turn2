@@ -87,10 +87,10 @@ p3 Y
 -- becomes two rules:
 
 p1 X
-~ [Id-left, Id-right] p2 X
+-- (pseudo-IR notation, not parseable syntax) ~ [Id-left, Id-right] p2 X
 
 p1 X
-[Id-left, Id-right] p2 X
+-- (pseudo-IR notation, not parseable syntax) [Id-left, Id-right] p2 X
 p3 Y
 ~ p4 Y
 

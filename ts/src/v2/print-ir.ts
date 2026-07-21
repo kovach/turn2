@@ -52,6 +52,10 @@ export function renderRuleAtom(atom: RuleAtom): string {
       }
       return `Atom[${atom.marker}] ${renderAtomRaw(atom.atom)}${w}`;
     }
+    case "AggComp": {
+      const items = atom.body.map(renderRuleAtom).join(", ");
+      return `AggComp [${items} | ${atom.reduce.op} ?${atom.reduce.varName}]`;
+    }
     case "Sub": {
       const inner = atom.body.map(renderRuleAtom).join("; ");
       return `Sub${atom.sequence ? "(seq)" : ""} (${inner})`;

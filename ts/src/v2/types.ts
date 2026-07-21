@@ -92,6 +92,20 @@ export type RuleAtom =
       sequence: boolean;
       span: Span;
     }
+  // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+  // `body` items are plain match Atoms (marker "match", no weight) or
+  // nested AggComps. The expression joins `Q` restricted to tuples
+  // containing the running anchor, groups by its free variables minus `V`,
+  // and folds each group's `V` values with `op`, rebinding the result to
+  // `V`. Lowered by `decomposeAggComp` into a paired
+  // `Emit (_do-aggc ...)` / `Match (_agg-resultc ...)`; never reaches the
+  // evaluator.
+  | {
+      tag: "AggComp";
+      body: RuleAtom[];
+      reduce: { op: string; varName: string };
+      span: Span;
+    }
   // Exception expression `{p t1..tn => e}` (plans/v2-exceptions.md).
   // `left` is the single unmarked LHS atom (Symbol head, no aggregate);
   // `right` is the RHS body fragment (no nested Exception). Eliminated by

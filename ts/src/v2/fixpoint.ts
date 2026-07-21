@@ -18,6 +18,7 @@ import {
   selectEarliestTier,
 } from "./scheduler.js";
 import { computeComponents } from "./constraint-query.js";
+import { closeDoAggC } from "./comp-aggregate.js";
 import { attachRules } from "./stats.js";
 
 export interface FixpointResult {
@@ -75,6 +76,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     }
     const tier = selectEarliestTier(store, blocked);
     const aggsInTier = tier.flatMap((b) => b.kind === "agg" ? [b.row] : []);
+    const aggCsInTier = tier.flatMap((b) => b.kind === "aggc" ? [b.row] : []);
     // Single-moment stratification: within the earliest moment, finalize only
     // the lowest aggregate-dependency stratum present, so a consumer aggregate
     // (e.g. `count p`) is not folded until the relation it reads (`p`) has
@@ -85,10 +87,13 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       r.foo.tag === "Symbol" ? (strata.get(r.foo.name) ?? 0) : 0;
     const minStratum = reactiveAll.reduce((m, r) => Math.min(m, stratumOf(r)), Infinity);
     const reactiveInTier = reactiveAll.filter((r) => stratumOf(r) === minStratum);
-    if (aggsInTier.length > 0 || reactiveInTier.length > 0) {
+    if (aggsInTier.length > 0 || aggCsInTier.length > 0 || reactiveInTier.length > 0) {
       let progressed = false;
       for (const a of aggsInTier) {
         if (closeDoAgg(store, a, expanded.schema)) progressed = true;
+      }
+      for (const c of aggCsInTier) {
+        if (closeDoAggC(store, c)) progressed = true;
       }
       // Reactive: materialize this tier's breakpoints (earliest first, so
       // non-monotone aggregation is stratified by moment).

@@ -1,0 +1,244 @@
+// Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+import assert from "node:assert/strict";
+import { parse } from "../v2/parse.js";
+import { runFixpoint } from "../v2/fixpoint.js";
+import type { Atom, Term } from "../v2/term.js";
+import { expandTerm } from "../v2/hashcons.js";
+import type { Store } from "../v2/store.js";
+
+function ok(input: string) {
+  const p = parse(input);
+  if ("message" in p) throw new Error(`parse error line ${p.line}: ${p.message}`);
+  return p;
+}
+
+function err(input: string): string {
+  const p = parse(input);
+  if (!("message" in p)) throw new Error(`expected parse error, got program`);
+  return p.message;
+}
+
+function renderTerm(store: Store, term: Term): string {
+  const t = term.tag === "Ref" ? expandTerm(term, store.hash) : term;
+  switch (t.tag) {
+    case "Symbol": return t.name;
+    case "Variable": return `?${t.name}`;
+    case "Wildcard": return "_";
+    case "Ref": return `*${t.id}`;
+    case "Atom":
+    case "Id":
+      return `(${t.atom.terms.map((x) => renderTerm(store, x)).join(" ")})`;
+  }
+}
+
+// Render a stored tuple's user-visible part (drop the trailing id slot).
+function renderAtom(store: Store, atom: Atom): string {
+  const ts = atom.terms.length > 0 ? atom.terms.slice(0, -1) : atom.terms;
+  return ts.map((t) => renderTerm(store, t)).join(" ");
+}
+
+function rowsWithHead(store: Store, head: string): string[] {
+  return store.tuples
+    .filter((t) => {
+      const h = t.atom.terms[0];
+      return h !== undefined && h.tag === "Symbol" && h.name === head;
+    })
+    .map((t) => renderAtom(store, t.atom))
+    .sort();
+}
+
+// ----- Parse errors -----
+
+assert.match(err(`\nfoo, [ p X\n`), /unterminated '\['/);
+assert.match(err(`\nfoo, p X ]\n`), /stray '\]'/);
+assert.match(err(`\nfoo, [ p X ]\n`), /requires '\| <op> <Var>'/);
+assert.match(err(`\nfoo, [ p X | count X | sum X ]\n`), /more than one top-level '\|'/);
+assert.match(err(`\nfoo, [ p X | frob X ]\n`), /unknown reduction op 'frob'/);
+assert.match(err(`\nfoo, [ p X | count _ ]\n`), /reduction variable cannot be '_'/);
+assert.match(err(`\nfoo, [ p X | count p ]\n`), /reduction must name a variable/);
+assert.match(err(`\nfoo, [ p X | count ]\n`), /reduction must be '<op> <Var>'/);
+assert.match(err(`\nfoo, [ +p X | count X ]\n`), /cannot carry a marker/);
+assert.match(err(`\nfoo, [ p X -> W | count W ]\n`), /cannot carry '-> weight'/);
+assert.match(err(`\nfoo, [ p . q | count X ]\n`), /'\.' is not allowed/);
+assert.match(err(`\nfoo, [ | count X ]\n`), /empty item|at least one item/);
+assert.match(err(`\nfoo [ p X | count X ]\n`), /'\[' must start a query item/);
+console.log("PASS: parse errors");
+
+// ----- Decompose errors (reduce var restrictions) -----
+
+assert.throws(
+  () => runFixpoint(ok(`\ngo\np X\n[ q X | count X ]\n`)),
+  /reduction variable 'X' is bound earlier/,
+);
+assert.throws(
+  () => runFixpoint(ok(`\ngo\n[ q Y | count X ]\n`)),
+  /reduction variable 'X' does not occur/,
+);
+console.log("PASS: decompose errors");
+
+// ----- sum with grouping (the note's example) -----
+// {p 2 4, p 1 1, p 1 3} -> {(X:1,Y:4), (X:2,Y:4)}
+{
+  const src = `
++ p 2 4, + p 1 1, + p 1 3, + go
+
+go
+[ p X Y | sum Y ]
+^ out X Y
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "out"), ["out 1 4", "out 2 4"]);
+  console.log("PASS: sum with grouping");
+}
+
+// ----- count with empty group key; zero rows on empty input -----
+{
+  const src = `
++ invader i1, + invader i2, + invader i3, + go
+
+go
+[ invader X | count X ]
+^ num X
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "num"), ["num (s (s (s z)))"]);
+  console.log("PASS: count over all rows");
+}
+{
+  // No q tuples at all: count with an empty group key still produces one
+  // zero row; sum likewise.
+  const src = `
++ go
+
+go
+[ q X | count X ]
+^ num X
+
+go
+[ q Y | sum Y ]
+^ total Y
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "num"), ["num z"]);
+  assert.deepEqual(rowsWithHead(store, "total"), ["total 0"]);
+  console.log("PASS: zero rows on empty input");
+}
+{
+  // Empty `last`: no result rows, run still completes.
+  const src = `
++ go
+
+go
+[ q X | last X ]
+^ got X
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "got"), []);
+  console.log("PASS: empty last produces no rows");
+}
+
+// ----- prefix-bound parameter + last -----
+{
+  const src = `
++ monster m1, + monster m2, + it:at m1 a, + it:at m1 b, + it:at m2 c, + go
+
+go
+monster X
+[ it:at X L | last L ]
+^ at-last X L
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "at-last"), ["at-last m1 b", "at-last m2 c"]);
+  console.log("PASS: prefix-bound parameter with last");
+}
+
+// ----- anchor restriction: tuples not containing the anchor don't count -----
+{
+  const src = `
++ p 1 3, + go
+
++ p 2 4
+
+go
+[ p X Y | sum Y ]
+^ out X Y
+`;
+  const { store } = runFixpoint(ok(src));
+  // `p 2 4` lives on an incomparable branch — its interval does not
+  // contain go's anchor, so only `p 1 3` contributes.
+  assert.deepEqual(rowsWithHead(store, "out"), ["out 1 3"]);
+  console.log("PASS: anchor restriction");
+}
+
+// ----- nesting, and its flattened equivalent -----
+{
+  const inner = `[ [ it:at X L, invader X | last L ] | count X ]`;
+  const flat = `[ invader X, [ it:at X L | last L ] | count X ]`;
+  const mk = (comp: string) => `
++ invader i1, + invader i2, + it:at i1 h, + it:at i1 a, + it:at i2 a, + go
+
+go
+${comp}
+^ at-count L X
+`;
+  for (const comp of [inner, flat]) {
+    const { store } = runFixpoint(ok(mk(comp)));
+    // i1's last location is `a` (h then a); i2's is `a` — two invaders at
+    // `a`, so one row: at-count a (s (s z)).
+    assert.deepEqual(rowsWithHead(store, "at-count"), ["at-count a (s (s z))"], comp);
+  }
+  console.log("PASS: nested aggregation (both formulations)");
+}
+
+// ----- per-group sum with a prefix-bound group parameter -----
+{
+  const src = `
++ score p1 2, + score p1 3, + score p2 5, + player p1, + player p2, + go
+
+go
+player P
+[ score P X | sum X ]
+^ total P X
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "total"), ["total p1 5", "total p2 5"]);
+  console.log("PASS: per-player sum via prefix binding");
+}
+
+// ----- multi-line expression (incl. blank line and comment inside) -----
+{
+  const src = `
++ p 2 4, + p 1 1, + p 1 3, + go
+
+go
+[ p X Y -- contributes per tuple
+
+  | sum Y ]
+^ out X Y
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "out"), ["out 1 4", "out 2 4"]);
+  console.log("PASS: multi-line bracket expression");
+}
+
+// ----- set semantics: duplicate derivations collapse before count/sum -----
+{
+  // `q` matches two distinct tuples that agree on X; `count X` counts
+  // distinct bindings, not derivations.
+  const src = `
++ tag t1 v, + tag t2 v, + go
+
+go
+[ tag _ V | count V ]
+^ num V
+`;
+  const { store } = runFixpoint(ok(src));
+  // Bindings over {V}: just {v} — the `_` positions are projected away.
+  assert.deepEqual(rowsWithHead(store, "num"), ["num (s z)"]);
+  console.log("PASS: set semantics over free variables");
+}
+
+console.log("v2_bracket_agg: all tests passed");

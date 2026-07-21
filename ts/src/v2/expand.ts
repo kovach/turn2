@@ -255,6 +255,8 @@ function collectAtomVarsOrdered(a: RuleAtom, seen: Set<string>, out: string[]): 
   } else if (a.tag === "Equal") {
     push(a.lhs);
     push(a.rhs);
+  } else if (a.tag === "AggComp") {
+    for (const it of a.body) collectAtomVarsOrdered(it, seen, out);
   } else if (a.tag === "Exception") {
     // An earlier Exception cannot occur (they are processed first-to-last),
     // but keep the walk total: its in-place replacement contributes vars
@@ -327,6 +329,7 @@ function collectProgramSymbols(program: Program): Set<string> {
         continue;
       }
       if (a.tag === "Equal") { term(a.lhs); term(a.rhs); continue; }
+      if (a.tag === "AggComp") { walk(a.body); continue; }
       if (a.tag !== "Atom") continue;
       if (a.subAtoms !== undefined) {
         for (const s of a.subAtoms) for (const t of s.atom.terms) term(t);
@@ -489,6 +492,16 @@ const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
 const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
 const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
 const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
+// Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+// Row heads + wrapped-query encoding symbols, consumed by comp-aggregate.ts.
+const SYM_DO_AGGC: Term = { tag: "Symbol", name: "_do-aggc" };
+const SYM_AGG_RESULTC: Term = { tag: "Symbol", name: "_agg-resultc" };
+const SYM_CQ: Term = { tag: "Symbol", name: "*cq" };
+const SYM_CQ_ATOM: Term = { tag: "Symbol", name: "*cq-atom" };
+const SYM_CQ_RED: Term = { tag: "Symbol", name: "*cq-red" };
+const SYM_CQ_COLS: Term = { tag: "Symbol", name: "*cq-cols" };
+const SYM_CQ_ANY: Term = { tag: "Symbol", name: "*cq-any" };
+const SYM_FV: Term = { tag: "Symbol", name: "*fv" };
 const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
@@ -770,6 +783,13 @@ function decomposeBody(
       }
       continue;
     }
+    if (a.tag === "AggComp") {
+      state.lexPos++;
+      const next = decomposeAggComp(a, state, XL, XR);
+      XL = next.XL;
+      XR = next.XR;
+      continue;
+    }
     if (a.tag === "Exception") {
       throw new Error("internal: Exception atom reached decomposition (applyExceptions missing?)");
     }
@@ -964,6 +984,157 @@ function decomposeAggregate(
 
   // New running anchor: the matched _agg-result row's interval. Equals
   // the producer's prefix anchor (XL, XR) by closeDoAgg invariant.
+  return { XL: lVar, XR: rVar };
+}
+
+type AggCompRA = Extract<RuleAtom, { tag: "AggComp" }>;
+
+// Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md):
+// lowers the whole expression tree into a paired producer
+// `Emit (_do-aggc <cq> <cols> idTpl)` at (XL, XR) and consumer
+// `Match (_agg-resultc (row V1..Vm) idTpl)` at (_l_K, _r_K), following the
+// decomposeAggregate pattern: the shared inline idTpl is both the
+// do-aggc ↔ agg-resultc correlation key for closeDoAggC and the
+// chain-recovery anchor for the consumer Match. Result rows are emitted by
+// closeDoAggC at the producer's exact endpoints, so no Le/Max/Min
+// scaffolding is needed and the suffix's running anchor is (_l_K, _r_K)
+// == (XL, XR).
+//
+// Wrapped-query encoding (ground modulo prefix-bound Variables, which the
+// trail substitutes at Emit-intern time; decoded by comp-aggregate.ts):
+//   comp       := (*cq (*cq-red <op> (*fv :V)) item...)
+//   atom item  := (*cq-atom t1' ... tk')
+//   nested     := its own (*cq ...) term
+//   free var   := (*fv :name)        `_` / wildcard := *cq-any
+//   cols       := (*cq-cols (*fv :name)...) — the free vars of the whole
+//                 tree in first-occurrence order; fixes the result row
+//                 layout shared with the consumer Match's pattern.
+function decomposeAggComp(
+  a: AggCompRA,
+  state: DecState,
+  XL: Term,
+  XR: Term,
+): { XL: Term; XR: Term } {
+  const k = state.lexPos;
+  const prefixSeen = new Set(state.seen);
+
+  // Free variables (result columns) of the whole tree, first-occurrence
+  // order; also validate each level's reduce var against its own subtree.
+  const free: string[] = [];
+  const freeSet = new Set<string>();
+  const validateAndCollect = (comp: AggCompRA): Set<string> => {
+    const sub = new Set<string>();
+    const noteT = (t: Term): void => {
+      if (isJsHead(t)) jsNotAllowed(state);
+      if (t.tag === "Variable") {
+        if (t.name === "_") return;
+        if (!prefixSeen.has(t.name)) {
+          sub.add(t.name);
+          if (!freeSet.has(t.name)) { freeSet.add(t.name); free.push(t.name); }
+        }
+        return;
+      }
+      if (t.tag === "Atom" || t.tag === "Id") {
+        for (const x of t.atom.terms) noteT(x);
+      }
+    };
+    for (const it of comp.body) {
+      if (it.tag === "AggComp") {
+        for (const n of validateAndCollect(it)) sub.add(n);
+        continue;
+      }
+      if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
+      for (const t of it.atom.terms) noteT(t);
+    }
+    const v = comp.reduce.varName;
+    if (prefixSeen.has(v)) {
+      throw new Error(
+        `rule '${state.ruleName}': reduction variable '${v}' is bound earlier in the rule ` +
+        `(it must be free in the aggregate query)`,
+      );
+    }
+    if (!sub.has(v)) {
+      throw new Error(
+        `rule '${state.ruleName}': reduction variable '${v}' does not occur in the aggregate query`,
+      );
+    }
+    return sub;
+  };
+  validateAndCollect(a);
+
+  const fvTerm = (name: string): Term => ({
+    tag: "Id",
+    atom: { terms: [SYM_FV, variableToSymbol({ tag: "Variable", name })] },
+  });
+  const encodeTerm = (t: Term): Term => {
+    if (isJsHead(t)) jsNotAllowed(state);
+    if (t.tag === "Variable") {
+      if (t.name === "_") return SYM_CQ_ANY;
+      if (prefixSeen.has(t.name)) return t; // bound by prefix — trail substitutes
+      return fvTerm(t.name);
+    }
+    if (t.tag === "Wildcard") return SYM_CQ_ANY;
+    if (t.tag === "Atom" || t.tag === "Id") {
+      return { tag: t.tag, atom: { terms: t.atom.terms.map(encodeTerm) } };
+    }
+    return t;
+  };
+  const encodeComp = (comp: AggCompRA): Term => {
+    const red: Term = {
+      tag: "Id",
+      atom: {
+        terms: [
+          SYM_CQ_RED,
+          { tag: "Symbol", name: comp.reduce.op },
+          fvTerm(comp.reduce.varName),
+        ],
+      },
+    };
+    const terms: Term[] = [SYM_CQ, red];
+    for (const it of comp.body) {
+      if (it.tag === "AggComp") {
+        terms.push(encodeComp(it));
+      } else {
+        const atomIt = it as AtomRA;
+        terms.push({ tag: "Id", atom: { terms: [SYM_CQ_ATOM, ...atomIt.atom.terms.map(encodeTerm)] } });
+      }
+    }
+    return { tag: "Id", atom: { terms } };
+  };
+
+  // Producer: Emit (_do-aggc <cq> <cols> idTpl) at (XL, XR). Exempt from
+  // the universal paired Match — chain recovery is supplied by the
+  // _agg-resultc Match below, which shares the trailing idTpl.
+  const idTpl = freshIdTemplate(state, k, "_emitId");
+  const cols: Term = { tag: "Id", atom: { terms: [SYM_CQ_COLS, ...free.map(fvTerm)] } };
+  const producerRow: Atom = { terms: [SYM_DO_AGGC, encodeComp(a), cols, idTpl] };
+  state.out.push({ tag: "Emit", atom: producerRow, l: XL, r: XR, span: a.span });
+
+  // Mint slots for the consumer Match (same as decomposeAggregate).
+  const lName = `_l_${k}`;
+  const rName = `_r_${k}`;
+  const lVar: Term = { tag: "Variable", name: lName };
+  const rVar: Term = { tag: "Variable", name: rName };
+  state.seen.add(lName);
+  state.chain.push(lVar);
+  state.essential.add(lName);
+  state.seen.add(rName);
+  state.chain.push(rVar);
+  state.essential.add(rName);
+
+  // Consumer: Match (_agg-resultc (row V1..Vm) idTpl) at (_l_K, _r_K).
+  // Unification against the stored result row binds the free vars
+  // (including the reduced one, now holding the aggregate value).
+  const rowPattern: Term = {
+    tag: "Atom",
+    atom: { terms: free.map((n): Term => ({ tag: "Variable", name: n })) },
+  };
+  const consumerRow: Atom = { terms: [SYM_AGG_RESULTC, rowPattern, idTpl] };
+  state.out.push({ tag: "Match", atom: consumerRow, l: lVar, r: rVar, span: a.span });
+
+  // The free vars enter the chain — bound by the consumer Match.
+  for (const n of free) noteVar(state, n);
+
   return { XL: lVar, XR: rVar };
 }
 

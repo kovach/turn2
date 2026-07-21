@@ -45,7 +45,7 @@ The aggregator registry (duplicated from v1): named fold definitions used by sch
 Defines the v2 intermediate representation (IR): the `RuleAtom` algebra spanning both pre-expand (parser output) and post-expand (evaluator input) phases, the `Rule`/`Program` containers, stored `Tuple`s, and the result types for a fixpoint run including blocked-choice reporting. It documents the compilation pipeline (parse → expand → fixpoint eval → Store) and how source markers desugar into explicit anchor IR.
 
 **Key terms:**
-- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`, `Exception`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`)
+- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`, `AggComp`, `Exception`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`)
 - `Marker` — pre-expand source marker (`match`/`episode`/`fact`/`anchor`/`ask`/`constrain`/`aggregate`) driving desugaring
 - `MatchConstraint` — semi-naive eval tag (`"any" | "delta" | "old"`) on `Match` atoms
 - `Rule` / `Program` — named rule (body + delta fields) and the top-level container (`rules`, `schema`, `jsDefs`)
@@ -64,6 +64,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - dot-notation desugaring — threads fresh anchor vars across atoms/subs
 - arity saturation — `saturateArity` pads each Symbol-headed atom with trailing wildcards up to its lexical arity (`:`-count + 1), run after dot-desugaring; over-arity atoms are left as-is (plans/v2-arity-auto-wildcard.md)
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
+- `[ Q | op V ]` bracket aggregation — tokenized as a (possibly multi-line) `aggcomp` token, mini-parsed into a pre-expand `AggComp` atom (query items = plain match atoms or nested `[...]`; reduction op ∈ count/sum/last) (plans/v2-bracket-aggregation.md)
 - `{p t1..tn => e}` exception blocks — tokenized on `{`/`}`, split on top-level `=>`; LHS a single unmarked Symbol-headed atom, RHS a body fragment (no nested exception, no dot adjacency; may be empty = bare suppression); becomes a pre-expand `Exception` atom (plans/v2-exceptions.md)
 - bool-weight validation — enforces `-> bool` weight restrictions
 - `#def`/`#agg` commands — rule naming and schema declarations
@@ -80,7 +81,8 @@ The expansion pipeline that lowers parsed pre-expand rules into the flat post-ex
 - `splitRule` — slices a rule at every `Emit` into producer/consumer halves
 - delta-variants — semi-naive cloning; tags one `Match` as `delta` and sets `deltaHead`/`deltaSafeSkip`
 - fresh Id templates — per-firing fingerprint templates `*id`/`*var`/`*choose`/`*mom`
-- reserved symbols — `*chain`, `*conj`, `_do-agg`, `_agg-result`, `_constrain` (consumed downstream by scheduler/constraint-query)
+- `decomposeAggComp` — lowers a bracket aggregation `[ Q | op V ]` into a paired `Emit (_do-aggc (*cq ...) (*cq-cols ...) idTpl)` / `Match (_agg-resultc (row V1..Vm) idTpl)`, following the `decomposeAggregate` pattern (plans/v2-bracket-aggregation.md; closed by comp-aggregate.ts)
+- reserved symbols — `*chain`, `*conj`, `_do-agg`, `_agg-result`, `_constrain`, plus the bracket-aggregation set `_do-aggc`, `_agg-resultc`, `*cq`, `*cq-atom`, `*cq-red`, `*cq-cols`, `*cq-any`, `*fv` (consumed downstream by scheduler/constraint-query/comp-aggregate)
 
 # expand-liveness.ts
 
@@ -139,13 +141,25 @@ It additionally drives **reactive aggregates** (`#reactive rel -> agg`, see plan
 
 **Key terms:**
 - `aggregateOver` — generic grouped aggregation: matches a `[head, keys…, weight]` pattern with `_free` wildcards and folds via the schema aggregator (`sum`/`count`/`last`); shared with constraint-query and default-display
-- `collectBlockedDoAggs` / `collectBlockedChooses` — find `_do-agg` rows lacking an `_agg-result`, and `_choose` rows with unresolved active terms
+- `collectBlockedDoAggs` / `collectBlockedChooses` — find `_do-agg` rows lacking an `_agg-result`, and `_choose` rows with unresolved active terms; `collectAllBlocked` also pulls in blocked bracket-aggregation rows (kind `aggc`, from comp-aggregate.ts)
 - `selectEarliestTier` — minimal elements of the `prior` (interval-start) partial order
 - `closeDoAgg` — computes a blocked aggregate and emits its `_agg-result` rows
 - `collectReactiveFinalizations` — per-group pending reactive breakpoints (residual-keyed); `finalizeReactive` materializes one group's `_aggval` row at one breakpoint
 - `foldGroupAt` — folds a single reactive group (key bound) at a point; `joinClosure` — join-closure of a group's lefts (its breakpoint set)
 - `_free` — wildcard key position marking a group-by slot
 - `_aggval` — materialized reactive aggregate value row (`_aggval head key… value`), over-persisted to `[bp, top]`
+
+# comp-aggregate.ts
+
+Close logic for bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md): at outer-loop quiescence it finds `_do-aggc` rows lacking a matching `_agg-resultc` row, decodes the wrapped `(*cq ...)` query, evaluates it as a backtracking conjunctive join restricted to tuples whose intervals contain the producer's anchor, reduces per group (`count`/`sum` on the deduped binding set; `last` selects maximal derivations by the lub of contributor left endpoints), and emits `_agg-resultc` result rows keyed by the copied trailing id. Nested `[...]` items are evaluated recursively inside one close and join like virtual relations.
+
+**Key terms:**
+- `collectBlockedDoAggCs` / `BlockedDoAggC` — `_do-aggc` rows whose trailing id has no `_agg-resultc` row yet
+- `closeDoAggC` — decode + evaluate + reduce one blocked row; emits `_agg-resultc (row v1..vm) <id>` at the producer's endpoints
+- `decodeComp` / `decodeCols` — decode the `(*cq (*cq-red op (*fv :V)) item...)` query and `(*cq-cols ...)` result-row layout
+- `joinItems` / `matchTerm` — backtracking join; `(*fv :name)` positions bind/check a substitution, `*cq-any` matches anything, ground positions compare by token
+- `reduceRows` — set-semantics dedup + group-by-key fold (`count`/`sum`), or maximal-derivation selection by binding moment (`last`); zero-row policy mirrors `aggregateOver`
+- binding moment — lub of the contributor tuples' left endpoints; `last`'s selection order
 
 # constraint-query.ts
 

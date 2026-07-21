@@ -20,6 +20,10 @@ type Token =
   // Exception block `{...}` (plans/v2-exceptions.md). `text` is the inner
   // text, braces stripped.
   | { tag: "exception"; text: string; line: number }
+  // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+  // `text` is the inner text, brackets stripped; may span multiple source
+  // lines (joined with spaces). `line` is the opening line.
+  | { tag: "aggcomp"; text: string; line: number }
   | { tag: "equal"; text: string; line: number }
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
@@ -70,8 +74,8 @@ export function tokenize(input: string): Token[] | ParseError {
   const lines = input.split("\n");
   let blankPending = false;
   for (let li = 0; li < lines.length; li++) {
-    const lineno = li + 1;
-    const raw = stripComment(lines[li]!);
+    let lineno = li + 1;
+    let raw = stripComment(lines[li]!);
     if (raw.trim() === "") {
       blankPending = true;
       continue;
@@ -146,6 +150,52 @@ export function tokenize(input: string): Token[] | ParseError {
       }
       if (ch === "}") {
         return { line: lineno, message: "stray '}'" };
+      }
+      if (ch === "[") {
+        // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+        // Scan to the matching `]`, tracking bracket depth, continuing across
+        // line breaks (comments stripped per line; pieces joined with a
+        // space — line breaks inside the block carry no meaning). Blank
+        // lines inside an open bracket are part of the block, never a
+        // ruleEnd.
+        if (!atomStart) {
+          return { line: lineno, message: "'[' must start a query item (separate it with ',')" };
+        }
+        const openLine = lineno;
+        const pieces: string[] = [];
+        let bdepth = 0;
+        let scanStart = pos;
+        let end = -1;
+        for (;;) {
+          for (let j = scanStart; j < raw.length; j++) {
+            const c = raw[j]!;
+            if (c === "[") bdepth++;
+            else if (c === "]") {
+              bdepth--;
+              if (bdepth === 0) { end = j; break; }
+            }
+          }
+          if (end >= 0) break;
+          // Bracket still open: consume the next line into the block.
+          pieces.push(raw.slice(scanStart));
+          li++;
+          if (li >= lines.length) {
+            return { line: openLine, message: "unterminated '['" };
+          }
+          lineno = li + 1;
+          raw = stripComment(lines[li]!);
+          scanStart = 0;
+          pos = 0;
+        }
+        pieces.push(raw.slice(scanStart, end + 1));
+        const whole = pieces.join(" ");
+        tokens.push({ tag: "aggcomp", text: whole.slice(1, -1).trim(), line: openLine });
+        pos = end + 1;
+        atomStart = true;
+        continue;
+      }
+      if (ch === "]") {
+        return { line: lineno, message: "stray ']'" };
       }
       if (atomStart && ch === "#") {
         const rest = raw.slice(pos + 1);
@@ -235,7 +285,7 @@ export function tokenize(input: string): Token[] | ParseError {
       let depth = 0;
       while (pos < raw.length) {
         const c = raw[pos]!;
-        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}")) break;
+        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}" || c === "[" || c === "]")) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
         pos++;
@@ -271,7 +321,7 @@ export function tokenize(input: string): Token[] | ParseError {
 // fresh var into the sub's first atom across the recursion. Final
 // `desugarBody` produces a real `RuleAtom[]`.
 type BodyItem =
-  | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom" or "Equal"
+  | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom", "Equal", or "AggComp"
   | { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span }
   | { kind: "dot"; line: number }
   // Exception block. `right` is still BodyItems so `desugarBody` can
@@ -523,6 +573,14 @@ function parseBodyItems(
       pos.i++;
       continue;
     }
+    if (tok.tag === "aggcomp") {
+      const parsedComp = parseAggCompText(tok.text, tok.line);
+      if ("message" in parsedComp) return parsedComp;
+      top.items.push({ kind: "atom", atom: parsedComp });
+      top.needsContent = false;
+      pos.i++;
+      continue;
+    }
     if (tok.tag === "equal") {
       const parsedEq = parseEqualText(tok.text, tok.line);
       if ("message" in parsedEq) return parsedEq;
@@ -597,7 +655,16 @@ function remapItemLines(items: BodyItem[], line: number): void {
     if (it.kind === "dot") { it.line = line; continue; }
     if (it.kind === "sub") { it.span.line = line; remapItemLines(it.inner, line); continue; }
     if (it.kind === "exception") { it.span.line = line; remapItemLines(it.right, line); continue; }
+    if (it.atom.tag === "AggComp") { remapAggCompLines(it.atom, line); continue; }
     it.atom.span.line = line;
+  }
+}
+
+function remapAggCompLines(comp: Extract<RuleAtom, { tag: "AggComp" }>, line: number): void {
+  comp.span.line = line;
+  for (const b of comp.body) {
+    if (b.tag === "AggComp") remapAggCompLines(b, line);
+    else b.span.line = line;
   }
 }
 
@@ -737,6 +804,21 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
     } else if (a.tag === "Equal") {
       collectVarsInTerm(a.lhs, out);
       collectVarsInTerm(a.rhs, out);
+    } else if (a.tag === "AggComp") {
+      collectAggCompVarNames(a, out);
+    }
+  }
+}
+
+function collectAggCompVarNames(
+  comp: Extract<RuleAtom, { tag: "AggComp" }>,
+  out: Set<string>,
+): void {
+  for (const b of comp.body) {
+    if (b.tag === "AggComp") {
+      collectAggCompVarNames(b, out);
+    } else if (b.tag === "Atom") {
+      for (const t of b.atom.terms) collectVarsInTerm(t, out);
     }
   }
 }
@@ -926,6 +1008,7 @@ function saturateArity(body: RuleAtom[]): void {
       saturateArity(a.right);
       continue;
     }
+    if (a.tag === "AggComp") { saturateAggComp(a); continue; }
     if (a.tag !== "Atom") continue; // Equal / Match / Emit / etc. have no head arity
     if (a.subAtoms !== undefined) {
       // `!(...)` block. `agg` subs fold the weight into the trailing term slot,
@@ -951,6 +1034,15 @@ function saturateHead(terms: Term[], hasWeight: boolean): void {
   // want terms.length = head + (colons + 1) args, minus the weight's slot.
   const want = colonCount(head.name) + 2 - (hasWeight ? 1 : 0);
   while (terms.length < want) terms.push({ tag: "Wildcard" });
+}
+
+// Pad every atom inside a bracket-aggregation query (plain matches; no
+// weights inside `[...]`), recursing through nested expressions.
+function saturateAggComp(comp: Extract<RuleAtom, { tag: "AggComp" }>): void {
+  for (const b of comp.body) {
+    if (b.tag === "AggComp") saturateAggComp(b);
+    else if (b.tag === "Atom") saturateHead(b.atom.terms, false);
+  }
 }
 
 // Pad a `!(...)` aggregate sub-atom `[head, ...args, weight]` by inserting
@@ -1131,6 +1223,120 @@ function parseConstrainSubAtom(text: string, line: number): SubConstrain | Parse
     return { kind: "agg", atom: { terms: [...headTerms, weight] } };
   }
   return { kind: "plain", atom: { terms: headTerms } };
+}
+
+// Reduction ops accepted in `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
+const AGG_COMP_OPS = new Set(["count", "sum", "last"]);
+
+// Parse the inner text of a `[ Q | op V ]` bracket aggregation (brackets
+// already stripped by the tokenizer; possibly joined from several source
+// lines). `Q` is a comma-separated list of plain match atoms and nested
+// `[...]` expressions; the reduction is `op V` with op in AGG_COMP_OPS.
+// Reduce-var binding restrictions (occurs in Q, not bound earlier in the
+// rule) are checked at decompose time, where the prefix-bound set is known.
+function parseAggCompText(text: string, line: number): RuleAtom | ParseError {
+  // Locate the single top-level `|` (outside `(...)` and `[...]`).
+  let depth = 0;
+  let pipe = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "|" && depth === 0) {
+      if (pipe >= 0) {
+        return { line, message: "aggregate expression has more than one top-level '|'" };
+      }
+      pipe = i;
+    }
+  }
+  if (pipe < 0) {
+    return { line, message: "aggregate expression requires '| <op> <Var>'" };
+  }
+  const qText = text.slice(0, pipe).trim();
+  const rText = text.slice(pipe + 1).trim();
+
+  // Reduction: exactly `op V`.
+  const rToks = tokenizeTermText(rText);
+  if (rToks.length !== 2) {
+    return { line, message: "reduction must be '<op> <Var>'" };
+  }
+  const op = rToks[0]!;
+  if (!AGG_COMP_OPS.has(op)) {
+    return { line, message: `unknown reduction op '${op}' (expected count, sum, or last)` };
+  }
+  const vTok = rToks[1]!;
+  if (vTok === "_") {
+    return { line, message: "reduction variable cannot be '_'" };
+  }
+  if (!isVariableToken(vTok)) {
+    return { line, message: `reduction must name a variable (got '${vTok}')` };
+  }
+
+  // Query items.
+  const body: RuleAtom[] = [];
+  for (const pieceRaw of splitTopLevelCommasBrackets(qText)) {
+    const piece = pieceRaw.trim();
+    if (piece.length === 0) {
+      return { line, message: "empty item in aggregate query" };
+    }
+    if (piece.startsWith("[")) {
+      if (!piece.endsWith("]")) {
+        return { line, message: "unbalanced '[' in aggregate query" };
+      }
+      const inner = parseAggCompText(piece.slice(1, -1), line);
+      if ("message" in inner) return inner;
+      body.push(inner);
+      continue;
+    }
+    if (piece.includes("[") || piece.includes("]")) {
+      return { line, message: "'[' inside an aggregate query must start a standalone item" };
+    }
+    const c0 = piece[0]!;
+    if (isMarkerChar(c0) || c0 === "=") {
+      return { line, message: "aggregate query atoms cannot carry a marker or '='" };
+    }
+    if (findTopArrow(piece) >= 0) {
+      return { line, message: "aggregate query atoms cannot carry '-> weight'" };
+    }
+    if (piece.includes(".")) {
+      return { line, message: "'.' is not allowed inside an aggregate query" };
+    }
+    if (piece.includes(";") || piece.includes("{") || piece.includes("}")) {
+      return { line, message: "aggregate query atoms must be plain atoms" };
+    }
+    const terms = parseTerms(tokenizeTermText(piece), line);
+    if ("message" in terms) return terms;
+    if (terms.length === 0) {
+      return { line, message: "empty item in aggregate query" };
+    }
+    const head = terms[0]!;
+    if (head.tag === "Symbol" && head.name.startsWith("*")) {
+      return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
+    }
+    body.push({ tag: "Atom", marker: "match", atom: { terms }, span: { line } });
+  }
+  if (body.length === 0) {
+    return { line, message: "aggregate query must contain at least one item" };
+  }
+  return { tag: "AggComp", body, reduce: { op, varName: vTok }, span: { line } };
+}
+
+// Split on top-level commas where depth counts both `(...)` and `[...]`.
+function splitTopLevelCommasBrackets(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "," && depth === 0) {
+      out.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(text.slice(start));
+  return out;
 }
 
 // Split `text` on top-level commas (paren-depth 0). Returns the pieces,

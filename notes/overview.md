@@ -1,3 +1,75 @@
+# aggregation synonyms
+plan: TODO
+
+we want to create macros that expand into bracket aggregate expressions (plans/v2-bracket-aggregation)
+
+example:
+```
+land:count B A := [[at A B | last B] | count A]
+
+activate push, target L, land:count L X, ~something X
+```
+
+- implementation:
+  - simply rewrite occurrences of the macro (`land:count X Y`) with the body (`[[at A B | last B] | count A]`), substituting the variables appropriately.
+  - assume macros are accessible throughout the source file (definition may follow use)
+- static check: ensure macros are not recursive (directly or indirectly). compile time error
+
+# another take on aggregation
+plan: plans/v2-bracket-aggregation.md
+
+- new aggregate operation
+- generalizes the `agg` mechanism
+- note about the aggregation:
+  - aggregation fundamentally involves projection: we start with a set of tuples defined over some variables, then we project onto a subset of those variables, and for each group, we reduce to a single value by applying some fold operation to the group
+  - this approach is going to reduce one variable at a time.
+    - as an example, `[p X Y | sum Y]` is an expression that will produce one (X,Y) binding per unique value of X, with the Y value being bound to the sum of all input tuples' Y values.
+      `{p 2 4, p 1 1, p 1 3} -> {(X:1,Y:4), (X:2, Y:4)}`
+    - as another (slightly contrived) example, `[[p X Y | sum Y] | sum X]` would first reduce over Y, and then reduce over X, grouping X's together that happen to have the same aggregate Y value
+      `{p 2 4, p 1 1, p 1 3} -> {(X:3,Y:4)}`
+
+syntax:
+```
+[ Query | Reduction-expression ]
+Query := sequence of match RuleAtoms
+Reduction-expression
+  = count V
+  | sum V
+  | last V
+```
+
+syntactic restriction: V must be a variable free in Query (not bound earlier in the rule)
+
+semantics sketch:
+- the expression `[Q | R]` occurs within a Turn rule, so there is an active anchor A at that point
+- evaluate Q as a normal match, but *restricted only to tuples that contain A*
+  - we will assume Q contains no temporal stuff: it is a plain join query.
+    the only temporal aspect is the one just noted about containing A.
+- this produces a set of bindings defined over the free variables of Q
+- apply the reduction operation wrt the given variable:
+  - `foo X` means to project onto the variables except X and apply `foo` to the X's, binding the result to X in the enclosing expression
+    - `count X`: ignore X values
+    - `sum X`: sum X values
+    - `last X`: take temporally last X value, in the same way that the current `last` operation works (note that last produces multiple values if there are incomparable final moments)
+
+some examples:
+```
+[ invader X | count X ] -- produces one tuple; the count of all invaders
+[ it:at X L | last L ]  -- produces one tuple per X; the last (temporally) value of L
+monster X, [ it:at X L | last L ] -- `monster X` binds X inside the aggregate; produces one value of L per
+[ [ it:at X L, invader X | last L ] | count X ] -- produces one tuple per L; the count of invaders at L
+[ invader X, [ it:at X L | last L ] | count X ] -- this is semantically identical to previous
+```
+
+full examples:
+```
+-- *for each point scored during draw-step, score another point after draw-step*
+( draw-step, active-player P
+  ( draw, [ score P X | sum X ] ) );
+( post-draw-step, ~score P X )
+```
+
+# 26/07/21
 # arity + auto `_` insertion
 plan: plans/v2-arity-auto-wildcard.md
 
