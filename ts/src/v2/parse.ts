@@ -5,7 +5,7 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
-import type { JsDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { JsDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
 import { aggregators } from "./aggregators.js";
 
 export interface ParseError {
@@ -22,8 +22,14 @@ type Token =
   | { tag: "exception"; text: string; line: number }
   // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
   // `text` is the inner text, brackets stripped; may span multiple source
-  // lines (joined with spaces). `line` is the opening line.
-  | { tag: "aggcomp"; text: string; line: number }
+  // lines (joined with spaces). `line` is the opening line, `endLine` the
+  // line the closing `]` sits on.
+  | { tag: "aggcomp"; text: string; line: number; endLine: number }
+  // Macro definition header `#macro head P1..Pn :=`
+  // (plans/v2-aggregation-synonyms.md). `headText` is the text between the
+  // command name and the `:=`; the RHS tokenizes normally and follows as an
+  // `aggcomp` token.
+  | { tag: "macroDef"; headText: string; line: number }
   | { tag: "equal"; text: string; line: number }
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
@@ -189,7 +195,12 @@ export function tokenize(input: string): Token[] | ParseError {
         }
         pieces.push(raw.slice(scanStart, end + 1));
         const whole = pieces.join(" ");
-        tokens.push({ tag: "aggcomp", text: whole.slice(1, -1).trim(), line: openLine });
+        tokens.push({
+          tag: "aggcomp",
+          text: whole.slice(1, -1).trim(),
+          line: openLine,
+          endLine: lineno,
+        });
         pos = end + 1;
         atomStart = true;
         continue;
@@ -204,6 +215,26 @@ export function tokenize(input: string): Token[] | ParseError {
         const name = ws < 0 ? trimmed : trimmed.slice(0, ws);
         if (name.length === 0) {
           return { line: lineno, message: "'#' must be followed by a command name" };
+        }
+        if (name === "macro") {
+          // `#macro head P1..Pn := [ ... ]`
+          // (plans/v2-aggregation-synonyms.md). Only the header through the
+          // `:=` is consumed here; the RHS tokenizes with the existing
+          // machinery, so the multi-line `[` handling is reused unchanged.
+          const lead = rest.length - trimmed.length; // ws between '#' and name
+          const afterName = pos + 1 + lead + name.length;
+          const walrus = findTopWalrus(raw, afterName);
+          if (walrus < 0) {
+            return { line: lineno, message: "'#macro' definition requires ':=' on the same line" };
+          }
+          tokens.push({
+            tag: "macroDef",
+            headText: raw.slice(afterName, walrus).trim(),
+            line: lineno,
+          });
+          pos = walrus + 2;
+          atomStart = true;
+          continue;
         }
         if (name === "def") {
           // `#def <name>` consumes only the name; the rest of the line
@@ -316,6 +347,19 @@ export function tokenize(input: string): Token[] | ParseError {
   return tokens;
 }
 
+// Index of a top-level `:=` in `raw` at or after `from` (depth counted over
+// `(...)` and `[...]`), or -1.
+function findTopWalrus(raw: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === ":" && depth === 0 && raw[i + 1] === "=") return i;
+  }
+  return -1;
+}
+
 // Temporary per-rule body item. `sub` carries an unresolved inner body
 // (still a `BodyItem[]`) so the dot-desugar pass can thread an outer
 // fresh var into the sub's first atom across the recursion. Final
@@ -327,7 +371,12 @@ type BodyItem =
   // Bracket aggregation `[ Q | op V ]`. `items` is still BodyItems (query
   // atoms plus `dot` markers) so `desugarBody` resolves dots inside `Q`
   // with the containing rule's shared fresh-name minting.
-  | { kind: "aggcomp"; items: BodyItem[]; reduce: { op: string; varName: string }; span: Span }
+  | {
+      kind: "aggcomp";
+      items: BodyItem[];
+      reduce: { op: string; varName: string; out: Term; bare?: boolean };
+      span: Span;
+    }
   // Exception block. `right` is still BodyItems so `desugarBody` can
   // resolve the fragment's dots with the containing rule's shared
   // fresh-name minting (no `_dotN` capture between rule and fragment).
@@ -408,11 +457,18 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const schema = new Map<string, string>();
   const reactive = new Set<string>();
   const jsDefs = new Map<string, JsDef>();
+  const macros = new Map<string, MacroDef>();
   let i = 0;
 
   while (i < tokens.length) {
     const t = tokens[i]!;
     if (t.tag === "ruleEnd") { i++; continue; }
+    if (t.tag === "macroDef") {
+      const res = parseMacroDef(t, tokens, i + 1, macros);
+      if ("message" in res) return res;
+      i = res.next;
+      continue;
+    }
     let explicitName: string | undefined;
     let startLine = t.line;
     if (t.tag === "command") {
@@ -478,7 +534,92 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const boolErr = validateBoolWeights(rules, schema);
   if (boolErr !== null) return boolErr;
 
-  return { rules, schema, reactive, jsDefs };
+  return { rules, schema, reactive, jsDefs, macros };
+}
+
+// Parse a macro definition `#macro head P1..Pn := [ ... ]`
+// (plans/v2-aggregation-synonyms.md). `tok` is the header; the body follows
+// in the token stream (possibly after `ruleEnd`s, so the `[` may open on the
+// next line). Records into `macros` and returns the index just past the body.
+function parseMacroDef(
+  tok: Extract<Token, { tag: "macroDef" }>,
+  tokens: Token[],
+  start: number,
+  macros: Map<string, MacroDef>,
+): { next: number } | ParseError {
+  const line = tok.line;
+  const terms = parseTerms(tokenizeTermText(tok.headText), line);
+  if ("message" in terms) return terms;
+  const head = terms[0];
+  if (head === undefined) {
+    return { line, message: "macro definition needs a name before ':='" };
+  }
+  if (head.tag !== "Symbol") {
+    // `_`-prefixed names tokenize as Variables, so this also rejects the
+    // engine's reserved `_do-agg` / `_agg-result` / `_choose` / `_constrain`.
+    return { line, message: `macro name must be a symbol (got '${tok.headText.trim()}')` };
+  }
+  if (head.name.startsWith("*")) {
+    return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
+  }
+  if (macros.has(head.name)) {
+    return { line, message: `duplicate macro definition for '${head.name}'` };
+  }
+
+  const params: string[] = [];
+  for (const t of terms.slice(1)) {
+    if (t.tag === "Wildcard" || (t.tag === "Variable" && t.name === "_")) {
+      return { line, message: `macro parameter cannot be '_' (in '${head.name}')` };
+    }
+    if (t.tag !== "Variable") {
+      return { line, message: `macro parameters must be variables (in '${head.name}')` };
+    }
+    if (params.includes(t.name)) {
+      return { line, message: `duplicate macro parameter '${t.name}' (in '${head.name}')` };
+    }
+    params.push(t.name);
+  }
+  // `saturateArity` pads uses to the head's lexical arity, so the parameter
+  // count must match it exactly for a padded use to line up.
+  const want = colonCount(head.name) + 1;
+  if (params.length !== want) {
+    return {
+      line,
+      message:
+        `macro '${head.name}' has ${params.length} parameter(s) but its name implies ` +
+        `arity ${want}`,
+    };
+  }
+
+  // Body. Skip `ruleEnd`s so the `[` may start on the following line.
+  let i = start;
+  while (i < tokens.length && tokens[i]!.tag === "ruleEnd") i++;
+  const bodyTok = tokens[i];
+  if (bodyTok === undefined || bodyTok.tag !== "aggcomp") {
+    return { line, message: `macro '${head.name}' body must be a '[ ... ]' aggregate expression` };
+  }
+  i++;
+  // A macro definition is self-delimiting: it ends at its body's closing
+  // `]`, so an ordinary rule may start on the next line with no blank line
+  // between. Only trailing content on the *same* line is a mistake.
+  const after = tokens[i];
+  if (after !== undefined && after.tag !== "ruleEnd" && after.line === bodyTok.endLine) {
+    return { line: after.line, message: `macro '${head.name}' definition must end after its body` };
+  }
+
+  const parsedComp = parseAggCompText(bodyTok.text, bodyTok.line);
+  if ("message" in parsedComp) return parsedComp;
+  const usedNames = new Set<string>(params);
+  collectUsedNames([parsedComp], usedNames);
+  const desugared = desugarBody([parsedComp], usedNames, { n: 1 }, undefined);
+  if (!Array.isArray(desugared)) return desugared;
+  const body = desugared[0];
+  if (desugared.length !== 1 || body === undefined || body.tag !== "AggComp") {
+    throw new Error("internal: macro body did not desugar to a single AggComp");
+  }
+  saturateArity([body]);
+  macros.set(head.name, { name: head.name, params, body, span: { line } });
+  return { next: i };
 }
 
 // Parse one rule body's tokens into `BodyItem`s. Consumes from `pos.i`
@@ -592,6 +733,11 @@ function parseBodyItems(
       top.needsContent = false;
       pos.i++;
       continue;
+    }
+    if (tok.tag === "macroDef") {
+      // `parseProgram` consumes these; reaching one here means a `#macro`
+      // appeared where a rule body was expected (e.g. right after `#def`).
+      return { line: tok.line, message: "'#macro' must begin its own definition" };
     }
     const parsed = parseAtomText(tok.text, tok.marker, tok.line);
     if ("message" in parsed) return parsed;
@@ -787,6 +933,9 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
     }
     if (it.kind === "aggcomp") {
       collectUsedNames(it.items, out);
+      // A name occurring only in an `Out` position must not be reused by
+      // fresh-name minting either.
+      collectVarsInTerm(it.reduce.out, out);
       continue;
     }
     const a = it.atom;
@@ -823,6 +972,46 @@ function mintName(usedNames: Set<string>, counter: { n: number }): string {
       usedNames.add(name);
       return name;
     }
+  }
+}
+
+// Mint a fresh query-side name for a bare reduction over `base`, e.g.
+// `Y` -> `Y_1`. Kept readable (rather than `_dotN`-style) because it shows
+// up in IR dumps of aggregate expressions.
+function mintReduceName(base: string, usedNames: Set<string>): string {
+  let k = 1;
+  while (true) {
+    const name = `${base}_${k++}`;
+    if (!usedNames.has(name)) {
+      usedNames.add(name);
+      return name;
+    }
+  }
+}
+
+// Rename every Variable named `from` to `to` throughout an aggregate
+// query's items, descending into nested expressions (their items, their
+// reduction variable, and their output patterns) — all of those are query
+// positions of the enclosing level.
+function renameInQuery(items: RuleAtom[], from: string, to: string): void {
+  const rw = (t: Term): Term => {
+    if (t.tag === "Variable") return t.name === from ? { tag: "Variable", name: to } : t;
+    if (t.tag === "Atom" || t.tag === "Id") {
+      return { tag: t.tag, atom: { terms: t.atom.terms.map(rw) } };
+    }
+    return t;
+  };
+  for (const it of items) {
+    if (it.tag === "AggComp") {
+      renameInQuery(it.body, from, to);
+      it.reduce = {
+        ...it.reduce,
+        varName: it.reduce.varName === from ? to : it.reduce.varName,
+        out: rw(it.reduce.out),
+      };
+      continue;
+    }
+    if (it.tag === "Atom") it.atom = { terms: it.atom.terms.map(rw) };
   }
 }
 
@@ -916,7 +1105,18 @@ function desugarBody(
       // rule's name minting so `_dotN` vars can't collide.
       const inner = desugarBody(it.items, usedNames, counter, undefined);
       if (!Array.isArray(inner)) return inner;
-      out.push({ tag: "AggComp", body: inner, reduce: it.reduce, span: it.span });
+      let reduce = it.reduce;
+      if (reduce.bare) {
+        // Bare form `[ Q | op V ]` desugars to `[ Q[V ↦ V'] | V = op V' ]`
+        // with `V'` compiler-fresh, so the reduced column and the outward
+        // name are distinct even here (plans/v2-agg-output-var.md). Fresh
+        // names are minted here rather than in `parseAggCompText` because
+        // this is where the rule's used-name set lives.
+        const fresh = mintReduceName(reduce.varName, usedNames);
+        renameInQuery(inner, reduce.varName, fresh);
+        reduce = { ...reduce, varName: fresh };
+      }
+      out.push({ tag: "AggComp", body: inner, reduce, span: it.span });
       continue;
     }
 
@@ -1230,13 +1430,20 @@ function parseConstrainSubAtom(text: string, line: number): SubConstrain | Parse
 // Reduction ops accepted in `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
 const AGG_COMP_OPS = new Set(["count", "sum", "last"]);
 
-// Parse the inner text of a `[ Q | op V ]` bracket aggregation (brackets
-// already stripped by the tokenizer; possibly joined from several source
-// lines). `Q` is a comma-separated list of plain match atoms and nested
-// `[...]` expressions, optionally chained with `.` dot notation (resolved
-// later by `desugarBody`); the reduction is `op V` with op in AGG_COMP_OPS.
+// Parse the inner text of a `[ Q | Out = op V ]` bracket aggregation
+// (brackets already stripped by the tokenizer; possibly joined from several
+// source lines). `Q` is a comma-separated list of plain match atoms and
+// nested `[...]` expressions, optionally chained with `.` dot notation
+// (resolved later by `desugarBody`); the reduction is `op V` with op in
+// AGG_COMP_OPS, and `Out` is a pattern unified against the folded value
+// (plans/v2-agg-output-var.md).
+//
+// The bare form `[ Q | op V ]` sets `out` to the Variable `V` and flags
+// `bare`; `desugarBody` then freshens the query-side occurrences of `V`,
+// which is what makes the bare form a special case of the general one.
 // Reduce-var binding restrictions (occurs in Q, not bound earlier in the
-// rule) are checked at decompose time, where the prefix-bound set is known.
+// rule) and the Out/query disjointness rule are checked at decompose time,
+// where the prefix-bound set is known.
 function parseAggCompText(
   text: string,
   line: number,
@@ -1261,8 +1468,12 @@ function parseAggCompText(
   const qText = text.slice(0, pipe).trim();
   const rText = text.slice(pipe + 1).trim();
 
+  // Split an optional output pattern off the front: `Out = op V`.
+  const eq = findTopEq(rText);
+  const redText = eq < 0 ? rText : rText.slice(eq + 1).trim();
+
   // Reduction: exactly `op V`.
-  const rToks = tokenizeTermText(rText);
+  const rToks = tokenizeTermText(redText);
   if (rToks.length !== 2) {
     return { line, message: "reduction must be '<op> <Var>'" };
   }
@@ -1276,6 +1487,31 @@ function parseAggCompText(
   }
   if (!isVariableToken(vTok)) {
     return { line, message: `reduction must name a variable (got '${vTok}')` };
+  }
+
+  // Output pattern. Absent: the bare form, whose `out` is the Variable `V`
+  // itself (desugarBody freshens the query side).
+  let out: Term;
+  let bare = false;
+  if (eq < 0) {
+    out = { tag: "Variable", name: vTok };
+    bare = true;
+  } else {
+    const outToks = tokenizeTermText(rText.slice(0, eq).trim());
+    const outTerms = parseTerms(outToks, line);
+    if ("message" in outTerms) return outTerms;
+    if (outTerms.length !== 1) {
+      return { line, message: "left of '=' in a reduction must be a single term" };
+    }
+    out = outTerms[0]!;
+    const mentions = new Set<string>();
+    collectVarsInTerm(out, mentions);
+    if (mentions.has(vTok)) {
+      return {
+        line,
+        message: `reduction output cannot mention the reduction variable '${vTok}'`,
+      };
+    }
   }
 
   // Query items. `,` and `.` both separate items at top level; the `.`s
@@ -1325,7 +1561,20 @@ function parseAggCompText(
   if (items.length === 0) {
     return { line, message: "aggregate query must contain at least one item" };
   }
-  return { kind: "aggcomp", items, reduce: { op, varName: vTok }, span: { line } };
+  return { kind: "aggcomp", items, reduce: { op, varName: vTok, out, bare }, span: { line } };
+}
+
+// Index of the first top-level `=` in `text` (depth counts `(...)` and
+// `[...]`), or -1.
+function findTopEq(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "(" || c === "[") depth++;
+    else if (c === ")" || c === "]") depth--;
+    else if (c === "=" && depth === 0) return i;
+  }
+  return -1;
 }
 
 // Split an aggregate query into items separated by top-level `,` and `.`

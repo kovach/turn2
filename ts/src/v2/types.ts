@@ -92,18 +92,26 @@ export type RuleAtom =
       sequence: boolean;
       span: Span;
     }
-  // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-  // `body` items are plain match Atoms (marker "match", no weight) or
-  // nested AggComps. The expression joins `Q` restricted to tuples
-  // containing the running anchor, groups by its free variables minus `V`,
-  // and folds each group's `V` values with `op`, rebinding the result to
-  // `V`. Lowered by `decomposeAggComp` into a paired
-  // `Emit (_do-aggc ...)` / `Match (_agg-resultc ...)`; never reaches the
-  // evaluator.
+  // Bracket aggregation `[ Q | Out = op V ]` (plans/v2-agg-output-var.md,
+  // refining plans/v2-bracket-aggregation.md). `body` items are plain match
+  // Atoms (marker "match", no weight) or nested AggComps. The expression
+  // joins `Q` restricted to tuples containing the running anchor, groups by
+  // its output columns minus `V`, folds each group's `V` values with `op`,
+  // and unifies the folded value against the pattern `Out` — which may bind
+  // (fresh variables become output columns), filter (a prefix-bound
+  // variable or ground term), or both. `varName` is internal to the query
+  // and invisible outward.
+  //
+  // `bare` records that the source was the sugar `[ Q | op V ]`, which the
+  // parser desugars by freshening the query-side occurrences of `V`, so
+  // `out` is the Variable `V` and `varName` is compiler-fresh. It only
+  // affects diagnostics and IR printing.
+  // Lowered by `decomposeAggComp` into a paired `Emit (_do-aggc ...)` /
+  // `Match (_agg-resultc ...)`; never reaches the evaluator.
   | {
       tag: "AggComp";
       body: RuleAtom[];
-      reduce: { op: string; varName: string };
+      reduce: { op: string; varName: string; out: Term; bare?: boolean };
       span: Span;
     }
   // Exception expression `{p t1..tn => e}` (plans/v2-exceptions.md).
@@ -248,6 +256,23 @@ export interface Program {
   reactive: Set<string>;
   // `name -> definition` for `#js` functions.
   jsDefs: Map<string, JsDef>;
+  // `name -> definition` for `head P1..Pn := [ ... ]` aggregation synonyms.
+  // Eliminated by `expandMacros` before any other expand pass, which leaves
+  // this map empty (plans/v2-aggregation-synonyms.md).
+  macros: Map<string, MacroDef>;
+}
+
+// An aggregation synonym: a name + parameters standing for one bracket
+// aggregation expression (plans/v2-aggregation-synonyms.md). A use
+// `head A1..An` in a rule body is replaced by `body` with each `Ai`
+// substituted for `Pi` and every other body variable freshened. Parameters
+// must be the body's *outward* variables — its top-level output columns —
+// which is what makes substitution a plain rewrite.
+export interface MacroDef {
+  name: string;
+  params: string[]; // distinct variable names, arity-many
+  body: Extract<RuleAtom, { tag: "AggComp" }>;
+  span: Span;
 }
 
 // Stored data. Intervals carry hashconsed Term endpoints; their order in the

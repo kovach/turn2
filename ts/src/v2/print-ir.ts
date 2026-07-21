@@ -54,7 +54,14 @@ export function renderRuleAtom(atom: RuleAtom): string {
     }
     case "AggComp": {
       const items = atom.body.map(renderRuleAtom).join(", ");
-      return `AggComp [${items} | ${atom.reduce.op} ?${atom.reduce.varName}]`;
+      const { op, varName, out, bare } = atom.reduce;
+      // Keep the source-level bare form `[ Q | op V ]` readable: there the
+      // query-side name is a compiler-minted rename of `V` and printing
+      // both halves is noise.
+      if (bare === true && out.tag === "Variable") {
+        return `AggComp [${items} | ${op} ?${out.name}]`;
+      }
+      return `AggComp [${items} | ${renderTermRaw(out)} = ${op} ?${varName}]`;
     }
     case "Sub": {
       const inner = atom.body.map(renderRuleAtom).join("; ");

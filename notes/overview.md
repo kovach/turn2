@@ -1,5 +1,31 @@
+# variable-head matches
+plan: plans/v2-variable-head-match.md
+
+a match whose head is a Variable (`foo T, T X`) should match whatever relation `T` names.
+today it parses and expands fine but silently matches nothing.
+
+- emit already works (`foo T, ~T zzz` emits `bar zzz`) — only `evalMatch` is broken
+- it reads the head structurally out of the IR, never through the trail
+- fix: resolve head via trail; Symbol -> existing bucket path, unbound -> full scan
+- unbound scan skips `_`/`*`-headed engine rows
+
+# aggregate output variable
+plan: plans/v2-agg-output-var.md
+
+semantics-preserving refactor of bracket aggregation: separate the reduced variable
+from the variable it binds outward.
+
+approximately: `[f X Y | sum Y]` becomes `[f X Y' | Y = sum Y']`
+
+- the `Y` inside `Q` and the value bound for the enclosing expression are now distinct
+- the LHS of `=` unifies: it tolerates an unbound variable, a bound variable, or a term
+- consequence: an inner reduction variable no longer leaks into the enclosing query.
+  `[[at A B | last B] | count A]` gives bindings over (A,B) -> (A,X) -> (X)
+- this is what makes plain variable substitution into a bracket expression sound (see `# aggregation synonyms`)
+
 # aggregation synonyms
 plan: plans/v2-aggregation-synonyms.md
+depends on: plans/v2-agg-output-var.md
 
 we want to create macros that expand into bracket aggregate expressions (plans/v2-bracket-aggregation)
 

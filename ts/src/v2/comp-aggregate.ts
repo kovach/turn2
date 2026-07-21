@@ -116,6 +116,10 @@ export function closeDoAggC(store: Store, blocked: BlockedDoAggC): boolean {
 interface CQ {
   op: string;
   varName: string;
+  // Pattern unified against the folded value at close time. Its unbound
+  // `(*fv :name)` positions become output columns; ground positions filter
+  // (plans/v2-agg-output-var.md).
+  out: Term;
   items: CQItem[];
 }
 type CQItem =
@@ -175,7 +179,7 @@ function decodeComp(store: Store, t: Term): CQ {
     throw new Error("v2 bracket aggregation: malformed *cq term");
   }
   const redKids = childrenOf(store, kids[1]!);
-  if (redKids === null || redKids.length !== 3 || !isSymNamed(redKids[0]!, "*cq-red")) {
+  if (redKids === null || redKids.length !== 4 || !isSymNamed(redKids[0]!, "*cq-red")) {
     throw new Error("v2 bracket aggregation: malformed *cq-red term");
   }
   const opTerm = redKids[1]!;
@@ -198,7 +202,7 @@ function decodeComp(store: Store, t: Term): CQ {
       throw new Error("v2 bracket aggregation: malformed query item");
     }
   }
-  return { op: opTerm.name, varName, items };
+  return { op: opTerm.name, varName, out: redKids[3]!, items };
 }
 
 function decodeCols(store: Store, t: Term): string[] {
@@ -215,16 +219,34 @@ function decodeCols(store: Store, t: Term): string[] {
   return out;
 }
 
-// The output columns of a comp: `*fv` names anywhere in its subtree, in
-// first-occurrence order (matches decomposeAggComp's traversal).
-function collectCompColumns(store: Store, cq: CQ, out: string[], seen: Set<string>): void {
+// The columns of what `joinItems` returns for a comp: the union of its
+// items' output columns, in first-occurrence order.
+function joinCols(store: Store, cq: CQ): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
   for (const it of cq.items) {
     if (it.kind === "comp") {
-      collectCompColumns(store, it.cq, out, seen);
+      for (const n of compOutCols(store, it.cq)) {
+        if (!seen.has(n)) { seen.add(n); out.push(n); }
+      }
     } else {
       for (const t of it.terms) collectFvs(store, t, out, seen);
     }
   }
+  return out;
+}
+
+// The output columns of a comp — its result-row layout:
+//
+//   outCols(comp) = joinCols(comp) − {V} ++ unbound variables of `out`
+//
+// This must produce exactly the sequence `aggCompOutCols` in expand.ts
+// produces for the same expression: that one writes the layout (the
+// `*cq-cols` term and the consumer Match's row pattern), this one reads it.
+function compOutCols(store: Store, cq: CQ): string[] {
+  const out = joinCols(store, cq).filter((n) => n !== cq.varName);
+  collectFvs(store, cq.out, out, new Set(out));
+  return out;
 }
 
 function collectFvs(store: Store, t: Term, out: string[], seen: Set<string>): void {
@@ -364,21 +386,32 @@ function matchTerm(
 // ----- Reduction -----
 
 function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
-  const cols: string[] = [];
-  collectCompColumns(store, cq, cols, new Set<string>());
+  const cols = joinCols(store, cq);
   const V = cq.varName;
   const keyCols = cols.filter((n) => n !== V);
+  const outCols = compOutCols(store, cq);
   const aggregator = getAggregator(cq.op);
 
   const sigOf = (row: Deriv, names: string[]): string =>
     names.map((n) => tokenOf(store, row.vals.get(n)!)).join("|");
+
+  // A result row carries the group key plus whatever unifying the folded
+  // value against `out` binds — never `V`, which is internal to the query.
+  // A group whose fold fails to unify with `out` produces no row.
+  const resultRow = (rep: Deriv | null, value: Term, moment: Term): Deriv | null => {
+    const vals = new Map<string, Term>();
+    if (rep !== null) for (const n of keyCols) vals.set(n, rep.vals.get(n)!);
+    if (!matchTerm(store, cq.out, value, vals, [])) return null;
+    return { vals, moment };
+  };
 
   if (rows.length === 0) {
     // Empty input: last -> no rows; count/sum with group columns -> no
     // rows; otherwise one zero row (mirrors scheduler.ts aggregateOver).
     if (cq.op === "last") return [];
     if (keyCols.length > 0) return [];
-    return [{ vals: new Map<string, Term>([[V, aggregator.zero]]), moment: SYM_BOT }];
+    const row = resultRow(null, hashconsTerm(aggregator.zero, store.hash), SYM_BOT);
+    return row === null ? [] : [row];
   }
 
   if (cq.op === "last") {
@@ -398,12 +431,17 @@ function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
         }
         return true;
       });
+      // Dedup on *output* columns: two maximal derivations differing only
+      // in a non-output column collapse to one row — the intended set
+      // semantics of the expression's result.
       const seen = new Set<string>();
       for (const c of maximal) {
-        const s = sigOf(c, cols);
+        const row = resultRow(c, c.vals.get(V)!, c.moment);
+        if (row === null) continue;
+        const s = sigOf(row, outCols);
         if (seen.has(s)) continue;
         seen.add(s);
-        out.push(c);
+        out.push(row);
       }
     }
     return out;
@@ -430,10 +468,12 @@ function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
         /* skip non-foldable values, mirroring aggregateOver */
       }
     }
-    const rep = group[0]!;
-    const vals = new Map(rep.vals);
-    vals.set(V, hashconsTerm(acc, store.hash));
-    out.push({ vals, moment: lubOf(store, group.map((g) => g.moment)) });
+    const row = resultRow(
+      group[0]!,
+      hashconsTerm(acc, store.hash),
+      lubOf(store, group.map((g) => g.moment)),
+    );
+    if (row !== null) out.push(row);
   }
   return out;
 }

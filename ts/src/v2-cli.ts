@@ -26,6 +26,7 @@ import type { Store } from "./v2/store.js";
 // new pipeline stage.
 export const STAGES = [
   "parse",
+  "macros",
   "decompose",
   "split",
   "filter",
@@ -40,6 +41,7 @@ export type Stage = (typeof STAGES)[number];
 // (built from it below) can't fall out of sync.
 const STAGE_DOC: Record<Stage, string> = {
   parse: "tokenize and parse the source into the pre-expand IR.",
+  macros: "expand `head P.. := [ ... ]` aggregation synonyms into their bodies.",
   decompose: "lower each marker (match/episode/fact/…) into the post-expand IR (Match/Emit/Le/AssertLt/Max/Min).",
   split: "slice every rule at each Emit into producer/consumer halves.",
   filter: "drop sliced tails with no observable effect (no Emit, no AssertLt).",
@@ -100,6 +102,7 @@ function isStage(s: string): s is Stage {
 function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
   switch (stage) {
     case "parse": return parsed.rules;
+    case "macros": return expandStages(parsed).macroExpanded;
     case "decompose": return expandStages(parsed).decomposed;
     case "split": return expandStages(parsed).split;
     case "filter": return expandStages(parsed).filtered;

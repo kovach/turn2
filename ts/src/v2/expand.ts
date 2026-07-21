@@ -9,12 +9,13 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "./term.js";
-import type { JsDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
+import type { JsDef, MacroDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 
 // The named intermediate rule-lists of the expansion pipeline, in order. The
 // CLI's `--stage` flag dumps these; `expand` returns the final `variants`.
 export interface ExpandStages {
+  macroExpanded: Rule[];
   decomposed: Rule[];
   split: Rule[];
   filtered: Rule[];
@@ -22,6 +23,8 @@ export interface ExpandStages {
 }
 
 export function expandStages(program: Program): ExpandStages {
+  program = expandMacros(program);
+  const macroExpanded = program.rules;
   program = applyExceptions(program);
   const decomposed = program.rules.map((r) => {
     const { rule, essential } = decomposeRule(r, program.jsDefs, program.reactive);
@@ -37,12 +40,290 @@ export function expandStages(program: Program): ExpandStages {
   );
   const variants: Rule[] = [];
   for (const rule of filtered) variants.push(...generateDeltaVariants(rule));
-  return { decomposed, split, filtered, variants };
+  return { macroExpanded, decomposed, split, filtered, variants };
 }
 
 export function expand(program: Program): Program {
   const { variants } = expandStages(program);
-  return { rules: variants, schema: program.schema, reactive: program.reactive, jsDefs: program.jsDefs };
+  return {
+    rules: variants,
+    schema: program.schema,
+    reactive: program.reactive,
+    jsDefs: program.jsDefs,
+    macros: new Map(),
+  };
+}
+
+// ----- Aggregation synonyms (plans/v2-aggregation-synonyms.md) -----
+//
+// Source-to-source elimination of macro uses, run *before* `applyExceptions`
+// so exception rewriting sees the relation reads a macro body performs.
+// A macro use is replaced by a copy of the macro's `[ ... ]` body with the
+// arguments substituted for the parameters and every other body variable
+// freshened against the host rule's names.
+//
+// Substitution is sound because a parameter names an *outward* variable of
+// the body — a top-level output column, i.e. either a group column or a
+// variable of an output pattern. Restricting a group column before the fold
+// selects exactly the group that filtering after the fold would have
+// produced, and an output pattern already unifies (plans/v2-agg-output-var.md
+// is what makes this true). A single name-keyed map suffices: the
+// disjointness rule plus the bare form's compiler-fresh reduction names mean
+// no name plays two roles.
+//
+// A macro-free program is returned unchanged, so calling this twice is safe.
+export function expandMacros(program: Program): Program {
+  const macros = program.macros;
+  if (macros.size === 0) return program;
+
+  checkMacroCycles(macros);
+
+  // Normalize each body to be macro-free, dependencies first, so a use
+  // expands in one step no matter how deeply macros are layered.
+  for (const name of macroTopoOrder(macros)) {
+    const def = macros.get(name)!;
+    const body = expandMacroUses([def.body], macros, collectMacroBodyVars(def.body), def.span);
+    const first = body[0];
+    if (body.length !== 1 || first === undefined || first.tag !== "AggComp") {
+      throw new Error("internal: macro body expansion changed shape");
+    }
+    def.body = first;
+  }
+
+  // Every parameter must name an outward variable of the body — a variable
+  // with meaning outside the expression. `aggCompOutCols` also validates the
+  // body's levels the same way a rule-embedded expression is validated.
+  for (const def of macros.values()) {
+    const outward = new Set(aggCompOutCols(def.body, new Set(), null));
+    for (const p of def.params) {
+      if (!outward.has(p)) {
+        throw new Error(
+          `macro '${def.name}' (line ${def.span.line}): parameter '${p}' is not an output ` +
+          `variable of its body (it has no meaning outside the aggregate expression)`,
+        );
+      }
+    }
+  }
+
+  const rules = program.rules.map((r) => {
+    const used = new Set<string>();
+    collectBodyVars(r.body, used);
+    return { ...r, body: expandMacroUses(r.body, macros, used, r.span) };
+  });
+  return { ...program, rules, macros: new Map() };
+}
+
+// Macro names used as atom heads anywhere in a body (recursing into nested
+// expressions, subs, and exception RHSs).
+function collectMacroCalls(body: RuleAtom[], macros: Map<string, MacroDef>, out: Set<string>): void {
+  for (const a of body) {
+    if (a.tag === "Sub") { collectMacroCalls(a.body, macros, out); continue; }
+    if (a.tag === "AggComp") { collectMacroCalls(a.body, macros, out); continue; }
+    if (a.tag === "Exception") {
+      collectMacroCalls(a.right, macros, out);
+      const lh = a.left.terms[0];
+      if (lh !== undefined && lh.tag === "Symbol" && macros.has(lh.name)) out.add(lh.name);
+      continue;
+    }
+    if (a.tag !== "Atom") continue;
+    for (const terms of atomTermLists(a)) {
+      const h = terms[0];
+      if (h !== undefined && h.tag === "Symbol" && macros.has(h.name)) out.add(h.name);
+    }
+  }
+}
+
+// The head-term lists an Atom carries: its own, or its `!(...)` sub-atoms'.
+function atomTermLists(a: Extract<RuleAtom, { tag: "Atom" }>): Term[][] {
+  if (a.subAtoms !== undefined) return a.subAtoms.map((s) => s.atom.terms);
+  return [a.atom.terms];
+}
+
+function macroCallGraph(macros: Map<string, MacroDef>): Map<string, Set<string>> {
+  const g = new Map<string, Set<string>>();
+  for (const [name, def] of macros) {
+    const deps = new Set<string>();
+    collectMacroCalls([def.body], macros, deps);
+    g.set(name, deps);
+  }
+  return g;
+}
+
+// Reject recursion, direct or mutual, naming the cycle.
+function checkMacroCycles(macros: Map<string, MacroDef>): void {
+  const g = macroCallGraph(macros);
+  const state = new Map<string, "open" | "done">();
+  const stack: string[] = [];
+  const visit = (n: string): void => {
+    const st = state.get(n);
+    if (st === "done") return;
+    if (st === "open") {
+      const cycle = [...stack.slice(stack.indexOf(n)), n].join(" -> ");
+      throw new Error(
+        `macro '${n}' (line ${macros.get(n)!.span.line}): macros cannot recurse (${cycle})`,
+      );
+    }
+    state.set(n, "open");
+    stack.push(n);
+    for (const d of g.get(n) ?? []) visit(d);
+    stack.pop();
+    state.set(n, "done");
+  };
+  for (const n of macros.keys()) visit(n);
+}
+
+// Macro names with every dependency before its dependents. Cycle-free by
+// `checkMacroCycles`.
+function macroTopoOrder(macros: Map<string, MacroDef>): string[] {
+  const g = macroCallGraph(macros);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const visit = (n: string): void => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    for (const d of g.get(n) ?? []) visit(d);
+    out.push(n);
+  };
+  for (const n of macros.keys()) visit(n);
+  return out;
+}
+
+// Every Variable name occurring anywhere in a macro body, including each
+// level's reduction variable and output pattern.
+function collectMacroBodyVars(comp: AggCompRA): Set<string> {
+  const out = new Set<string>();
+  collectAtomVarsOrdered(comp, out, []);
+  const withReduce = (c: AggCompRA): void => {
+    out.add(c.reduce.varName);
+    for (const it of c.body) if (it.tag === "AggComp") withReduce(it);
+  };
+  withReduce(comp);
+  return out;
+}
+
+// Replace every qualifying macro use in `body` with the macro's body under
+// the argument substitution. `used` accumulates names already taken, so the
+// fresh names minted for body-internal variables cannot capture or be
+// captured by host names (nor by a second use in the same rule).
+function expandMacroUses(
+  body: RuleAtom[],
+  macros: Map<string, MacroDef>,
+  used: Set<string>,
+  span: Span,
+): RuleAtom[] {
+  const reject = (name: string, why: string): never => {
+    throw new Error(`line ${span.line}: macro '${name}' ${why} — a macro name is not a relation`);
+  };
+  const macroHead = (terms: Term[]): MacroDef | null => {
+    const h = terms[0];
+    if (h === undefined || h.tag !== "Symbol") return null;
+    return macros.get(h.name) ?? null;
+  };
+  const out: RuleAtom[] = [];
+  for (const a of body) {
+    if (a.tag === "Sub") {
+      out.push({ ...a, body: expandMacroUses(a.body, macros, used, a.span) });
+      continue;
+    }
+    if (a.tag === "AggComp") {
+      out.push({ ...a, body: expandMacroUses(a.body, macros, used, a.span) });
+      continue;
+    }
+    if (a.tag === "Exception") {
+      const lhs = macroHead(a.left.terms);
+      if (lhs !== null) reject(lhs.name, "cannot be an exception's left-hand side");
+      out.push({ ...a, right: expandMacroUses(a.right, macros, used, a.span) });
+      continue;
+    }
+    if (a.tag !== "Atom") { out.push(a); continue; }
+    if (a.subAtoms !== undefined) {
+      for (const s of a.subAtoms) {
+        const def = macroHead(s.atom.terms);
+        if (def !== null) reject(def.name, "cannot appear inside a '!(...)' constrain block");
+      }
+      out.push(a);
+      continue;
+    }
+    const def = macroHead(a.atom.terms);
+    if (def === null) { out.push(a); continue; }
+    if (a.marker !== "match") {
+      reject(def.name, `cannot carry the '${a.marker}' marker`);
+    }
+    if (a.weight !== undefined) reject(def.name, "cannot carry a '-> weight'");
+    const args = a.atom.terms.slice(1);
+    if (args.length !== def.params.length) {
+      throw new Error(
+        `line ${a.span.line}: macro '${def.name}' takes ${def.params.length} argument(s), ` +
+        `given ${args.length}`,
+      );
+    }
+    out.push(instantiateMacro(def, args, used, a.span));
+  }
+  return out;
+}
+
+// A deep copy of `def.body` with parameters replaced by `args` and every
+// other variable freshened.
+function instantiateMacro(
+  def: MacroDef,
+  args: Term[],
+  used: Set<string>,
+  span: Span,
+): AggCompRA {
+  const sub = new Map<string, Term>();
+  def.params.forEach((p, i) => sub.set(p, args[i]!));
+  for (const n of collectMacroBodyVars(def.body)) {
+    if (n === "_" || sub.has(n)) continue;
+    sub.set(n, { tag: "Variable", name: mintFresh(n, used) });
+  }
+
+  const subTerm = (t: Term): Term => {
+    if (t.tag === "Variable") return t.name === "_" ? t : (sub.get(t.name) ?? t);
+    if (t.tag === "Atom" || t.tag === "Id") {
+      return { tag: t.tag, atom: { terms: t.atom.terms.map(subTerm) } };
+    }
+    return t;
+  };
+  // A reduction variable is internal to the query, so it is always freshened
+  // to a Variable — a parameter can never land here (parameters are outward).
+  const subName = (n: string): string => {
+    const t = sub.get(n);
+    if (t === undefined || t.tag !== "Variable") {
+      throw new Error(`internal: macro '${def.name}' reduction variable '${n}' is not freshened`);
+    }
+    return t.name;
+  };
+  const copy = (c: AggCompRA): AggCompRA => ({
+    tag: "AggComp",
+    body: c.body.map((it) =>
+      it.tag === "AggComp"
+        ? copy(it)
+        : it.tag === "Atom"
+          ? { ...it, atom: { terms: it.atom.terms.map(subTerm) }, span }
+          : it,
+    ),
+    reduce: {
+      op: c.reduce.op,
+      varName: subName(c.reduce.varName),
+      out: subTerm(c.reduce.out),
+      // The source-level bare form no longer describes the copy: `out` may
+      // now be an argument term rather than the renamed reduction variable.
+      bare: false,
+    },
+    span,
+  });
+  return copy(def.body);
+}
+
+function mintFresh(base: string, used: Set<string>): string {
+  let k = 1;
+  for (;;) {
+    const name = `${base}_${k++}`;
+    if (!used.has(name)) {
+      used.add(name);
+      return name;
+    }
+  }
 }
 
 // ----- Exceptions pass (plans/v2-exceptions.md, amended by
@@ -257,6 +538,8 @@ function collectAtomVarsOrdered(a: RuleAtom, seen: Set<string>, out: string[]): 
     push(a.rhs);
   } else if (a.tag === "AggComp") {
     for (const it of a.body) collectAtomVarsOrdered(it, seen, out);
+    // `out`'s variables are the ones the expression binds outward.
+    push(a.reduce.out);
   } else if (a.tag === "Exception") {
     // An earlier Exception cannot occur (they are processed first-to-last),
     // but keep the walk total: its in-place replacement contributes vars
@@ -989,7 +1272,121 @@ function decomposeAggregate(
 
 type AggCompRA = Extract<RuleAtom, { tag: "AggComp" }>;
 
-// Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md):
+// Unbound (non-prefix-bound, non-`_`) Variable names in a term, appended to
+// `out` in first-occurrence order.
+function noteFreeVars(t: Term, prefixSeen: Set<string>, seen: Set<string>, out: string[]): void {
+  if (t.tag === "Variable") {
+    if (t.name === "_" || prefixSeen.has(t.name)) return;
+    if (!seen.has(t.name)) { seen.add(t.name); out.push(t.name); }
+    return;
+  }
+  if (t.tag === "Atom" || t.tag === "Id") {
+    for (const x of t.atom.terms) noteFreeVars(x, prefixSeen, seen, out);
+  }
+}
+
+// Every unbound variable occurring in a comp's query subtree as a *genuine
+// query position* — an atom column at any level, or any level's reduction
+// variable. The disjointness rule of plans/v2-agg-output-var.md forbids this
+// level's own `out` variables from appearing here, so that every name has
+// exactly one role.
+//
+// Deliberately excluded: a nested level's own output-pattern variables.
+// Those are columns of this level, but sharing a name with them is
+// meaningful rather than confused — the folded value is checked against the
+// group's value for that column instead of binding it, and `matchTerm`
+// already does exactly that. plans/v2-aggregation-synonyms.md depends on it:
+// `land:count X X` expands to `[[at A B | X = last B] | X = count A]`,
+// which is how "the location equals the count" is expressed.
+function aggCompQueryVars(comp: AggCompRA, prefixSeen: Set<string>, out: Set<string>): void {
+  out.add(comp.reduce.varName);
+  for (const it of comp.body) {
+    if (it.tag === "AggComp") {
+      aggCompQueryVars(it, prefixSeen, out);
+      continue;
+    }
+    if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
+    const vs: string[] = [];
+    noteFreeVars({ tag: "Atom", atom: it.atom }, prefixSeen, new Set(), vs);
+    for (const n of vs) out.add(n);
+  }
+}
+
+// The **output columns** of a bracket-aggregation level, in
+// first-occurrence order (plans/v2-agg-output-var.md):
+//
+//   joinCols(comp) = ⋃ outCols(item), in order   -- what the join produces
+//   outCols(comp)  = joinCols(comp) − {V} ++ unbound vars of `out`
+//
+// This is the result-row layout; `comp-aggregate.ts`'s `compOutCols` reads
+// rows back with the identical recursion, so the two must stay in step.
+// Also validates each level: `V` is a column of its query and is not bound
+// earlier in the rule, and `out`'s variables are disjoint from the query.
+// `state` is supplied during decomposition, where `@js(...)` is rejected
+// inside aggregate queries and errors can name the rule.
+function aggCompOutCols(
+  comp: AggCompRA,
+  prefixSeen: Set<string>,
+  state: DecState | null,
+): string[] {
+  const where = state === null ? "macro body" : `rule '${state.ruleName}'`;
+  const join: string[] = [];
+  const seen = new Set<string>();
+  for (const it of comp.body) {
+    if (it.tag === "AggComp") {
+      for (const n of aggCompOutCols(it, prefixSeen, state)) {
+        if (!seen.has(n)) { seen.add(n); join.push(n); }
+      }
+      continue;
+    }
+    if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
+    for (const t of it.atom.terms) {
+      if (state !== null && isJsHead(t)) jsNotAllowed(state);
+      noteFreeVars(t, prefixSeen, seen, join);
+    }
+  }
+
+  const v = comp.reduce.varName;
+  // The bare form's outward name is its source-level reduction variable, so
+  // it inherits the "not bound earlier" restriction that `V` carries.
+  const bareOut = comp.reduce.bare === true ? comp.reduce.out : null;
+  // Diagnostics name what the user wrote: in the bare form the query-side
+  // `V` is a compiler-minted rename, and the source name is `out`.
+  const srcName = bareOut !== null && bareOut.tag === "Variable" ? bareOut.name : v;
+  if (prefixSeen.has(srcName) || prefixSeen.has(v)) {
+    throw new Error(
+      `${where}: reduction variable '${srcName}' is bound earlier in the rule ` +
+      `(it must be free in the aggregate query)`,
+    );
+  }
+  if (!seen.has(v)) {
+    throw new Error(
+      `${where}: reduction variable '${srcName}' does not occur in the aggregate query`,
+    );
+  }
+
+  const outVars: string[] = [];
+  noteFreeVars(comp.reduce.out, prefixSeen, new Set(), outVars);
+  if (outVars.length > 0) {
+    const queryVars = new Set<string>();
+    aggCompQueryVars(comp, prefixSeen, queryVars);
+    for (const n of outVars) {
+      if (queryVars.has(n)) {
+        throw new Error(
+          `${where}: aggregate output variable '${n}' also occurs in the aggregate query ` +
+          `(an output pattern's variables must be disjoint from the query)`,
+        );
+      }
+    }
+  }
+
+  const cols = join.filter((n) => n !== v);
+  const colSeen = new Set(cols);
+  noteFreeVars(comp.reduce.out, prefixSeen, colSeen, cols);
+  return cols;
+}
+
+// Bracket aggregation `[ Q | Out = op V ]` (plans/v2-agg-output-var.md):
 // lowers the whole expression tree into a paired producer
 // `Emit (_do-aggc <cq> <cols> idTpl)` at (XL, XR) and consumer
 // `Match (_agg-resultc (row V1..Vm) idTpl)` at (_l_K, _r_K), following the
@@ -1002,12 +1399,12 @@ type AggCompRA = Extract<RuleAtom, { tag: "AggComp" }>;
 //
 // Wrapped-query encoding (ground modulo prefix-bound Variables, which the
 // trail substitutes at Emit-intern time; decoded by comp-aggregate.ts):
-//   comp       := (*cq (*cq-red <op> (*fv :V)) item...)
+//   comp       := (*cq (*cq-red <op> (*fv :V) <out>) item...)
 //   atom item  := (*cq-atom t1' ... tk')
 //   nested     := its own (*cq ...) term
 //   free var   := (*fv :name)        `_` / wildcard := *cq-any
-//   cols       := (*cq-cols (*fv :name)...) — the free vars of the whole
-//                 tree in first-occurrence order; fixes the result row
+//   cols       := (*cq-cols (*fv :name)...) — the output columns of the
+//                 whole tree (see aggCompOutCols); fixes the result row
 //                 layout shared with the consumer Match's pattern.
 function decomposeAggComp(
   a: AggCompRA,
@@ -1018,49 +1415,7 @@ function decomposeAggComp(
   const k = state.lexPos;
   const prefixSeen = new Set(state.seen);
 
-  // Free variables (result columns) of the whole tree, first-occurrence
-  // order; also validate each level's reduce var against its own subtree.
-  const free: string[] = [];
-  const freeSet = new Set<string>();
-  const validateAndCollect = (comp: AggCompRA): Set<string> => {
-    const sub = new Set<string>();
-    const noteT = (t: Term): void => {
-      if (isJsHead(t)) jsNotAllowed(state);
-      if (t.tag === "Variable") {
-        if (t.name === "_") return;
-        if (!prefixSeen.has(t.name)) {
-          sub.add(t.name);
-          if (!freeSet.has(t.name)) { freeSet.add(t.name); free.push(t.name); }
-        }
-        return;
-      }
-      if (t.tag === "Atom" || t.tag === "Id") {
-        for (const x of t.atom.terms) noteT(x);
-      }
-    };
-    for (const it of comp.body) {
-      if (it.tag === "AggComp") {
-        for (const n of validateAndCollect(it)) sub.add(n);
-        continue;
-      }
-      if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
-      for (const t of it.atom.terms) noteT(t);
-    }
-    const v = comp.reduce.varName;
-    if (prefixSeen.has(v)) {
-      throw new Error(
-        `rule '${state.ruleName}': reduction variable '${v}' is bound earlier in the rule ` +
-        `(it must be free in the aggregate query)`,
-      );
-    }
-    if (!sub.has(v)) {
-      throw new Error(
-        `rule '${state.ruleName}': reduction variable '${v}' does not occur in the aggregate query`,
-      );
-    }
-    return sub;
-  };
-  validateAndCollect(a);
+  const free = aggCompOutCols(a, prefixSeen, state);
 
   const fvTerm = (name: string): Term => ({
     tag: "Id",
@@ -1087,6 +1442,11 @@ function decomposeAggComp(
           SYM_CQ_RED,
           { tag: "Symbol", name: comp.reduce.op },
           fvTerm(comp.reduce.varName),
+          // `out` rides through the same term encoder: unbound variables
+          // become `(*fv :name)` for close-time unification, prefix-bound
+          // ones stay Variables (the trail substitutes their value at
+          // Emit-intern time), and ground terms pass through.
+          encodeTerm(comp.reduce.out),
         ],
       },
     };

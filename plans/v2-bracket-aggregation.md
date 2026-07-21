@@ -2,6 +2,14 @@
 
 Source note: `# another take on aggregation` at the top of notes/overview.md.
 
+> **Superseded in part by plans/v2-agg-output-var.md**, which splits the
+> reduced query column from the expression's output pattern
+> (`[ Q | Out = op V ]`). This plan's `reduce` shape and its column rules
+> (free-variables-of-the-subtree as the result layout) no longer hold; the
+> bare form `[ Q | op V ]` described here survives as sugar. Everything else
+> — the anchor restriction, the moment/`last` semantics, and the
+> producer/consumer lowering — is unchanged.
+
 A new aggregation expression that generalizes the current `#agg` / `p k.. -> W`
 mechanism. Written `[ Q | op V ]`, it evaluates the conjunctive query `Q`
 (restricted to tuples containing the active anchor), projects away `V`, and
