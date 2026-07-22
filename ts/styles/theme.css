@@ -1,0 +1,48 @@
+/* Shared theme palette + source ↔ output linking styles for index-v2 and
+ * index-pres (inlined into standalone presentation builds). The mode class
+ * lives on <html>: index-v2's toggle script and pres's mount() both set
+ * html.mode-light / html.mode-dark.
+ *
+ * Pages layer their own page-specific rules on top; values that a page
+ * deliberately keeps different from the palette live in page-local
+ * variables (e.g. --pres-* in index-pres.html). */
+
+html.mode-dark {
+  --bg: #1a1a1a; --bg-2: #1e1e1e; --bg-3: #252525;
+  --fg: #d4d4d4; --fg-mute: #aaa; --fg-mute2: #888; --fg-faint: #666;
+  --border: #333; --border-2: #2a2a2a; --hover: #2a2a2a;
+  --syn-head: #4fc1ff; --syn-ref: #c586c0; --syn-sym: #d4d4d4;
+  --syn-pred: #4ec9b0; --syn-var: #dcdcaa;
+  --syn-interval: #666; --syn-group: #888;
+  --err: #f87171; --link: #4fc1ff;
+}
+html.mode-light {
+  --bg: #fdfdfd; --bg-2: #f5f5f0; --bg-3: #ebebe5;
+  --fg: #1a1a1a; --fg-mute: #555; --fg-mute2: #666; --fg-faint: #888;
+  --border: #d0d0c8; --border-2: #e0e0db; --hover: #e8e8e0;
+  --syn-head: #0a64a4; --syn-ref: #8a3398; --syn-sym: #1a1a1a;
+  --syn-pred: #007a5a; --syn-var: #885a00;
+  --syn-interval: #999; --syn-group: #777;
+  --err: #c0392b; --link: #0a64a4;
+}
+
+/* --- Source ↔ output linking (v2/source-link.ts) --- */
+/* Only linked elements carry data-source-line; the background rules cover
+ * HTML outputs (db rows, timeline sidebar rows). SVG shapes ignore
+ * background-color — bar rects get fill-based rules below instead. */
+[data-source-line] { cursor: pointer; }
+.source-highlight { background-color: rgba(59, 130, 246, 0.30); }
+.hover-highlight  { background-color: rgba(168, 85, 247, 0.30); }
+
+/* --- Timeline bars (v2/timeline.ts) --- */
+/* Pale grey / black in light mode, dark grey / white in dark mode.
+ * Variables keep specificity below the highlight rules. Highlight fills
+ * are OPAQUE (the linking rgba pre-blended over --tl-bar-bg): bars must
+ * occlude arrow bodies identically whether highlighted or not. */
+.timeline-svg { --tl-bar-bg: #ececec; --tl-bar-line: #000; --tl-bar-hl-caret: #b7ccef; --tl-bar-hl-hover: #d8bfef; }
+html.mode-dark .timeline-svg { --tl-bar-bg: #2e2e2e; --tl-bar-line: #fff; --tl-bar-hl-caret: #32476a; --tl-bar-hl-hover: #533a6a; }
+.timeline-svg .tl-bar { fill: var(--tl-bar-bg); stroke: var(--tl-bar-line); }
+.timeline-svg .tl-bar-label { fill: var(--tl-bar-line); }
+.timeline-svg .tl-bar.source-highlight { fill: var(--tl-bar-hl-caret); }
+.timeline-svg .tl-bar.hover-highlight  { fill: var(--tl-bar-hl-hover); }
+.timeline-svg .tl-bar.cycle-focus      { stroke-width: 3; }
