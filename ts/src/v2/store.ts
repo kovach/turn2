@@ -26,7 +26,9 @@ export interface Store {
   // Parallel to `tuples`: span of the source RuleAtom that emitted each
   // tuple. `undefined` for tuples whose origin has no span (e.g. test
   // fixtures that call `addTuple` directly). Used by the editor for
-  // source ↔ output highlight linking.
+  // source ↔ output highlight linking. Exception default-rule re-emits are
+  // re-attributed to the original assertion's span post-fixpoint by
+  // `resolveExceptionProvenance` (fixpoint.ts).
   tupleSource: (Span | undefined)[];
   // head-sym name -> tuple indices in `tuples` whose first term is that sym
   byHead: Map<string, number[]>;

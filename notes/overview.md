@@ -5,6 +5,9 @@ plan: plans/v2-exception-default-provenance.md
 - instead, attribute it to the line that asserted the original (re-written) tuple: `applyExceptions` records static head→prime links (derived from the final default-rule bodies, after all renaming), and a post-fixpoint pass rewrites `tupleSource` by matching each linked tuple to its stored prime tuple (same args sans id slot, same endpoints), following links transitively for chained exceptions
 - no evaluator/decompose/renderer changes; exception-case output (`z` from `{x => ~z}`) keeps its current attribution to the RHS's own line
 
+# 26/07/22
+switching more to fable
+
 # linking program to timeline view
 plan: plans/v2-source-timeline-link.md
 

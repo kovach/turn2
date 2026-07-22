@@ -4,9 +4,10 @@
 // re-enter the inner loop. If the earliest tier is all choices, halt with
 // `active-choices`.
 
-import type { FixpointStatus, Program } from "./types.js";
+import type { FixpointStatus, Program, ProvLink } from "./types.js";
+import type { Span } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
-import { type Store, createStore, GasError } from "./store.js";
+import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
 import { applyExceptions, expand, expandMacros } from "./expand.js";
 import {
   closeDoAgg,
@@ -53,13 +54,94 @@ export function runFixpoint(
   let totalIters = 0;
 
   try {
-    return runLoop(expanded, store, gas, totalIters, jsFuncs, strata);
+    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, strata);
+    resolveExceptionProvenance(store, program.provLinks);
+    return result;
   } catch (e) {
     if (e instanceof GasError) {
+      // Partial (gas-limited) stores feed the views too — fix up their
+      // provenance as well.
+      resolveExceptionProvenance(store, program.provLinks);
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
     }
     throw e;
   }
+}
+
+// Post-fixpoint provenance fixup for exception default rules
+// (plans/v2-exception-default-provenance.md). A default rule re-emits a
+// matched `_<p>_prime<k>` tuple under the user head with identical argument
+// terms and endpoints (only the head symbol and the trailing per-firing id
+// slot differ), but its Emit atom's static span is the exception's line. The
+// prime tuple keeps the original assertion's span, so re-attribute each
+// linked tuple by locating its prime tuple in the store and copying the
+// span, following links transitively for chained exceptions. Tuples with no
+// structural match (emits that escaped renaming: weighted or off-arity)
+// keep their own span.
+function resolveExceptionProvenance(store: Store, links: ProvLink[] | undefined): void {
+  if (links === undefined || links.length === 0) return;
+  // Keyed by head only — a head can carry one link per arity (`{x => e}`
+  // and `{x A => e}` coexist), so resolution selects by tuple width.
+  const byHead = new Map<string, ProvLink[]>();
+  for (const l of links) {
+    const bucket = byHead.get(l.head);
+    if (bucket === undefined) byHead.set(l.head, [l]);
+    else bucket.push(l);
+  }
+  for (const head of byHead.keys()) {
+    for (const idx of candidatesByHead(store, head)) {
+      const span = chaseProvSpan(store, byHead, idx);
+      if (span !== undefined) store.tupleSource[idx] = span;
+    }
+  }
+}
+
+// Span the tuple at `idx` should adopt, or undefined to keep its own: the
+// deepest tuple with a defined span reachable by following prime links.
+// Chains cannot cycle — link targets are freshly minted prime names.
+function chaseProvSpan(
+  store: Store,
+  byHead: Map<string, ProvLink[]>,
+  idx: number,
+): Span | undefined {
+  const tup = store.tuples[idx]!;
+  const width = tup.atom.terms.length;
+  const link = byHead
+    .get(headName(tup.atom.terms[0]))
+    // Stored width = user arity + head + trailing universal id slot.
+    ?.find((l) => l.arity + 2 === width);
+  if (link === undefined) return undefined;
+  const primeIdx = findPrimeTuple(store, link.prime, idx);
+  if (primeIdx === undefined) return undefined;
+  return chaseProvSpan(store, byHead, primeIdx) ?? store.tupleSource[primeIdx];
+}
+
+function headName(t: { tag: string; name?: string } | undefined): string {
+  return t !== undefined && t.tag === "Symbol" && t.name !== undefined ? t.name : "";
+}
+
+// Stored prime tuple matching the tuple at `idx`: same width, equal
+// argument terms after the head and excluding the trailing id slot, equal
+// endpoints — all by hashcons token.
+function findPrimeTuple(store: Store, prime: string, idx: number): number | undefined {
+  const tup = store.tuples[idx]!;
+  const width = tup.atom.terms.length;
+  const lTok = tokenOf(store, tup.l);
+  const rTok = tokenOf(store, tup.r);
+  for (const pIdx of candidatesByHead(store, prime)) {
+    const pt = store.tuples[pIdx]!;
+    if (pt.atom.terms.length !== width) continue;
+    if (tokenOf(store, pt.l) !== lTok || tokenOf(store, pt.r) !== rTok) continue;
+    let same = true;
+    for (let i = 1; i < width - 1; i++) {
+      if (tokenOf(store, tup.atom.terms[i]!) !== tokenOf(store, pt.atom.terms[i]!)) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return pIdx;
+  }
+  return undefined;
 }
 
 function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, strata: Map<string, number>): FixpointResult {

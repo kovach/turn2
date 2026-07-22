@@ -245,6 +245,25 @@ export interface JsDef {
   span: Span;
 }
 
+// Static link from an exception default rule's emitted relation back to the
+// prime relation it re-emits from (plans/v2-exception-default-provenance.md).
+// Derived by `applyExceptions` from the *final* default-rule bodies — after
+// all renames, since a later exception on the same relation renames an
+// earlier default rule's emit head. Consumed by
+// `resolveExceptionProvenance` (fixpoint.ts), which re-attributes
+// default-case tuples to the span of the matching stored prime tuple.
+export interface ProvLink {
+  // Relation the default rule emits: the user relation, or an intermediate
+  // `_<p>_prime<k>` when exceptions chain.
+  head: string;
+  // `_<p>_prime<k>` relation the default rule matches.
+  prime: string;
+  // User arity (excludes the head symbol and the trailing universal id
+  // slot). Two exceptions may share `head` at different arities, so `head`
+  // alone does not identify a link.
+  arity: number;
+}
+
 export interface Program {
   rules: Rule[];
   // `relation -> aggregator` for weighted-query dispatch. Holds entries for
@@ -260,6 +279,10 @@ export interface Program {
   // Eliminated by `expandMacros` before any other expand pass, which leaves
   // this map empty (plans/v2-aggregation-synonyms.md).
   macros: Map<string, MacroDef>;
+  // Set by `applyExceptions` when it generates default rules; absent
+  // otherwise. Carried through by the pass's early return on a second
+  // invocation (no Exception atoms remain).
+  provLinks?: ProvLink[];
 }
 
 // An aggregation synonym: a name + parameters standing for one bracket

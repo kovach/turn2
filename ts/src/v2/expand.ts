@@ -9,7 +9,7 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "./term.js";
-import type { JsDef, MacroDef, MatchConstraint, Program, Rule, RuleAtom } from "./types.js";
+import type { JsDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 
 // The named intermediate rule-lists of the expansion pipeline, in order. The
@@ -355,6 +355,8 @@ export function applyExceptions(program: Program): Program {
   const S: Rule[] = program.rules.filter((r) => !hasExc(r));
   const usedSyms = collectProgramSymbols(program);
   const usedRuleNames = new Set(program.rules.map((r) => r.name));
+  // Generated default rules, kept for provenance-link derivation below.
+  const defaultRules: Rule[] = [];
 
   for (const R of pending) {
     // Per-rule numbering for `<name>_exn<j>` / `<name>_default<j>`.
@@ -464,7 +466,7 @@ export function applyExceptions(program: Program): Program {
       // anchor p W..  (fresh W1..Wn, m wildcards).
       const W: Term[] = tTerms.map((_, i) => ({ tag: "Variable", name: `_w${i + 1}` }));
       const flagWilds: Term[] = V.map(() => ({ tag: "Wildcard" }));
-      S.push({
+      const defaultRule: Rule = {
         name: defaultRuleName,
         span,
         body: [
@@ -472,12 +474,44 @@ export function applyExceptions(program: Program): Program {
           { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...flagWilds] }, weight: sym("0"), span },
           { tag: "Atom", marker: "anchor", atom: { terms: [sym(p), ...W] }, span },
         ],
-      });
+      };
+      S.push(defaultRule);
+      defaultRules.push(defaultRule);
     }
     // 8. R is now in normal form.
     S.push(R);
   }
-  return { ...program, rules: S };
+  return { ...program, rules: S, provLinks: deriveProvLinks(defaultRules) };
+}
+
+// One ProvLink per generated default rule, read from its *final* body: a
+// later exception on the same relation renames an earlier default rule's
+// emit head (`rewriteEmitHeads` covers `anchor`), so links recorded at
+// generation time would go stale. The match atom identifies the prime side
+// (match heads are never renamed); the anchor atom identifies the emitted
+// head as of the end of the pass.
+function deriveProvLinks(defaultRules: Rule[]): ProvLink[] {
+  const out: ProvLink[] = [];
+  for (const dr of defaultRules) {
+    let prime: string | undefined;
+    let head: string | undefined;
+    let arity = 0;
+    for (const a of dr.body) {
+      if (a.tag !== "Atom") continue;
+      const h = a.atom.terms[0];
+      if (h === undefined || h.tag !== "Symbol") continue;
+      if (a.marker === "match") prime = h.name;
+      else if (a.marker === "anchor") {
+        head = h.name;
+        arity = a.atom.terms.length - 1;
+      }
+    }
+    if (prime === undefined || head === undefined) {
+      throw new Error("internal: malformed exception default rule");
+    }
+    out.push({ head, prime, arity });
+  }
+  return out;
 }
 
 // First remaining Exception atom in pre-order, with a mutable handle on its
