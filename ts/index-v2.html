@@ -17,7 +17,10 @@
     #status-line.error { color: var(--err); }
     #theme-toggle { background: transparent; color: var(--fg-mute2); border: 1px solid var(--border); padding: 3px 10px; font-family: monospace; font-size: 11px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; }
     #theme-toggle:hover { color: var(--fg); }
-    .workspace { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; }
+    .workspace { flex: 1; display: grid; grid-template-columns: minmax(0, var(--split-left, 1fr)) 5px minmax(0, 1fr); min-height: 0; }
+    /* Drag handle between the editor and the right column. */
+    #splitter { cursor: col-resize; background: var(--border); }
+    #splitter:hover, #splitter.dragging { background: var(--fg-faint); }
     .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .pane-label { padding: 5px 12px; font-size: 11px; color: var(--fg-faint); background: var(--bg-2); border-bottom: 1px solid var(--border-2); letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
     /* Editor structural rules come from /styles/editor.css. Host overrides are
@@ -96,6 +99,7 @@
         <textarea id="source" spellcheck="false"></textarea>
       </div>
     </div>
+    <div id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <div class="right-column">
       <div class="display-pane">
         <div class="pane-label"><span>Display</span></div>
@@ -118,6 +122,39 @@
       </div>
     </div>
   </div>
+  <script>
+    // Draggable editor/right-column split; width persisted as a percentage.
+    (function() {
+      var ws = document.querySelector(".workspace");
+      var bar = document.getElementById("splitter");
+      function set(pct) { ws.style.setProperty("--split-left", pct + "%"); }
+      try {
+        var saved = parseFloat(localStorage.getItem("v2-split-left"));
+        if (isFinite(saved)) set(saved);
+      } catch (e) {}
+      bar.addEventListener("pointerdown", function(ev) {
+        ev.preventDefault();
+        bar.setPointerCapture(ev.pointerId);
+        bar.classList.add("dragging");
+        var move = function(e) {
+          var r = ws.getBoundingClientRect();
+          if (r.width <= 0) return;
+          var pct = Math.min(90, Math.max(10, ((e.clientX - r.left) / r.width) * 100));
+          set(pct);
+          try { localStorage.setItem("v2-split-left", String(pct)); } catch (e2) {}
+        };
+        var up = function() {
+          bar.classList.remove("dragging");
+          bar.removeEventListener("pointermove", move);
+          bar.removeEventListener("pointerup", up);
+          bar.removeEventListener("pointercancel", up);
+        };
+        bar.addEventListener("pointermove", move);
+        bar.addEventListener("pointerup", up);
+        bar.addEventListener("pointercancel", up);
+      });
+    })();
+  </script>
   <script type="module" src="/src/web-v2.js"></script>
 </body>
 </html>

@@ -7,8 +7,9 @@
 //
 // Forward: the caret entering a line with a positive (emitting) atom puts
 // `.source-highlight` on every matching element across all outputs. The
-// timeline is never auto-scrolled; Ctrl-. cycles through the caret line's
-// timeline occurrences, centering each in the scroll container in turn.
+// timeline is never auto-scrolled; Ctrl-. (or a double-click in the editor)
+// cycles through the caret line's timeline occurrences, centering each in
+// the scroll container in turn.
 // Reverse: hovering a linked element highlights its source line (Editor
 // overlay) plus sibling elements from the same line; clicking moves the
 // caret to that line.
@@ -195,6 +196,11 @@ export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): Source
   };
   ta.addEventListener("keydown", keyHandler);
 
+  // Double-click cycles too (same action as Ctrl-.); the browser's own
+  // word-selection is left intact.
+  const dblclickHandler = (): void => cyclePress();
+  ta.addEventListener("dblclick", dblclickHandler);
+
   return {
     update(rules: Rule[]): void {
       positiveLines = collectPositiveLines(rules);
@@ -211,6 +217,7 @@ export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): Source
       for (const ev of CARET_EVENTS) ta.removeEventListener(ev, refreshCaret);
       document.removeEventListener("selectionchange", selectionHandler);
       ta.removeEventListener("keydown", keyHandler);
+      ta.removeEventListener("dblclick", dblclickHandler);
       editor.clearHighlight();
     },
   };
