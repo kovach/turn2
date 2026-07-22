@@ -46,7 +46,7 @@ function optionSet(store: Store, options: Term[][]): Set<string> {
 + a
 
 a
-! score X -> W
+  ! score X -> W
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -63,14 +63,14 @@ a
   const src = `
 #agg score key -> sum
 + score a 3
-+ score a 5
-+ score b 4
-+ turn
+  + score a 5
+  + score b 4
+  + turn
 
 turn
-? N
-? W
-! score N -> W
+  ? N
+  ? W
+  ! score N -> W
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
@@ -94,13 +94,13 @@ turn
   const src = `
 #agg score key -> last
 + score a 1
-+ score b 2
-+ turn
+  + score b 2
+  + turn
 
 turn
-? N
-? W
-! score N -> W
+  ? N
+  ? W
+  ! score N -> W
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
@@ -117,9 +117,9 @@ turn
 + turn
 
 turn
-? N
-? W
-! score N -> W
+  ? N
+  ? W
+  ! score N -> W
 `;
   const { status } = runFixpoint(ok(src));
   // No candidates -> last produces no agg results -> component has 0
@@ -140,7 +140,7 @@ turn
   (~a); (~a'); (~b)
 
 a,
-( +at x -> here );
+  ( +at x -> here );
   +at x -> there
 
 a', +at x -> no

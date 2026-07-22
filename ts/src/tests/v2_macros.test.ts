@@ -82,8 +82,8 @@ ${LAND}
 ${DATA}
 
 go
-land:count L X
-^ found L X
+  land:count L X
+  ^ found L X
 `;
   // The hand-written expansion, written with explicit output patterns so it
   // is the same IR shape the macro produces.
@@ -91,8 +91,8 @@ land:count L X
 ${DATA}
 
 go
-[[at A B | L = last B] | X = count A]
-^ found L X
+  [[at A B | L = last B] | X = count A]
+  ^ found L X
 `;
   assert.deepEqual(rows(used, "found"), rows(inlined, "found"));
   // Both invaders' last location is `a`, so one row with a count of 2.
@@ -115,8 +115,8 @@ ${LAND}
 + at i1 (s z), + at i2 b, + at i3 b, + go
 
 go
-land:count X X
-^ same X
+  land:count X X
+  ^ same X
 `;
   // The collapsing reading would need a tuple `at X X`, of which there is
   // none; the unifying reading finds the location whose name is its count.
@@ -132,12 +132,12 @@ ${LAND}
 ${DATA}
 
 go
-land:count a X
-^ at-a X
+  land:count a X
+  ^ at-a X
 
 go
-land:count h X
-^ at-h X
+  land:count h X
+  ^ at-h X
 `;
   assert.deepEqual(rows(src, "at-a"), ["at-a (s (s z))"]);
   // `h` is nobody's *last* location, so the query is empty. Substituting the
@@ -158,8 +158,8 @@ ${LAND}
 ${DATA}
 
 go
-land:count L _
-^ some L
+  land:count L _
+  ^ some L
 `;
   assert.deepEqual(rows(src, "some"), ["some a"]);
   console.log("PASS: '_' argument leaves a parameter unconstrained");
@@ -173,8 +173,8 @@ land:count L _
 ${DATA}
 
 go
-land:count L X
-^ found L X
+  land:count L X
+  ^ found L X
 
 ${LAND}
 `;
@@ -190,13 +190,13 @@ ${LAND}
 ${LAND}
 
 ${DATA}
-+ tag t
+  + tag t
 
 go
-tag A
-land:count L X
-land:count L2 X2
-^ pair A L L2
+  tag A
+  land:count L X
+  land:count L2 X2
+  ^ pair A L L2
 `;
   assert.deepEqual(rows(src, "pair"), ["pair t a a"]);
   console.log("PASS: two uses in one rule, no capture of host names");
@@ -211,8 +211,8 @@ ${LAND}
 ${DATA}
 
 go
-land:count A B
-^ got A B
+  land:count A B
+  ^ got A B
 `;
   assert.deepEqual(rows(src, "got"), ["got a (s (s z))"]);
   console.log("PASS: argument names may shadow internal body names");
@@ -230,8 +230,8 @@ ${FSUM}
 ${PDATA}
 
 go
-f:sum 1 Y
-^ with-1 Y
+  f:sum 1 Y
+  ^ with-1 Y
 `;
   assert.deepEqual(rows(src, "with-1"), ["with-1 1", "with-1 2"]);
 }
@@ -244,8 +244,8 @@ ${FSUM}
 ${PDATA}
 
 go
-f:sum W W
-^ diag W
+  f:sum W W
+  ^ diag W
 `;
   assert.deepEqual(rows(src, "diag"), ["diag 1", "diag 2"]);
   console.log("PASS: parameters that are plain group columns");
@@ -264,8 +264,8 @@ f:sum W W
 ${DATA}
 
 go
-busy L
-^ crowded L
+  busy L
+  ^ crowded L
 `;
   assert.deepEqual(rows(src, "crowded"), ["crowded a"]);
   console.log("PASS: a macro may call another macro");
@@ -279,8 +279,8 @@ busy L
 ${DATA}
 
 go
-[ pop:at L N | K = count L ]
-^ places K
+  [ pop:at L N | K = count L ]
+  ^ places K
 `;
   assert.deepEqual(rows(src, "places"), ["places (s z)"]);
   console.log("PASS: a macro may be used inside a bracket query");
@@ -318,7 +318,7 @@ go
 {
   // Without `#macro`, `:=` has no special meaning anywhere — it stays part
   // of the atom and defines nothing.
-  const p = ok(`\ngo\nfoo X := bar\n`);
+  const p = ok(`\ngo\n  foo X := bar\n`);
   assert.equal(p.macros.size, 0);
   assert.equal(p.rules.length, 1);
   // `#macro` is a command, so definitions need no blank line between them
@@ -327,8 +327,8 @@ go
 #macro one:x A B := [ p A B | count B ]
 #macro two:x A B := [ q A B | count B ]
 go
-one:x L N
-^ got L N
+  one:x L N
+  ^ got L N
 `);
   assert.deepEqual([...adjacent.macros.keys()], ["one:x", "two:x"]);
   assert.equal(adjacent.rules.length, 1);

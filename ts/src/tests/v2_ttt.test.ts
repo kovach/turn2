@@ -64,7 +64,7 @@ for (let turn = 1; turn <= TURNS_TO_PLAY; turn++) {
   for (let i = 0; i < N; i++) {
     lines.push(`^ is ${results[i]} ${results[i + N]}`);
   }
-  source = source + "\n\n" + lines.join("\n") + "\n";
+  source = source + "\n\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n") + "\n";
 }
 
 assert.deepEqual(optionCounts, [9, 8, 7],

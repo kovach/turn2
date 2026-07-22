@@ -52,15 +52,15 @@ function optionSet(store: Store, options: Term[][]): Set<string> {
 {
   const src = `
 + prop a 10
-+ prop b 20
-+ link 10 x
-+ link 20 y
-+ turn
+  + prop b 20
+  + link 10 x
+  + link 20 y
+  + turn
 
 turn
-? A
-? B
-!(prop A X, link X B)
+  ? A
+  ? B
+  !(prop A X, link X B)
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
@@ -91,11 +91,11 @@ turn
 + item a, + item b, + p1 a 1, + p2 1, + p3 a 2, + p4 2, + p1 b 9, + p3 b 8, + turn
 
 turn
-? X
-~ it X
+  ? X
+  ~ it X
 
 it A, !(p1 A Y, p2 Y)
-it B, !(p3 B Y, p4 Y)
+  it B, !(p3 B Y, p4 Y)
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
@@ -168,13 +168,13 @@ turn, ? A, !(foo A Y), bar Y
 {
   const longSrc = `
 + item a
-+ turn
+  + turn
 
 turn, ? C, !(item C)
 `;
   const shortSrc = `
 + item a
-+ turn
+  + turn
 
 turn, ? C, !item C
 `;
@@ -200,9 +200,9 @@ turn, ? C, !item C
 + foo a, + score a 5, + score a 7, + foo b, + score b 3, + turn
 
 turn
-? A
-? W
-!(foo A, score A -> W)
+  ? A
+  ? W
+  !(foo A, score A -> W)
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);

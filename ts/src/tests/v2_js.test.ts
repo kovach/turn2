@@ -59,7 +59,7 @@ function listTuples(store: Store): string[] {
 }
 
 n X
-+ foo @js(div X 4)
+  + foo @js(div X 4)
 `);
   const fact = p.rules[0]!.body.find(
     (a) => a.tag === "Atom" && a.marker === "fact",
@@ -84,7 +84,7 @@ n X
 + n 8
 
 n X
-+ foo @js(div X 4)
+  + foo @js(div X 4)
 `));
   assert(listTuples(store).includes("foo 2"), `expected 'foo 2': ${listTuples(store)}`);
   console.log("PASS: div end-to-end");
@@ -100,7 +100,7 @@ n X
 + n 5
 
 n X
-+ foo X @js(inc X)
+  + foo X @js(inc X)
 `));
   assert(listTuples(store).includes("foo 5 6"), `expected 'foo 5 6': ${listTuples(store)}`);
   console.log("PASS: same-atom binding");
@@ -119,7 +119,7 @@ n X
 + n 3
 
 n X
-+ foo @js(dbl @js(inc X))
+  + foo @js(dbl @js(inc X))
 `));
   assert(listTuples(store).includes("foo 8"), `expected 'foo 8': ${listTuples(store)}`);
   console.log("PASS: nested @js");
@@ -135,7 +135,7 @@ n X
 + data (pair a b)
 
 data P
-+ out @js(swap P)
+  + out @js(swap P)
 `));
   assert(listTuples(store).includes("out (pair b a)"), `expected 'out (pair b a)': ${listTuples(store)}`);
   console.log("PASS: compound round-trip");
@@ -157,8 +157,8 @@ data P
 + n 5
 
 n X
-+ b @js(gt X 3)
-+ c @js(gt X 9)
+  + b @js(gt X 3)
+  + c @js(gt X 9)
 `));
   const tuples = listTuples(store);
   assert(tuples.includes("b 1"), `expected 'b 1': ${tuples}`);
@@ -176,7 +176,7 @@ n X
 + n 9
 
 n V
-+ q @js(by4 V)
+  + q @js(by4 V)
 `));
   assert(listTuples(store).includes("q 2"), `expected 'q 2': ${listTuples(store)}`);
   console.log("PASS: uppercase param");
@@ -197,7 +197,7 @@ n V
 + n 9
 
 n V
-+ q @js(by4 V)
+  + q @js(by4 V)
 `));
   assert(listTuples(store).includes("q 2"), `expected 'q 2' (braces in body): ${listTuples(store)}`);
 }
@@ -210,7 +210,7 @@ n V
 + n a
 
 n V
-+ q @js(lbl V)
+  + q @js(lbl V)
 `));
   assert(listTuples(store).includes("q <a> }}}"), `expected template result: ${listTuples(store)}`);
   console.log("PASS: braces in string/template/nested body");
@@ -224,7 +224,7 @@ n V
 + n 7
 
 n V
-+ q @js(inc V)
+  + q @js(inc V)
 `));
   assert(listTuples(store).includes("q 8"), `expected 'q 8' (one-liner): ${listTuples(store)}`);
 }
@@ -236,7 +236,7 @@ n V
 + n a
 
 n V
-+ q @js(rb V)
+  + q @js(rb V)
 `));
   assert(listTuples(store).includes("q }"), `expected 'q }' (string brace one-liner): ${listTuples(store)}`);
   console.log("PASS: one-liner form");

@@ -13,7 +13,6 @@ setup
   +other x o
   +other o x
   +n (s (s z))
-
 setup, n (s X), +n X
 
 -- For each pair of numbers, create a cell
@@ -25,8 +24,8 @@ setup, n R, n C
 
 -- A cell is eligible to be chosen if it hasn't been filled earlier
 cell R C, turn
-fills (cell R C) -> 0
-^eligible (cell R C)
+  fills (cell R C) -> 0
+  ^eligible (cell R C)
 
 -- ?C: C is a choice to be made
 -- ~choice C: other rules refer to it this way

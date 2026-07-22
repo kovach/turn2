@@ -73,11 +73,11 @@ console.log("PASS: parse errors");
 // ----- Decompose errors (reduce var restrictions) -----
 
 assert.throws(
-  () => runFixpoint(ok(`\ngo\np X\n[ q X | count X ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  p X\n  [ q X | count X ]\n`)),
   /reduction variable 'X' is bound earlier/,
 );
 assert.throws(
-  () => runFixpoint(ok(`\ngo\n[ q Y | count X ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  [ q Y | count X ]\n`)),
   /reduction variable 'X' does not occur/,
 );
 console.log("PASS: decompose errors");
@@ -89,8 +89,8 @@ console.log("PASS: decompose errors");
 + p 2 4, + p 1 1, + p 1 3, + go
 
 go
-[ p X Y | sum Y ]
-^ out X Y
+  [ p X Y | sum Y ]
+  ^ out X Y
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -104,8 +104,8 @@ go
 + invader i1, + invader i2, + invader i3, + go
 
 go
-[ invader X | count X ]
-^ num X
+  [ invader X | count X ]
+  ^ num X
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "num"), ["num (s (s (s z)))"]);
@@ -118,12 +118,12 @@ go
 + go
 
 go
-[ q X | count X ]
-^ num X
+  [ q X | count X ]
+  ^ num X
 
 go
-[ q Y | sum Y ]
-^ total Y
+  [ q Y | sum Y ]
+  ^ total Y
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -137,8 +137,8 @@ go
 + go
 
 go
-[ q X | last X ]
-^ got X
+  [ q X | last X ]
+  ^ got X
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -152,9 +152,9 @@ go
 + monster m1, + monster m2, + it:at m1 a, + it:at m1 b, + it:at m2 c, + go
 
 go
-monster X
-[ it:at X L | last L ]
-^ at-last X L
+  monster X
+  [ it:at X L | last L ]
+  ^ at-last X L
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "at-last"), ["at-last m1 b", "at-last m2 c"]);
@@ -169,8 +169,8 @@ monster X
 + p 2 4
 
 go
-[ p X Y | sum Y ]
-^ out X Y
+  [ p X Y | sum Y ]
+  ^ out X Y
 `;
   const { store } = runFixpoint(ok(src));
   // `p 2 4` lives on an incomparable branch — its interval does not
@@ -187,8 +187,8 @@ go
 + invader i1, + invader i2, + it:at i1 h, + it:at i1 a, + it:at i2 a, + go
 
 go
-${comp}
-^ at-count L X
+  ${comp}
+  ^ at-count L X
 `;
   for (const comp of [inner, flat]) {
     const { store } = runFixpoint(ok(mk(comp)));
@@ -205,9 +205,9 @@ ${comp}
 + score p1 2, + score p1 3, + score p2 5, + player p1, + player p2, + go
 
 go
-player P
-[ score P X | sum X ]
-^ total P X
+  player P
+  [ score P X | sum X ]
+  ^ total P X
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "total"), ["total p1 5", "total p2 5"]);
@@ -220,10 +220,10 @@ player P
 + p 2 4, + p 1 1, + p 1 3, + go
 
 go
-[ p X Y -- contributes per tuple
+  [ p X Y -- contributes per tuple
 
   | sum Y ]
-^ out X Y
+  ^ out X Y
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "out"), ["out 1 4", "out 2 4"]);
@@ -238,8 +238,8 @@ go
 + tag t1 v, + tag t2 v, + go
 
 go
-[ tag _ V | count V ]
-^ num V
+  [ tag _ V | count V ]
+  ^ num V
 `;
   const { store } = runFixpoint(ok(src));
   // Bindings over {V}: just {v} — the `_` positions are projected away.
@@ -255,8 +255,8 @@ go
 + p 1 . + q 10, + p 2 . + q 5, + p 3, + go
 
 go
-[ p X . q Y | sum Y ]
-^ out Y
+  [ p X . q Y | sum Y ]
+  ^ out Y
 `;
   const { store } = runFixpoint(ok(src));
   // One group per (X, link) pair; `p 3` has no q and contributes nothing.
@@ -266,8 +266,8 @@ go
 
 {
   // The dot form desugars to the explicit link-variable form.
-  const dotted = ok(`\ngo\n[ p X . q Y | sum Y ]\n^ out Y\n`);
-  const spelled = ok(`\ngo\n[ p X L, q L Y | sum Y ]\n^ out Y\n`);
+  const dotted = ok(`\ngo\n  [ p X . q Y | sum Y ]\n  ^ out Y\n`);
+  const spelled = ok(`\ngo\n  [ p X L, q L Y | sum Y ]\n  ^ out Y\n`);
   // Alpha-normalize: rename variables to v1, v2, ... in first-occurrence order.
   const alpha = (body: unknown) => {
     const names = new Map<string, string>();
@@ -286,8 +286,8 @@ go
 + p 1 . + q a, + p 2 . + q b, + go
 
 go
-[ [ p X . q L | last L ] | count X ]
-^ num X
+  [ [ p X . q L | last L ] | count X ]
+  ^ num X
 `;
   const { store } = runFixpoint(ok(src));
   // The dot's linking variable is a free variable of the inner query, so it
@@ -306,8 +306,8 @@ go
 + p 1 3, + q 9, + go
 
 go
-[ p X Y | S = sum Y ], q Y
-^ out X S Y
+  [ p X Y | S = sum Y ], q Y
+  ^ out X S Y
 `;
   const { store } = runFixpoint(ok(src));
   // If `Y` leaked as 3, `q Y` would fail to match (`q 9` is the only row).
@@ -322,8 +322,8 @@ go
 + p 1 3, + p 1 4, + p 2 5, + go
 
 go
-[ [ p X Y | S = sum Y ] | N = count X ]
-^ out S N
+  [ [ p X Y | S = sum Y ] | N = count X ]
+  ^ out S N
 `;
   const { store } = runFixpoint(ok(src));
   // Inner rows: (X=1,S=7), (X=2,S=5). Grouping the outer query by `S`
@@ -338,9 +338,9 @@ go
 + p 1 3, + p 2 5, + q 3, + go
 
 go
-q S
-[ p X Y | S = sum Y ]
-^ out X S
+  q S
+  [ p X Y | S = sum Y ]
+  ^ out X S
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "out"), ["out 1 3"]);
@@ -353,8 +353,8 @@ q S
 + p 1 3, + p 2 5, + go
 
 go
-[ p X Y | 3 = sum Y ]
-^ out X
+  [ p X Y | 3 = sum Y ]
+  ^ out X
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "out"), ["out 1"]);
@@ -367,8 +367,8 @@ go
 + q a, + q b, + go
 
 go
-[ q X | (s N) = count X ]
-^ out N
+  [ q X | (s N) = count X ]
+  ^ out N
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "out"), ["out (s z)"]);
@@ -382,12 +382,12 @@ go
 + go
 
 go
-[ q X | 0 = sum X ]
-^ hit zero
+  [ q X | 0 = sum X ]
+  ^ hit zero
 
 go
-[ q X | 5 = sum X ]
-^ hit five
+  [ q X | 5 = sum X ]
+  ^ hit five
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -402,12 +402,12 @@ go
 + q a, + q b, + go
 
 go
-[ q X | (s (s z)) = count X ]
-^ found two
+  [ q X | (s (s z)) = count X ]
+  ^ found two
 
 go
-[ q X | (s (s (s z))) = count X ]
-^ found three
+  [ q X | (s (s (s z))) = count X ]
+  ^ found three
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -418,12 +418,12 @@ go
 + go
 
 go
-[ q X | z = count X ]
-^ found none
+  [ q X | z = count X ]
+  ^ found none
 
 go
-[ q X | (s z) = count X ]
-^ found one
+  [ q X | (s z) = count X ]
+  ^ found one
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -439,8 +439,8 @@ go
 + p 1 2 3 4, + p 1 2 3 5, + go
 
 go
-[ p A B C D | S = sum D ]
-^ out A B C S
+  [ p A B C D | S = sum D ]
+  ^ out A B C S
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "out"), ["out 1 2 3 9"]);
@@ -459,20 +459,20 @@ assert.match(
 );
 assert.throws(
   // Disjointness: `X` is both an output variable and a query column.
-  () => runFixpoint(ok(`\ngo\n[ p X Y | X = sum Y ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  [ p X Y | X = sum Y ]\n`)),
   /output variable 'X' also occurs in the aggregate query/,
 );
 assert.throws(
   // Disjointness reaches nested levels' reduction variables too.
-  () => runFixpoint(ok(`\ngo\n[ [ p X Y | S = sum Y ] | Y = count X ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  [ [ p X Y | S = sum Y ] | Y = count X ]\n`)),
   /output variable 'Y' also occurs in the aggregate query/,
 );
 assert.throws(
-  () => runFixpoint(ok(`\ngo\nq Y\n[ p X Y | S = sum Y ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  q Y\n  [ p X Y | S = sum Y ]\n`)),
   /reduction variable 'Y' is bound earlier/,
 );
 assert.throws(
-  () => runFixpoint(ok(`\ngo\n[ q Y | S = count X ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  [ q Y | S = count X ]\n`)),
   /reduction variable 'X' does not occur/,
 );
 console.log("PASS: output-variable errors");
@@ -490,16 +490,16 @@ console.log("PASS: output-variable errors");
 + score 1, + score 2, + go
 
 go
-[ score X | sum X ]
-^ first X
+  [ score X | sum X ]
+  ^ first X
 
 go
-[ nothing I T | count I ]
-^ never I T
+  [ nothing I T | count I ]
+  ^ never I T
 
 first X
-[ score Y | sum Y ]
-^ second Y
+  [ score Y | sum Y ]
+  ^ second Y
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -526,8 +526,8 @@ console.log("PASS: some parse errors");
 + p a 1, + p a 2, + p b 3, + q 9, + go
 
 go
-[ p X Y | some Y ], q Y
-^ out X Y
+  [ p X Y | some Y ], q Y
+  ^ out X Y
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -544,8 +544,8 @@ go
 + p a, + p b, + go
 
 go
-[ p X | some X ]
-^ present yes
+  [ p X | some X ]
+  ^ present yes
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -561,8 +561,8 @@ go
 + go
 
 go
-[ p X | some X ]
-^ present yes
+  [ p X | some X ]
+  ^ present yes
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -576,8 +576,8 @@ go
 + p a 1, + p a 1, + p a 2, + go
 
 go
-[ p X Y | some Y ]
-^ has X
+  [ p X Y | some Y ]
+  ^ has X
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "has"), ["has a"]);
@@ -592,7 +592,7 @@ assert.match(
 );
 assert.throws(
   // `none` cannot carry a group key: X is a free column.
-  () => runFixpoint(ok(`\ngo\n[ p X Y | none Y ]\n`)),
+  () => runFixpoint(ok(`\ngo\n  [ p X Y | none Y ]\n`)),
   /'none' binds nothing.*free column 'X'/,
 );
 console.log("PASS: none parse/expand errors");
@@ -600,8 +600,8 @@ console.log("PASS: none parse/expand errors");
 {
   // `[ p X | none X ]` is the complement of `[ p X | some X ]`: it succeeds
   // (guard passes) exactly when p is empty at the anchor.
-  const empty = `\n+ go\n\ngo\n[ p X | none X ]\n^ absent yes\n`;
-  const nonempty = `\n+ p a, + go\n\ngo\n[ p X | none X ]\n^ absent yes\n`;
+  const empty = `\n+ go\n\ngo\n  [ p X | none X ]\n  ^ absent yes\n`;
+  const nonempty = `\n+ p a, + go\n\ngo\n  [ p X | none X ]\n  ^ absent yes\n`;
   {
     const { store, status } = runFixpoint(ok(empty));
     assert.equal(status.kind, "done");
@@ -623,9 +623,9 @@ console.log("PASS: none parse/expand errors");
 + monster m1, + monster m2, + monster m3, + it:at m1 a, + it:at m2 b, + go
 
 go
-monster X
-[ it:at X L | none L ]
-^ homeless X
+  monster X
+  [ it:at X L | none L ]
+  ^ homeless X
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "done");
@@ -641,14 +641,14 @@ monster X
 + monster m1, + monster m2, + it:at m1 a, + go
 
 go
-monster X
-[ it:at X L | some L ]
-^ seen X
+  monster X
+  [ it:at X L | some L ]
+  ^ seen X
 
 go
-monster X
-[ it:at X L | none L ]
-^ unseen X
+  monster X
+  [ it:at X L | none L ]
+  ^ unseen X
 `;
   const { store } = runFixpoint(ok(src));
   assert.deepEqual(rowsWithHead(store, "seen"), ["seen m1"]);

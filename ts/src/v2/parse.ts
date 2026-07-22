@@ -72,25 +72,22 @@ function markerOf(ch: string): Marker {
 }
 
 export function tokenize(input: string): Token[] | ParseError {
-  // A blank line ends a rule only when the next non-blank line starts at
-  // column 0. A blank line followed by indented content is treated as a
-  // continuation (the spec's `activate` example uses blank lines for
-  // readability inside one rule).
+  // Offside rule: a line whose first character is at column 0 starts a new
+  // definition; indented lines continue the enclosing one. Blank lines carry
+  // no meaning (parseBodyItems additionally ignores ruleEnd inside an open
+  // `(`-group, so a multi-line sub may return to column 0).
   const tokens: Token[] = [];
   const lines = input.split("\n");
-  let blankPending = false;
   for (let li = 0; li < lines.length; li++) {
     let lineno = li + 1;
     let raw = stripComment(lines[li]!);
     if (raw.trim() === "") {
-      blankPending = true;
       continue;
     }
     const leading = raw.length - raw.trimStart().length;
-    if (blankPending && leading === 0) {
+    if (leading === 0 && tokens.length > 0) {
       tokens.push({ tag: "ruleEnd", line: lineno });
     }
-    blankPending = false;
     let pos = 0;
     let atomStart = true;
     while (pos < raw.length) {

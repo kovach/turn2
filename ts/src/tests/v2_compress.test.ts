@@ -41,7 +41,7 @@ function ok(input: string) {
 {
   const src = `
 + shared (sub x)
-+ also (sub x)
+  + also (sub x)
 `;
   const { store } = runFixpoint(ok(src));
   // The two stored rows share a Ref to (sub x). Find both row-atom Refs.
@@ -60,12 +60,13 @@ function ok(input: string) {
 {
   const src = `
 + shared (sub x)
-+ also (sub x)
+  + also (sub x)
 `;
   const { store } = runFixpoint(ok(src));
   const rowRefs: Term[] = store.tuples.map((t) => tupleRef(store, t.atom));
   const { bindings, results } = compressRefs(rowRefs, store);
-  const block = [...bindings, `^ is ${results[0]} ${results[1]}`].join("\n");
+  const block = [...bindings, `^ is ${results[0]} ${results[1]}`]
+    .map((l, i) => (i === 0 ? l : "  " + l)).join("\n");
   // Parse the block standalone.
   const reparsed = parse(block);
   if ("message" in reparsed) {

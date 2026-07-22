@@ -40,8 +40,8 @@ function listTuples(store: Store): string[] {
 + turn
 
 turn
-? C
-+ cell-choice C
+  ? C
+  + cell-choice C
 `;
   const { store, status } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -60,8 +60,8 @@ turn
 {
   const src = `
 + a
-a
-! foo bar
+  a
+  ! foo bar
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -76,12 +76,12 @@ a
 {
   const src = `
 + cell c1
-+ cell c2
-+ turn
+  + cell c2
+  + turn
 
 turn
-? C
-! cell C
+  ? C
+  ! cell C
 `;
   const { status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
@@ -97,16 +97,16 @@ turn
   // Phase 1: run once to discover the active fresh-id for C.
   const phase1 = `
 + cell c1
-+ turn
+  + turn
 
 turn
-? C
-! cell C
-+ cell-choice C
+  ? C
+  ! cell C
+  + cell-choice C
 
 cell-choice C
-is C V
-+ resolved V
+  is C V
+  + resolved V
 `;
   const r1 = runFixpoint(ok(phase1));
   assert.equal(r1.status.kind, "active-choices");
@@ -147,14 +147,14 @@ is C V
 {
   const src = `
 + cell c1
-+ cell c2
-+ turn
+  + cell c2
+  + turn
 
 turn
-? A
-! cell A
-? B
-! cell B
+  ? A
+  ! cell A
+  ? B
+  ! cell B
 `;
   const { status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
@@ -171,12 +171,12 @@ turn
 {
   const src = `
 + pair c1 c1
-+ turn
+  + turn
 
 turn
-? A
-? B
-! pair A B
+  ? A
+  ? B
+  ! pair A B
 `;
   const { status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
@@ -192,15 +192,15 @@ turn
 {
   const src = `
 + pair c1 c2
-+ cell c1
-+ turn
+  + cell c1
+  + turn
 
 turn
-? A
-? B
-! pair A B
-? D
-! cell D
+  ? A
+  ? B
+  ! pair A B
+  ? D
+  ! cell D
 `;
   const { status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
@@ -224,21 +224,21 @@ console.log("PASS: mixed entangled + independent — only entangled batch surfac
 #agg at * -> last
 
 game, +thing t1, +thing t2, +thing bad
-+at t1 -> here
-+at t2 -> here
-+monster t1
+  +at t1 -> here
+  +at t2 -> here
+  +monster t1
   ( ~c1 );
   ( ~c1 );
 
 c1
-?C
-~it C
-!thing C
+  ?C
+  ~it C
+  !thing C
 
 c1, it C, !at C -> here
 
 c1
-( it C, is C V ); +at V there
+  ( it C, is C V ); +at V there
 `;
   // Phase 1: first c1 surfaces. Options should be {t1, t2} — `bad` is
   // excluded by `! at C -> here` (no `at bad` contribution).
@@ -287,7 +287,7 @@ t, it _, ~a
 t, it _, ~b
 
 a, it C, +at it -> a
-!thing C
+  !thing C
 
 b, it C, !at C -> a
 `;
@@ -302,7 +302,23 @@ b, it C, !at C -> a
   // Same program with `!thing C` removed — expect no active choice
   // surfaces (the choice's only remaining constraint network can't bind
   // a valid option).
-  const baseWithoutThing = baseWithThing.replace("\n!thing C\n", "\n");
+  const baseWithoutThing = `
+#agg at * -> last
+
+(~setup); ~t
+
+setup, +thing it
+
+t, ?C, ~it C
+
+t, it _, ~a
+
+t, it _, ~b
+
+a, it C, +at it -> a
+
+b, it C, !at C -> a
+`;
   const r2 = runFixpoint(ok(baseWithoutThing));
   if (r2.status.kind === "active-choices") {
     const opts2 = r2.status.components[0]!.options.map((opt) =>
@@ -322,14 +338,14 @@ b, it C, !at C -> a
 {
   const src = `
 + pair c1 c2
-+ pair c1 c3
-+ pair c2 c4
-+ turn
+  + pair c1 c3
+  + pair c2 c4
+  + turn
 
 turn
-? A
-? B
-! pair A B
+  ? A
+  ? B
+  ! pair A B
 `;
   const r1 = runFixpoint(ok(src));
   assert.equal(r1.status.kind, "active-choices", `phase1 status: ${r1.status.kind}`);

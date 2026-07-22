@@ -58,7 +58,7 @@ Defines the v2 intermediate representation (IR): the `RuleAtom` algebra spanning
 
 # parse.ts
 
-The v2 parser for the flat-syntax language: it tokenizes input line-by-line (comment- and indentation-aware) then turns the token stream into a `Program` (rules + schema), without applying hashconsing. It handles markers, `=` equality, `#def`/`#agg` commands, parenthesized/sequence sub-rules, dot-notation desugaring, `!(...)` compound constrain blocks, and bool-weight validation.
+The v2 parser for the flat-syntax language: it tokenizes input line-by-line (comment- and indentation-aware) then turns the token stream into a `Program` (rules + schema), without applying hashconsing. Rule boundaries follow the offside rule: a line whose first character is at column 0 starts a new definition, indented lines continue the enclosing one, and blank lines carry no meaning (inside an open `(`-group the boundary is ignored, so a multi-line sub may return to column 0). It handles markers, `=` equality, `#def`/`#agg` commands, parenthesized/sequence sub-rules, dot-notation desugaring, `!(...)` compound constrain blocks, and bool-weight validation.
 
 **Key terms:**
 - `parse` — top-level entry (tokenize → `parseProgram`); returns a `Program` or a `ParseError` (`{ line, message }`)

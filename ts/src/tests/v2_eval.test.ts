@@ -42,11 +42,11 @@ function listTuples(store: Store): string[] {
 {
   const src = `
 + play-card e1
-+ it e1 c1
+  + it e1 c1
 
 play-card E
-it E Card
-~ move Card play-area
+  it E Card
+  ~ move Card play-area
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -62,7 +62,7 @@ it E Card
 + foo a
 
 foo a
-+ bar a
+  + bar a
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -80,14 +80,14 @@ foo a
 {
   const src = `
 + activate a1
-+ it a1 call-to-guard
-+ target a1 t1
-+ at d1 t1
-+ dahan d1
+  + it a1 call-to-guard
+  + target a1 t1
+  + at d1 t1
+  + dahan d1
 
 activate A
-it A call-to-guard
-target A T
+  it A call-to-guard
+  target A T
 
   ( ~ gather G
     it G X
@@ -115,11 +115,11 @@ target A T
 {
   const src = `
 + episode e1
-+ some-property e1 p7
+  + some-property e1 p7
 
 episode E
-( some-property E P )
-+ property-reference P
+  ( some-property E P )
+  + property-reference P
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -158,11 +158,11 @@ foo a
 {
   const src = `
 p X
-+ prop X 2
+  + prop X 2
 
 ~ p X
-prop X Y
-~ q Y
+  prop X Y
+  ~ q Y
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -180,10 +180,10 @@ prop X Y
 #agg points -> sum
 
 + points -> 3
-+ points -> 4
-+ bar
-points -> N
-+ result N
+  + points -> 4
+  + bar
+  points -> N
+  + result N
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -202,14 +202,14 @@ points -> N
 
 -- "global" tuples
 init
-+ score alice -> 10
-+ score alice -> 5
-+ score bob -> 20
-+ marker
+  + score alice -> 10
+  + score alice -> 5
+  + score bob -> 20
+  + marker
 
 check
-score X -> N
-+ total X N
+  score X -> N
+  + total X N
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -222,11 +222,11 @@ score X -> N
 {
   const src = `
 + foo bar
-+ foo baz
+  + foo baz
 
 foo X
-= X bar
-+ saw X
+  = X bar
+  + saw X
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -239,12 +239,12 @@ foo X
 {
   const src = `
 + foo a
-+ foo b
+  + foo b
 
 foo X
-foo Y
-= X Y
-+ same X
+  foo Y
+  = X Y
+  + same X
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -257,11 +257,11 @@ foo Y
 {
   const src = `
 + foo (a 1)
-+ foo b
+  + foo b
 
 foo X
-= X (a Y)
-+ got Y
+  = X (a Y)
+  + got Y
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -292,7 +292,7 @@ foo X
 + =foo bar
 
 =foo X
-+ saw X
+  + saw X
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -369,8 +369,8 @@ look
 #agg p -> bool
 
 +p a -> 1
-p a -> 1
-+ok-present x
+  p a -> 1
+  +ok-present x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -384,7 +384,7 @@ p a -> 1
 #agg p -> bool
 
 p a -> 0
-+ok-absent x
+  +ok-absent x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -398,11 +398,11 @@ p a -> 0
 #agg p -> bool
 
 +p a -> 1
-p a -> X
-+saw-present X
+  p a -> X
+  +saw-present X
 
 p b -> Y
-+saw-absent Y
+  +saw-absent Y
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -417,10 +417,10 @@ p b -> Y
 #agg p -> bool
 
 +p a -> 1
-+p a -> 1
-+p a -> 1
-p a -> X
-+got X
+  +p a -> 1
+  +p a -> 1
+  p a -> X
+  +got X
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);

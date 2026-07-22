@@ -101,7 +101,7 @@ phase2, ^p b
 {
   const tuples = run(`
 +bind c1 y1
-~ctx
+  ~ctx
 
 ctx, ^p a
 
@@ -201,8 +201,8 @@ ctx, ^p a
 {
   const tuples = run(`
 +is1 s1 xv
-+is2 s2 yv
-~ctx
+  +is2 s2 yv
+  ~ctx
 
 ctx, ^p xv
 
@@ -268,7 +268,7 @@ ctx, ^q zv
   // First exception's context holds: nope fires, boom never does.
   const t1 = run(`
 +first a
-~ctx
+  ~ctx
 
 ctx, ^move a b
 
@@ -403,7 +403,7 @@ ctx, ~p x y
 {
   const tuples = run(`
 +tag c1 misfits
-~ctx
+  ~ctx
 
 ctx, ^play-card c1
 
@@ -451,7 +451,7 @@ complete-set X, ~score X 1
 late Y, ~score Y 2
 
 ( ~complete-set x, {score X _ =>} )
-+late q
+  +late q
 `);
   assert(!tuples.includes("score x 1"), `'score x 1' should be suppressed: ${tuples.join(" | ")}`);
   assert(tuples.includes("score q 2"), `missing 'score q 2': ${tuples.join(" | ")}`);
@@ -468,7 +468,7 @@ late Y, ~score Y 2
 {
   const prog = ok(`
 ~ctx
-ctx, ^p a
+  ctx, ^p a
 `);
   const out = applyExceptions(prog);
   assert.equal(out, prog);
@@ -483,7 +483,7 @@ ctx, ^p a
 play A
 
 ( ~play x, {move X => ~foo X} );
-( ~play y, {move Y => ~bar Y} )
+  ( ~play y, {move Y => ~bar Y} )
 `);
   assert(t1.includes("play x"), `missing 'play x': ${t1.join(" | ")}`);
   assert(t1.includes("play y"), `stall: missing 'play y': ${t1.join(" | ")}`);
@@ -495,7 +495,7 @@ play A
 play A, ~move A
 
 ( ~play x, {move X => ~foo X} );
-( ~play y, {move Y => ~bar Y} )
+  ( ~play y, {move Y => ~bar Y} )
 `);
   assert(t2.includes("foo x"), `missing 'foo x': ${t2.join(" | ")}`);
   assert(t2.includes("bar y"), `missing 'bar y': ${t2.join(" | ")}`);
@@ -527,7 +527,7 @@ play A, ~move A
 {
   const t1 = run(`
 +first a
-~ctx
+  ~ctx
 
 ctx, ^move c d
 
@@ -542,7 +542,7 @@ ctx, ^move c d
   // Positive companion: a matching move is intercepted.
   const t2 = run(`
 +first a
-~ctx
+  ~ctx
 
 ctx, ^move a b
 

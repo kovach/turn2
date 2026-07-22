@@ -287,7 +287,8 @@ function handleClick(intent: ClickIntent): void {
   const isLines: string[] = [];
   for (let i = 0; i < N; i++) isLines.push(`^ is ${results[i]} ${results[i + N]}`);
   const lines = [...bindings, ...isLines];
-  const text = "\n\n" + lines.join("\n");
+  // One rule: continuation lines are indented (offside rule).
+  const text = "\n\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n");
   // Append to the textarea via execCommand so the existing "input" listener
   // fires and triggers the debounced run + PUT.
   const prevStart = sourceEl.selectionStart;

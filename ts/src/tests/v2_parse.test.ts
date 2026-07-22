@@ -102,7 +102,7 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 
 // 1) basic match-only rule
 {
-  const p = ok("play-card E\nit E Card\n~ move Card play-area\n");
+  const p = ok("play-card E\n  it E Card\n  ~ move Card play-area\n");
   assert.equal(p.rules.length, 1);
   const r = p.rules[0]!;
   assert.equal(r.body.length, 3);
@@ -117,7 +117,7 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 
 // 2) comma-separated equivalence
 {
-  const a = ok("play-card E\nit E Card\n~ move Card play-area\n");
+  const a = ok("play-card E\n  it E Card\n  ~ move Card play-area\n");
   const b = ok("play-card E, it E Card, ~ move Card play-area\n");
   assert.equal(a.rules.length, b.rules.length);
   assert.equal(a.rules[0]!.body.length, b.rules[0]!.body.length);
@@ -127,11 +127,16 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
   console.log("PASS: newline and comma are equivalent");
 }
 
-// 3) blank-line rule separation
+// 3) offside rule separation: column-0 starts a rule, indentation continues
 {
   const p = ok("foo\n\nbar\n");
   assert.equal(p.rules.length, 2);
-  console.log("PASS: blank line separates rules");
+  const q = ok("foo\nbar\n");
+  assert.equal(q.rules.length, 2);
+  const r = ok("foo, x\n  y\n\n  z\n");
+  assert.equal(r.rules.length, 1);
+  assert.equal(r.rules[0]!.body.length, 4);
+  console.log("PASS: offside rule separation");
 }
 
 // 4) sub-rule with sequence
@@ -201,7 +206,7 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 
 // 9b) #def names a rule
 {
-  const p = ok("#def activate\nfoo X\n+ bar X\n");
+  const p = ok("#def activate\nfoo X\n  + bar X\n");
   assert.equal(p.rules.length, 1);
   assert.equal(p.rules[0]!.name, "activate");
   assert.equal(p.rules[0]!.explicitName, "activate");
@@ -271,8 +276,8 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
 {
   const src = `
 activate A
-it A call-to-guard
-target A T
+  it A call-to-guard
+  target A T
 
   ( ~ gather G
     it G X

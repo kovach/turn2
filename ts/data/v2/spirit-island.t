@@ -57,11 +57,21 @@ look
 
 -- new stuff
 
+-- To target, choose a source and target land
 target-power E
-  (:it E . power:range R)
-  (:actor E Spirit)
   ?X, !land X, ^:source E X
   ?Y, !land Y, ^:target E Y
+
+-- The spirit must control the source land, and
+-- the source and target must be within range.
+target-power
+  .(:it.power:range R)
+  .(:source S) .(:target T)
+  .(:actor Spirit)
+  !spirit:land Spirit S
+  !land:land:range S T R
+
+ 
 
 target-power .(:actor S)
   entwined S T

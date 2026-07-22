@@ -24,11 +24,11 @@
 #agg turn-counter -> count
 
 turn
-+ turn-counter -> x
+  + turn-counter -> x
 
 turn
-turn-counter -> N
-~ foo N
+  turn-counter -> N
+  ~ foo N
 
 -- start: assert game with setup and turn (and initial actor o).
 ~ game
@@ -72,18 +72,18 @@ do-choice
 -- mark the chosen cell as filled. The cell-choice tuple carries the
 -- resolved Cell value once the harness writes the corresponding `is` row.
 turn
-actor P
-choice A
-is A Cell
-~ filled Cell P
+  actor P
+  choice A
+  is A Cell
+  ~ filled Cell P
 
 -- a filled counts toward the per-turn filleds aggregate
 filled Cell _, + fills Cell -> 1
 
 -- turn-complete: a turn with at least one filled is finished
 turn
-filled _ _
-~ turn-complete
+  filled _ _
+  ~ turn-complete
 
 -- after turn is complete, the other player's turn begins
 game, other P Op
@@ -93,22 +93,22 @@ game, other P Op
 -- 4 win-condition rules
 
 filled (cell R z) M
-filled (cell R (s z)) M
-filled (cell R (s (s z))) M
-+ won M (row R)
+  filled (cell R (s z)) M
+  filled (cell R (s (s z))) M
+  + won M (row R)
 
 filled (cell z C) M
-filled (cell (s z) C) M
-filled (cell (s (s z)) C) M
-+ won M (col C)
+  filled (cell (s z) C) M
+  filled (cell (s (s z)) C) M
+  + won M (col C)
 
 filled (cell z z) M
-filled (cell (s z) (s z)) M
-filled (cell (s (s z)) (s (s z))) M
-+ won M diag1
+  filled (cell (s z) (s z)) M
+  filled (cell (s (s z)) (s (s z))) M
+  + won M diag1
 
 filled (cell (s (s z)) z) M
-filled (cell (s z) (s z)) M
-filled (cell z (s (s z))) M
-+ won M diag2
+  filled (cell (s z) (s z)) M
+  filled (cell z (s (s z))) M
+  + won M diag2
 

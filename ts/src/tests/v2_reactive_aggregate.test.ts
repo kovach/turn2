@@ -129,7 +129,7 @@ function aggvalLefts(store: Store, head: string, value: string): number[] {
 #reactive dmg -> sum
 
 + dmg -> 3
-+ dmg -> 4
+  + dmg -> 4
 `));
   const all = tuples(store);
   assert.equal(aggvalLefts(store, "dmg", "3").length, 1, `expected _aggval dmg 3: ${all.join(" | ")}`);
@@ -145,10 +145,10 @@ function aggvalLefts(store: Store, head: string, value: string): number[] {
 #reactive dmg -> sum
 
 + dmg -> 3
-+ dmg -> 4
+  + dmg -> 4
 
 dmg -> 7
-+ lethal x
+  + lethal x
 `));
   const all = tuples(store);
   assert.ok(all.includes("lethal x"), `expected 'lethal' (dmg reached 7): ${all.join(" | ")}`);
@@ -161,10 +161,10 @@ dmg -> 7
 #reactive dmg -> sum
 
 + dmg -> 3
-+ dmg -> 4
+  + dmg -> 4
 
 dmg -> 99
-+ impossible x
+  + impossible x
 `));
   const all = tuples(store);
   assert.ok(!all.includes("impossible x"), `'impossible' must not fire (sum never 99): ${all.join(" | ")}`);
@@ -177,10 +177,10 @@ dmg -> 99
 #reactive dmg -> sum
 
 + dmg -> 3
-+ dmg -> 4
+  + dmg -> 4
 
 dmg -> N
-+ seen N
+  + seen N
 `));
   const all = tuples(store);
   assert.ok(all.includes("seen 3"), `expected 'seen 3': ${all.join(" | ")}`);
@@ -194,11 +194,11 @@ dmg -> N
 #reactive score -> sum
 
 + score alice -> 10
-+ score alice -> 5
-+ score bob -> 20
+  + score alice -> 5
+  + score bob -> 20
 
 score X -> N
-+ total X N
+  + total X N
 `));
   const all = tuples(store);
   // alice: cumulative 10 then 15; bob: 20.
@@ -213,10 +213,10 @@ score X -> N
 #reactive pos -> last
 
 + pos a
-+ pos b
+  + pos b
 
 pos -> P
-+ where P
+  + where P
 `));
   const all = tuples(store);
   // Sequential: last is `a` then `b`. Both breakpoints surface as reads.
@@ -234,10 +234,10 @@ pos -> P
 #reactive dmg -> sum
 
 + points -> 3
-+ points -> 4
-+ dmg -> 5
-points -> N
-+ result N
+  + points -> 4
+  + dmg -> 5
+  points -> N
+  + result N
 `));
   const all = tuples(store);
   assert.ok(all.includes("result 7"), `legacy #agg still folds to 7: ${all.join(" | ")}`);
@@ -294,8 +294,8 @@ e A B, ^p A B -> 1
 e A B, p B C -> 1, ^p A C -> 1
 
 ^e a b
-^e b c
-^e c a
+  ^e b c
+  ^e c a
 `));
   assert.equal(status.kind, "done", `expected clean termination, got ${status.kind}`);
   const all = tuples(store);
@@ -324,8 +324,8 @@ e A B, p B C -> 1, ^p A C -> 1
 p X Y -> 1, ^q -> 1
 
 ^e a b
-^e b c
-^e c a
+  ^e b c
+  ^e c a
 `));
   assert.equal(status.kind, "done", `expected clean termination, got ${status.kind}`);
   const qRows = tuples(store).filter((s) => s.startsWith("_aggval q "));
