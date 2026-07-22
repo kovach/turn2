@@ -53,3 +53,14 @@ counts, land L, dahan-count L -> (s _), ^alt-has-dahan L
 look
   (counts, dahan-count L -> N)
   ^ok L N
+
+
+-- new stuff
+
+target-power E
+  (:it E . power:range R)
+  (:actor E Spirit)
+  ?X, !spirit:land Spirit X, ^:source E X
+  ?Y, !within-range X Y R,   ^:target E Y
+  is X Source, is Y Target
+

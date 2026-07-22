@@ -129,4 +129,66 @@ assert.ok(fracGaps > 0, `dominion should have incomparable same-rank moments; go
 assertTwoTier(domLayout, "dominion");
 console.log(`PASS: dominion exercises both tiers (${fracGaps} fractional gaps)`);
 
+// --- monotone placement: no drift from unrelated subtrees ---
+// plans/v2-timeline-occupancy-lanes.md. The `move` bars nest under
+// `setup` and must sit directly above it, even though `turn`'s
+// pairwise-incomparable children a/b/c later need fresh lanes. Under
+// the old splice-shifting placer they pushed the moves to the top.
+const driftSrc = `
+~setup; ~turn
+
+setup,
+  ~move a here;
+  ~move b here;
+  ~move a there;
+  ~move c there
+
+turn, ~a
+
+turn, ~b
+
+turn, ~c
+`;
+const driftParsed = parse(driftSrc);
+if ("message" in driftParsed) {
+  throw new Error(`drift parse error line ${driftParsed.line}: ${driftParsed.message}`);
+}
+const driftLayout = layoutTimeline(
+  runFixpoint(driftParsed, 200, 5000).store,
+  { ...DEFAULT_OPTS, laneMode: "tree" },
+  () => 0,
+);
+const setupLane = driftLayout.bars.find((b) => b.label.startsWith("setup"))!.lane;
+for (const b of driftLayout.bars) {
+  if (!b.label.startsWith("move")) continue;
+  assert.equal(
+    b.lane, setupLane + 1,
+    `"${b.label}" should sit directly above setup (lane ${setupLane + 1}); got ${b.lane}\n` +
+    `lanes: ${driftLayout.bars.map((x) => `${x.label}=${x.lane}`).join(", ")}`,
+  );
+}
+
+// Disjointness invariant: same-lane bars never overlap. The true rule
+// is chain-ordering in the moment partial order; the order isn't in
+// the layout, but comparable moments always differ in rank, so
+// rank-disjointness is a necessary condition — the check can't fail a
+// valid layout, it just won't catch incomparable-but-rank-disjoint
+// sharing.
+function assertLaneInvariants(layout: TimelineLayout, label: string): void {
+  const leq = (a: number, b: number): boolean =>
+    a === b || layout.moments.get(a)!.rank < layout.moments.get(b)!.rank;
+  for (const x of layout.bars) for (const y of layout.bars) {
+    if (x.tupleIndex >= y.tupleIndex) continue;
+    if (x.lane === y.lane) {
+      assert.ok(
+        leq(x.rTok, y.lTok) || leq(y.rTok, x.lTok),
+        `[${label}] same-lane bars "${x.label}"/"${y.label}" must be rank-disjoint`,
+      );
+    }
+  }
+}
+assertLaneInvariants(driftLayout, "drift");
+assertLaneInvariants(layout, "game");
+console.log("PASS: moves stay adjacent to setup; lane invariants hold");
+
 console.log("ALL v2 timeline-layout tests passed");

@@ -327,8 +327,8 @@ export function layoutTimeline(
   const leqTok = (a: number, b: number): boolean =>
     a === b || (gt.get(a)?.has(b) ?? false);
   const { bars, laneCount: packedLaneCount } =
-    opts.laneMode === "nested" ? packBarsNested(rawBars, leqTok, store.botTok) :
-    opts.laneMode === "tree"   ? packBarsTree(rawBars, leqTok, store.botTok) :
+    opts.laneMode === "nested" ? packBarsNested(rawBars, leqTok) :
+    opts.laneMode === "tree"   ? packBarsTree(rawBars, leqTok) :
     packBarsCompact(rawBars);
   // Group bars by starting rank; assign each its row within the group
   // (lane-ordered). Track the largest group for downstream sizing.
@@ -581,42 +581,35 @@ function buildContainmentForest(
 }
 
 // Build a placer + finalizer shared between nested/tree packers.
-// Lane-sharing rule: a bar can join a lane iff its lTok comes
-// non-strictly after the lane's last placed rTok in the moment partial
-// order. No owner check — two bars from different subtrees may share a
-// lane when they're temporally disjoint. Structural separation between
+// Lane-sharing rule: a bar can join a lane iff it is temporally
+// disjoint (in the moment partial order) from every bar already on
+// it — so a lane is always a chain. No owner check — two bars from
+// different subtrees may share a lane. Structural separation between
 // a bar and its descendants/ancestor is preserved by the caller via
 // `minLane`, not here.
+//
+// Placement is monotone: a bar that fits nowhere takes the next lane
+// up; it never displaces already-placed bars. Each lane keeps its
+// full occupancy (not just a frontier), so a bar can drop into a
+// lane that is empty over its interval regardless of visit order.
 function makePlacer(
   rawBars: RawBar[],
   leqTok: (a: number, b: number) => boolean,
-  botTok: number,
 ) {
   const N = rawBars.length;
-  // Each lane stores its last placed bar's rTok. Empty lanes hold
-  // `botTok` as a sentinel, which `leqTok` treats as ≤ anything.
-  const laneLastRTok: number[] = [];
+  const lanes: RawBar[][] = [];
   const lane: number[] = new Array(N).fill(-1);
+
+  const fits = (laneBars: RawBar[], b: RawBar): boolean =>
+    laneBars.every((x) => leqTok(x.rTok, b.lTok) || leqTok(b.rTok, x.lTok));
 
   const place = (idx: number, minLane: number): void => {
     const b = rawBars[idx]!;
-    for (let li = minLane; li < laneLastRTok.length; li++) {
-      if (leqTok(laneLastRTok[li]!, b.lTok)) {
-        laneLastRTok[li] = b.rTok;
-        lane[idx] = li;
-        return;
-      }
-    }
-    // No reusable lane. Open the new lane AT minLane so the bar sits as
-    // close to its parent as possible, shifting any existing lanes at
-    // minLane and above up by one. Pad with empty sentinels if minLane
-    // jumps past current length.
-    while (laneLastRTok.length < minLane) laneLastRTok.push(botTok);
-    laneLastRTok.splice(minLane, 0, b.rTok);
-    for (let i = 0; i < N; i++) {
-      if (i !== idx && lane[i]! >= minLane) lane[i] = lane[i]! + 1;
-    }
-    lane[idx] = minLane;
+    let li = minLane;
+    while (li < lanes.length && !fits(lanes[li]!, b)) li++;
+    while (lanes.length <= li) lanes.push([]);
+    lanes[li]!.push(b);
+    lane[idx] = li;
   };
 
   const finalize = (): { bars: PartialBar[]; laneCount: number } => {
@@ -630,7 +623,7 @@ function makePlacer(
         startGroupRow: 0, lRank: b.lRank,
       };
     }
-    return { bars: out, laneCount: laneLastRTok.length };
+    return { bars: out, laneCount: lanes.length };
   };
 
   return { place, lane, finalize };
@@ -642,16 +635,12 @@ function makePlacer(
 function packBarsNested(
   rawBars: RawBar[],
   leqTok: (a: number, b: number) => boolean,
-  botTok: number,
 ): { bars: PartialBar[]; laneCount: number } {
   if (rawBars.length === 0) return { bars: [], laneCount: 0 };
   const forest = buildContainmentForest(rawBars, leqTok);
-  const { place, lane, finalize } = makePlacer(rawBars, leqTok, botTok);
+  const { place, lane, finalize } = makePlacer(rawBars, leqTok);
   const visit = (idx: number): void => {
     for (const c of forest.children[idx]!) visit(c);
-    // Re-read lane[c] AFTER all child subtrees finish — earlier-placed
-    // siblings can have been shifted up by `place`'s splice-insert
-    // when a later sibling's subtree opened a new lane at <= their lane.
     let childMax = -1;
     for (const c of forest.children[idx]!) if (lane[c]! > childMax) childMax = lane[c]!;
     place(idx, childMax + 1);
@@ -669,11 +658,10 @@ function packBarsNested(
 function packBarsTree(
   rawBars: RawBar[],
   leqTok: (a: number, b: number) => boolean,
-  botTok: number,
 ): { bars: PartialBar[]; laneCount: number } {
   if (rawBars.length === 0) return { bars: [], laneCount: 0 };
   const forest = buildContainmentForest(rawBars, leqTok);
-  const { place, lane, finalize } = makePlacer(rawBars, leqTok, botTok);
+  const { place, lane, finalize } = makePlacer(rawBars, leqTok);
   const visit = (idx: number, minLane: number): void => {
     place(idx, minLane);
     const myLane = lane[idx]!;

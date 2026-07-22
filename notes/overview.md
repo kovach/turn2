@@ -1,3 +1,20 @@
+# linking program to timeline view
+plan: plans/v2-source-timeline-link.md
+
+- currently, the editor "database" view maintains a bidirectional link between tuples and program lines
+- this change will do the same for the timeline view: mousing over a timeline bar will highlight lines; clicking will move cursor. following the same logic
+- this should apply both to the v2 editor page, and to the presentation mode display. we should use a common abstraction representing a live program, its execution, and one or more display widgets.
+
+misc fixes to address: there is currently an alignment issue between the gutter highlight and the correct line number
+
+# timeline occupancy-based lane placement
+plan: plans/v2-timeline-occupancy-lanes.md
+
+fix bars drifting to high lanes when later unrelated bars splice new
+lanes below them. the placer keeps full per-lane occupancy instead of
+a single frontier token, so placement becomes monotone: no splice, no
+global shift. sharing rule (partial-order disjointness) unchanged.
+
 # variable-head matches
 plan: plans/v2-variable-head-match.md
 
@@ -98,6 +115,8 @@ full examples:
 ```
 
 # 26/07/21
+some usage of fable starting around now; still mainly opus
+
 # arity + auto `_` insertion
 plan: plans/v2-arity-auto-wildcard.md
 
