@@ -510,4 +510,150 @@ first X
   console.log("PASS: an empty aggregate does not stall later aggregates");
 }
 
+// ----- `some`: existence reduction (plans/v2-bracket-some.md) -----
+
+assert.match(err(`\nfoo, [ p X | frob X ]\n`), /count, sum, last, some, or none/);
+assert.match(
+  err(`\nfoo, [ p X Y | X = some Y ]\n`),
+  /'some' takes no output pattern/,
+);
+console.log("PASS: some parse errors");
+
+{
+  // `[ p X Y | some Y ]` binds only X: one row per X for which some Y exists.
+  // Y is eliminated from scope, so the trailing `q Y` binds a fresh Y.
+  const src = `
++ p a 1, + p a 2, + p b 3, + q 9, + go
+
+go
+[ p X Y | some Y ], q Y
+^ out X Y
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  // If Y leaked (as 1/2/3), `q Y` (only `q 9`) would not match.
+  assert.deepEqual(rowsWithHead(store, "out"), ["out a 9", "out b 9"]);
+  console.log("PASS: some binds the group key and eliminates its variable");
+}
+
+{
+  // `[ p X | some X ]` binds nothing: a pass/fail guard. Non-empty p passes,
+  // so the guarded emit fires exactly once regardless of how many tuples
+  // contributed.
+  const src = `
++ p a, + p b, + go
+
+go
+[ p X | some X ]
+^ present yes
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "present"), ["present yes"]);
+  console.log("PASS: some as a guard passes on non-empty input");
+}
+
+{
+  // Empty input: the existence check is false, so no result row — the guard
+  // fails and the rule does not fire. (Unlike count/sum, which emit a zero
+  // row for an empty group key.)
+  const src = `
++ go
+
+go
+[ p X | some X ]
+^ present yes
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(rowsWithHead(store, "present"), []);
+  console.log("PASS: some fails on empty input");
+}
+
+{
+  // Set semantics: duplicate derivations over the key collapse to one row.
+  const src = `
++ p a 1, + p a 1, + p a 2, + go
+
+go
+[ p X Y | some Y ]
+^ has X
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "has"), ["has a"]);
+  console.log("PASS: some collapses duplicate group keys");
+}
+
+// ----- `none`: negated existence (plans/v2-bracket-some.md) -----
+
+assert.match(
+  err(`\nfoo, [ p X Y | X = none Y ]\n`),
+  /'none' takes no output pattern/,
+);
+assert.throws(
+  // `none` cannot carry a group key: X is a free column.
+  () => runFixpoint(ok(`\ngo\n[ p X Y | none Y ]\n`)),
+  /'none' binds nothing.*free column 'X'/,
+);
+console.log("PASS: none parse/expand errors");
+
+{
+  // `[ p X | none X ]` is the complement of `[ p X | some X ]`: it succeeds
+  // (guard passes) exactly when p is empty at the anchor.
+  const empty = `\n+ go\n\ngo\n[ p X | none X ]\n^ absent yes\n`;
+  const nonempty = `\n+ p a, + go\n\ngo\n[ p X | none X ]\n^ absent yes\n`;
+  {
+    const { store, status } = runFixpoint(ok(empty));
+    assert.equal(status.kind, "done");
+    assert.deepEqual(rowsWithHead(store, "absent"), ["absent yes"]);
+  }
+  {
+    const { store, status } = runFixpoint(ok(nonempty));
+    assert.equal(status.kind, "done");
+    assert.deepEqual(rowsWithHead(store, "absent"), []);
+  }
+  console.log("PASS: none is the complement of some");
+}
+
+{
+  // Prefix-bound filter: a monster with no recorded location. X comes from
+  // the outer `monster X` (substituted into the query, not a group key), so
+  // the bracket binds nothing and X stays bound for the emit.
+  const src = `
++ monster m1, + monster m2, + monster m3, + it:at m1 a, + it:at m2 b, + go
+
+go
+monster X
+[ it:at X L | none L ]
+^ homeless X
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "done");
+  // m1, m2 have locations; only m3 is homeless.
+  assert.deepEqual(rowsWithHead(store, "homeless"), ["homeless m3"]);
+  console.log("PASS: none as a prefix-bound negation filter");
+}
+
+{
+  // some and none partition: for each monster, exactly one of the guards
+  // fires.
+  const src = `
++ monster m1, + monster m2, + it:at m1 a, + go
+
+go
+monster X
+[ it:at X L | some L ]
+^ seen X
+
+go
+monster X
+[ it:at X L | none L ]
+^ unseen X
+`;
+  const { store } = runFixpoint(ok(src));
+  assert.deepEqual(rowsWithHead(store, "seen"), ["seen m1"]);
+  assert.deepEqual(rowsWithHead(store, "unseen"), ["unseen m2"]);
+  console.log("PASS: some and none partition the prefix bindings");
+}
+
 console.log("v2_bracket_agg: all tests passed");

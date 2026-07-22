@@ -414,7 +414,9 @@ function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
   const V = cq.varName;
   const keyCols = cols.filter((n) => n !== V);
   const outCols = compOutCols(store, cq);
-  const aggregator = getAggregator(cq.op);
+  // `some`/`none` are existence reductions: no fold, so no registry lookup.
+  const aggregator =
+    cq.op === "some" || cq.op === "none" ? undefined : getAggregator(cq.op);
 
   const sigOf = (row: Deriv, names: string[]): string =>
     names.map((n) => tokenOf(store, row.vals.get(n)!)).join("|");
@@ -430,12 +432,32 @@ function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
   };
 
   if (rows.length === 0) {
-    // Empty input: last -> no rows; count/sum with group columns -> no
-    // rows; otherwise one zero row (mirrors scheduler.ts aggregateOver).
-    if (cq.op === "last") return [];
+    // Empty input: last / some -> no rows (`some` over nothing is false);
+    // `none` over nothing succeeds with one row that binds nothing (its
+    // output columns are validated empty); count/sum with group columns ->
+    // no rows; otherwise one zero row (mirrors scheduler.ts aggregateOver).
+    if (cq.op === "last" || cq.op === "some") return [];
+    if (cq.op === "none") return [{ vals: new Map(), moment: SYM_BOT }];
     if (keyCols.length > 0) return [];
-    const row = resultRow(null, hashconsTerm(aggregator.zero, store.hash), SYM_BOT);
+    const row = resultRow(null, hashconsTerm(aggregator!.zero, store.hash), SYM_BOT);
     return row === null ? [] : [row];
+  }
+
+  // `none` is negation: a non-empty query fails, producing no row.
+  if (cq.op === "none") return [];
+
+  if (cq.op === "some") {
+    // Existence: one row per non-empty group, carrying just the key
+    // columns. `out` is `*cq-any`, so `resultRow` binds only the group key
+    // and the folded value is irrelevant — the reduction variable is
+    // eliminated from the result row.
+    const groups = groupBy(rows, (rw) => sigOf(rw, keyCols));
+    const out: Deriv[] = [];
+    for (const group of groups.values()) {
+      const row = resultRow(group[0]!, SYM_BOT, lubOf(store, group.map((g) => g.moment)));
+      if (row !== null) out.push(row);
+    }
+    return out;
   }
 
   if (cq.op === "last") {
@@ -484,10 +506,10 @@ function reduceRows(store: Store, cq: CQ, rows: Deriv[]): Deriv[] {
   const groups = groupBy(distinct, (rw) => sigOf(rw, keyCols));
   const out: Deriv[] = [];
   for (const group of groups.values()) {
-    let acc = aggregator.zero;
+    let acc = aggregator!.zero;
     for (const rw of group) {
       try {
-        acc = aggregator.fold(acc, rw.vals.get(V)!);
+        acc = aggregator!.fold(acc, rw.vals.get(V)!);
       } catch {
         /* skip non-foldable values, mirroring aggregateOver */
       }

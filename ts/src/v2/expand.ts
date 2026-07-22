@@ -1383,6 +1383,16 @@ function aggCompOutCols(
   const cols = join.filter((n) => n !== v);
   const colSeen = new Set(cols);
   noteFreeVars(comp.reduce.out, prefixSeen, colSeen, cols);
+  // `none` binds nothing (plans/v2-bracket-some.md): unlike `some`, it cannot
+  // carry a group key, since a negated query has no bindings to group by. So
+  // every query variable must be the reduction variable or bound before the
+  // aggregate — any leftover output column is a static error.
+  if (comp.reduce.op === "none" && cols.length > 0) {
+    throw new Error(
+      `${where}: 'none' binds nothing, so every aggregate query variable must be ` +
+      `the reduction variable or bound before the aggregate (got free column '${cols[0]}')`,
+    );
+  }
   return cols;
 }
 

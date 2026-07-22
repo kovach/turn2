@@ -58,6 +58,10 @@ export function renderRuleAtom(atom: RuleAtom): string {
       // Keep the source-level bare form `[ Q | op V ]` readable: there the
       // query-side name is a compiler-minted rename of `V` and printing
       // both halves is noise.
+      // `some`/`none` have no output value; render just `op ?V` (out is `_`).
+      if (op === "some" || op === "none") {
+        return `AggComp [${items} | ${op} ?${varName}]`;
+      }
       if (bare === true && out.tag === "Variable") {
         return `AggComp [${items} | ${op} ?${out.name}]`;
       }

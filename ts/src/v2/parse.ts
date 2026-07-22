@@ -1428,7 +1428,10 @@ function parseConstrainSubAtom(text: string, line: number): SubConstrain | Parse
 }
 
 // Reduction ops accepted in `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-const AGG_COMP_OPS = new Set(["count", "sum", "last"]);
+// `some`/`none` are the existence reductions (plans/v2-bracket-some.md): they
+// take no output pattern and eliminate their reduction variable from scope.
+// `none` is the negation of `some` — it succeeds exactly when `some` fails.
+const AGG_COMP_OPS = new Set(["count", "sum", "last", "some", "none"]);
 
 // Parse the inner text of a `[ Q | Out = op V ]` bracket aggregation
 // (brackets already stripped by the tokenizer; possibly joined from several
@@ -1479,7 +1482,7 @@ function parseAggCompText(
   }
   const op = rToks[0]!;
   if (!AGG_COMP_OPS.has(op)) {
-    return { line, message: `unknown reduction op '${op}' (expected count, sum, or last)` };
+    return { line, message: `unknown reduction op '${op}' (expected count, sum, last, some, or none)` };
   }
   const vTok = rToks[1]!;
   if (vTok === "_") {
@@ -1493,7 +1496,19 @@ function parseAggCompText(
   // itself (desugarBody freshens the query side).
   let out: Term;
   let bare = false;
-  if (eq < 0) {
+  if (op === "some" || op === "none") {
+    // Existence reductions: no folded value, and the reduction variable is
+    // eliminated from scope (plans/v2-bracket-some.md). `out` is a Wildcard,
+    // which encodes to `*cq-any` — it binds nothing and contributes no
+    // output column, so `[ p X | some X ]` is a pass/fail guard binding
+    // nothing and `[ p X Y | some Y ]` binds only `X`. `none` is the
+    // negation of `some`. An output pattern would have no value to receive,
+    // so `Out = some V` / `Out = none V` is rejected.
+    if (eq >= 0) {
+      return { line, message: `'${op}' takes no output pattern (write '[ Q | ${op} V ]')` };
+    }
+    out = { tag: "Wildcard" };
+  } else if (eq < 0) {
     out = { tag: "Variable", name: vTok };
     bare = true;
   } else {
