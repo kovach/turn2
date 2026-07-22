@@ -191,4 +191,48 @@ assertLaneInvariants(driftLayout, "drift");
 assertLaneInvariants(layout, "game");
 console.log("PASS: moves stay adjacent to setup; lane invariants hold");
 
+// --- Source provenance (plans/v2-source-timeline-link.md) ---
+// Every bar/fact tupleIndex must round-trip to a recorded source line so the
+// renderer can stamp data-source-line for source ↔ output linking.
+for (const b of layout.bars) {
+  const span = store.tupleSource[b.tupleIndex];
+  assert.ok(
+    span !== undefined && span.line >= 1,
+    `bar "${b.label}" (tuple ${b.tupleIndex}) has no source line`,
+  );
+}
+for (const f of layout.facts) {
+  if (f.tupleIndex < 0) continue; // synthetic "+N more" row
+  const span = store.tupleSource[f.tupleIndex];
+  assert.ok(
+    span !== undefined && span.line >= 1,
+    `fact "${f.label}" (tuple ${f.tupleIndex}) has no source line`,
+  );
+}
+console.log("PASS: bars/facts carry source-line provenance");
+
+// Sidebar rows (is/constrain tuples) carry the source line too.
+const sidebarSrc = `
+~is choice value
+`;
+const sidebarParsed = parse(sidebarSrc);
+if ("message" in sidebarParsed) {
+  throw new Error(`sidebar parse error line ${sidebarParsed.line}: ${sidebarParsed.message}`);
+}
+const sidebarLayout = layoutTimeline(
+  runFixpoint(sidebarParsed, 200, 5000).store,
+  { ...DEFAULT_OPTS, laneMode: "tree" },
+  () => 0,
+);
+assert.ok(sidebarLayout.sidebar.length > 0, "expected an `is` sidebar section");
+for (const section of sidebarLayout.sidebar) {
+  for (const row of section.rows) {
+    assert.ok(
+      row.line !== undefined && row.line >= 1,
+      `sidebar row "${row.label}" has no source line`,
+    );
+  }
+}
+console.log("PASS: sidebar rows carry source-line provenance");
+
 console.log("ALL v2 timeline-layout tests passed");

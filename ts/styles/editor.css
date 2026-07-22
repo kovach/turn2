@@ -43,6 +43,19 @@
 }
 .editor-gutter > div { min-width: 2ch; }
 
+/* Line-highlight overlay for source ↔ output linking. Owned by the Editor
+ * class (highlightLine/clearHighlight); spans the gutter and the text. It
+ * paints over the textarea (appended after it, semi-transparent), so it
+ * works regardless of the host's textarea background. */
+.editor-line-highlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--editor-line-highlight-bg, rgba(59, 130, 246, 0.25));
+  pointer-events: none;
+  display: none;
+}
+
 /* Autocomplete overlay (plans/v2-editor-autocomplete.md). Text uses the same
  * teal as the db-view predicate color (--syn-pred). */
 .editor-autocomplete {

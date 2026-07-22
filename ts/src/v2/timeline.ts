@@ -110,7 +110,9 @@ interface Fact {
 
 interface SidebarSection {
   heading: string;
-  rows: { label: string; full: string }[];
+  // `line` is the tuple's source line (store.tupleSource), when known —
+  // stamped as data-source-line for source ↔ output linking.
+  rows: { label: string; full: string; line: number | undefined }[];
 }
 
 export interface TimelineLayout {
@@ -371,11 +373,12 @@ export function layoutTimeline(
   }
 
   // Sidebar.
-  const isRows: { label: string; full: string }[] = [];
-  const constrainRows: { label: string; full: string }[] = [];
+  const isRows: { label: string; full: string; line: number | undefined }[] = [];
+  const constrainRows: { label: string; full: string; line: number | undefined }[] = [];
   for (const { idx, head } of sidebarTuples) {
     const t = store.tuples[idx]!;
     const full = renderAtom(store, t.atom);
+    const line = store.tupleSource[idx]?.line;
     if (head === "is") {
       const choice = t.atom.terms[1];
       const value = t.atom.terms[2];
@@ -383,12 +386,13 @@ export function layoutTimeline(
         isRows.push({
           label: `${renderTerm(store, choice)} ↦ ${renderTerm(store, value)}`,
           full,
+          line,
         });
       } else {
-        isRows.push({ label: full, full });
+        isRows.push({ label: full, full, line });
       }
     } else {
-      constrainRows.push({ label: full, full });
+      constrainRows.push({ label: full, full, line });
     }
   }
   isRows.sort((a, b) => a.label.localeCompare(b.label));
@@ -1026,6 +1030,9 @@ export function renderTimeline(
   };
 
   // Dot-to-dot cover arrows (edges mode), routed around the bar rects.
+  // Path `d` strings are kept so drawArrowHeads can re-emit head-only
+  // copies above the bars.
+  const arrowPaths: string[] = [];
   const drawPairArrows = (): void => {
     const barRects = layout.bars.map((b) => proj.barRect(
       layout.moments.get(b.lTok)!.rank,
@@ -1035,10 +1042,26 @@ export function renderTimeline(
     for (const p of layout.orderPairs) {
       const path = document.createElementNS(SVG_NS, "path");
       const fromRight = layout.momentAnchor.get(p.from)?.side === "r";
-      path.setAttribute("d", proj.pairArrowPath(anchorPoint(p.from), anchorPoint(p.to), barRects, fromRight));
+      const d = proj.pairArrowPath(anchorPoint(p.from), anchorPoint(p.to), barRects, fromRight);
+      arrowPaths.push(d);
+      path.setAttribute("d", d);
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", "#666");
       path.setAttribute("stroke-width", "1");
+      path.setAttribute("marker-end", "url(#tl-arrow)");
+      svg.appendChild(path);
+    }
+  };
+
+  // Head-only duplicates of the cover arrows, drawn after the bars: a
+  // strokeless path still renders its markers, so only the arrowhead
+  // paints. Bodies stay occluded by bars; heads always show.
+  const drawArrowHeads = (): void => {
+    for (const d of arrowPaths) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "none");
       path.setAttribute("marker-end", "url(#tl-arrow)");
       svg.appendChild(path);
     }
@@ -1107,9 +1130,16 @@ export function renderTimeline(
     rect.setAttribute("width", String(r.w));
     rect.setAttribute("height", String(r.h));
     rect.setAttribute("rx", "3");
-    rect.setAttribute("fill", "#264f78");
-    rect.setAttribute("stroke", "#4fc1ff");
+    // Theme-dependent fill/stroke come from host CSS (.tl-bar); these are
+    // fallbacks only. "transparent" rather than "none": a fill:none rect
+    // only receives pointer events on its stroke, which would break
+    // hover/click linking on the bar interior.
+    rect.setAttribute("fill", "transparent");
+    rect.setAttribute("stroke", "currentColor");
     rect.setAttribute("stroke-width", "1");
+    rect.classList.add("tl-bar");
+    const line = store.tupleSource[b.tupleIndex]?.line;
+    if (line !== undefined) rect.setAttribute("data-source-line", String(line));
     const title = document.createElementNS(SVG_NS, "title");
     title.textContent = b.full;
     rect.appendChild(title);
@@ -1118,20 +1148,32 @@ export function renderTimeline(
     const label = document.createElementNS(SVG_NS, "text");
     label.setAttribute("x", String(lp.x));
     label.setAttribute("y", String(lp.y));
-    label.setAttribute("fill", "#d4d4d4");
+    // Theme-dependent color comes from host CSS (.tl-bar-label); fallback
+    // to the SVG's currentColor.
+    label.setAttribute("fill", "currentColor");
+    label.classList.add("tl-bar-label");
     label.setAttribute("font-size", String(BAR_LABEL_PX));
     label.setAttribute("font-family", FONT_FAMILY);
     if (o.orientation === "vertical") label.setAttribute("text-anchor", "middle");
     label.textContent = b.label;
+    if (line !== undefined) {
+      label.setAttribute("data-source-line", String(line));
+      // Marks this text as a bar's label so cycle-scroll targets the rect
+      // instead (source-link.ts).
+      label.setAttribute("data-bar-label", "");
+    }
     svg.appendChild(label);
   }
   };
 
   if (edgesMode) {
-    // Arrows first so bars paint over them: an interval covers a cover-edge
-    // where they cross. Ties and dots stay on top of the bars.
+    // Arrow bodies under the bars (an interval covers a cover-edge where
+    // they cross — bar fills are opaque, including highlight fills, so
+    // occlusion doesn't vary), then heads re-drawn above so an arrowhead
+    // is never hidden. Ties and dots stay on top of the bars.
     drawPairArrows();
     drawBars();
+    drawArrowHeads();
     drawTies();
     drawMoments();
   } else {
@@ -1170,6 +1212,9 @@ export function renderTimeline(
       label.setAttribute("font-family", FONT_FAMILY);
       label.classList.add("tl-fact-label");
       label.textContent = f.label;
+      // tupleIndex is -1 for synthetic "+N more" rows.
+      const line = f.tupleIndex >= 0 ? store.tupleSource[f.tupleIndex]?.line : undefined;
+      if (line !== undefined) label.setAttribute("data-source-line", String(line));
       svg.appendChild(label);
     }
   }
@@ -1195,6 +1240,7 @@ export function renderTimeline(
         r.classList.add("timeline-sidebar-row");
         r.title = row.full;
         r.textContent = row.label;
+        if (row.line !== undefined) r.setAttribute("data-source-line", String(row.line));
         sidebarEl.appendChild(r);
       }
     }

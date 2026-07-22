@@ -8,9 +8,10 @@ import { runFixpoint } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
 import { renderTuples, renderTimelineH } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
+import { attachSourceLink } from "./v2/source-link.js";
 import type { Atom, Term } from "./v2/term.js";
 import type { Store } from "./v2/store.js";
-import type { ComponentOptions, Rule, RuleAtom } from "./v2/types.js";
+import type { ComponentOptions } from "./v2/types.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
@@ -265,7 +266,11 @@ function setDbView(v: "database" | "timeline"): void {
   dbView = v;
   refreshDbViewButtons();
   try { sessionStorage.setItem(DB_VIEW_KEY, v); } catch { /* ignore */ }
-  if (lastStore !== null) renderDbPane(lastStore);
+  if (lastStore !== null) {
+    renderDbPane(lastStore);
+    // Carry the caret highlight over to the freshly rendered view.
+    link.setCaretLine(editor.caretLine());
+  }
 }
 dbViewDatabaseEl.addEventListener("click", () => setDbView("database"));
 dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
@@ -305,11 +310,9 @@ async function run(): Promise<void> {
     setStatus(`parse error line ${parsed.line}: ${parsed.message}`, true);
     displayEl.innerHTML = "";
     setInfo("");
-    positiveLines = new Set();
+    link.update([]);
     return;
   }
-
-  positiveLines = collectPositiveLines(parsed.rules);
 
   let result;
   try {
@@ -320,14 +323,14 @@ async function run(): Promise<void> {
     setStatus((e as Error).message, true);
     displayEl.innerHTML = "";
     setInfo("");
-    positiveLines = new Set();
+    link.update([]);
     return;
   }
   const { store, status, iterations } = result;
   lastStore = store;
 
   renderDbPane(store);
-  highlightDbFromSource();
+  link.update(parsed.rules);
 
   // Status line.
   switch (status.kind) {
@@ -421,116 +424,13 @@ function updateCursorLine(): void {
   const line = before.split("\n").length;
   const col = pos - (before.lastIndexOf("\n") + 1) + 1;
   sourceCursorLineEl.textContent = `L${line}:${col}`;
-  currentLine = line;
-  highlightDbFromSource();
 }
 
 // --- Source ↔ output linking ---
 //
-// Forward: when the textarea caret enters a line that has a positive (assert/
-// ask/constrain) atom, every db row emitted from that atom gets a highlight.
-// Reverse: hovering a db row highlights its source line (via overlay) and any
-// sibling rows from the same line. Clicking a db row focuses the textarea
-// with the caret at the end of that line.
-let currentLine: number | null = null;
-// Lines that contain at least one positive atom; rebuilt on every `run()`.
-let positiveLines: Set<number> = new Set();
-
-const sourceLineHighlightEl = document.createElement("div");
-sourceLineHighlightEl.className = "source-line-highlight";
-sourceEl.parentElement!.insertBefore(sourceLineHighlightEl, sourceEl);
-
-function getLineMetrics(): { lineHeight: number; paddingTop: number } {
-  const style = getComputedStyle(sourceEl);
-  return {
-    lineHeight: parseFloat(style.lineHeight),
-    paddingTop: parseFloat(style.paddingTop),
-  };
-}
-
-function highlightSourceLine(line: number): void {
-  const { lineHeight, paddingTop } = getLineMetrics();
-  const top = sourceEl.offsetTop + paddingTop + (line - 1) * lineHeight - sourceEl.scrollTop;
-  sourceLineHighlightEl.style.display = "block";
-  sourceLineHighlightEl.style.top = `${top}px`;
-  sourceLineHighlightEl.style.height = `${lineHeight}px`;
-}
-
-function clearSourceHighlight(): void {
-  sourceLineHighlightEl.style.display = "none";
-}
-
-// Walk every Atom in the rules; record the source line of any whose marker
-// emits a tuple (asserts: `~`/`+`/`^`, plus `?`/`!` which desugar to assert
-// rows at eval time). Pure matches (`-`) don't qualify.
-function collectPositiveLines(rules: Rule[]): Set<number> {
-  const out = new Set<number>();
-  function walk(body: RuleAtom[]): void {
-    for (const a of body) {
-      if (a.tag === "Sub") { walk(a.body); continue; }
-      if (a.tag !== "Atom") continue;
-      if (a.marker === "match") continue;
-      out.add(a.span.line);
-    }
-  }
-  for (const r of rules) walk(r.body);
-  return out;
-}
-
-function highlightDbFromSource(): void {
-  dbEl.querySelectorAll(".source-highlight").forEach((el) => el.classList.remove("source-highlight"));
-  if (currentLine === null || !positiveLines.has(currentLine)) return;
-  const matches = dbEl.querySelectorAll(`[data-source-line="${currentLine}"]`);
-  matches.forEach((el) => el.classList.add("source-highlight"));
-  const last = matches[matches.length - 1];
-  if (last) last.scrollIntoView({ block: "nearest", behavior: "smooth" });
-}
-
-dbEl.addEventListener("mouseover", (e) => {
-  const target = (e.target as Element).closest("[data-source-line]");
-  if (!target) return;
-  const line = +target.getAttribute("data-source-line")!;
-  highlightSourceLine(line);
-  dbEl.querySelectorAll(`[data-source-line="${line}"]`).forEach((el) =>
-    el.classList.add("hover-highlight"),
-  );
-});
-
-dbEl.addEventListener("mouseout", (e) => {
-  const target = (e.target as Element).closest("[data-source-line]");
-  if (!target) return;
-  clearSourceHighlight();
-  dbEl.querySelectorAll(".hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
-});
-
-sourceEl.addEventListener("scroll", () => {
-  if (sourceLineHighlightEl.style.display !== "none") clearSourceHighlight();
-});
-
-dbEl.addEventListener("click", (e) => {
-  const target = (e.target as Element).closest("[data-source-line]");
-  if (!target) return;
-  const line = +target.getAttribute("data-source-line")!;
-  focusSourceLine(line);
-});
-
-function focusSourceLine(line: number): void {
-  const value = sourceEl.value;
-  const lines = value.split("\n");
-  const li = Math.min(Math.max(line, 1), lines.length) - 1;
-  let lineStart = 0;
-  for (let i = 0; i < li; i++) lineStart += lines[i]!.length + 1;
-  const lineEnd = lineStart + lines[li]!.length;
-  sourceEl.focus();
-  sourceEl.setSelectionRange(lineEnd, lineEnd);
-  // Center the line in the viewport, then re-show the overlay after the
-  // scroll listener clears it.
-  const { lineHeight, paddingTop } = getLineMetrics();
-  const lineTop = paddingTop + li * lineHeight;
-  sourceEl.scrollTop = lineTop - sourceEl.clientHeight / 2 + lineHeight / 2;
-  requestAnimationFrame(() => highlightSourceLine(line));
-  updateCursorLine();
-}
+// The linking logic (forward caret highlight, reverse hover/click, Ctrl-.
+// timeline cycling) lives in v2/source-link.ts, bound to the Editor and
+// both db-pane views.
 
 for (const ev of ["keyup", "click", "select", "focus"] as const) {
   sourceEl.addEventListener(ev, updateCursorLine);
@@ -539,17 +439,21 @@ document.addEventListener("selectionchange", () => {
   if (document.activeElement === sourceEl) updateCursorLine();
 });
 
-// Editor: Tab/Shift-Tab indent, Enter auto-indent, smart Home, smart Delete.
-// saveBackend "none" — this file owns the run/save lifecycle via its own
-// input listener; Editor only provides keybindings.
-new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true });
+// Editor: Tab/Shift-Tab indent, Enter auto-indent, smart Home, smart Delete,
+// line-highlight overlay. saveBackend "none" — this file owns the run/save
+// lifecycle via its own input listener.
+const editor = new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true });
+const link = attachSourceLink(editor, [dbEl, timelineInlineEl]);
 
 hideInternalEl.addEventListener("change", () => {
   void run();
 });
 
 dbTemporalEl.addEventListener("change", () => {
-  if (lastStore !== null) renderDbPane(lastStore);
+  if (lastStore !== null) {
+    renderDbPane(lastStore);
+    link.setCaretLine(editor.caretLine());
+  }
 });
 
 // Bootstrap: try to load `data/v2/ttt.t` from the server. If unavailable

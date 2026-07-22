@@ -1,5 +1,6 @@
 import type { Block, Doc, ListItem, Segment, Slide, Span } from "./types.js";
 import { Editor } from "../v2/editor.js";
+import { attachSourceLink, type SourceLink } from "../v2/source-link.js";
 import { renderTuples, renderTimelineH } from "../v2/render-output.js";
 import { parse as parseV2 } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
@@ -32,6 +33,8 @@ type ActiveBlock = {
   errorStrip: HTMLElement;
   enabled: { timeline: boolean; tuples: boolean };
   toggle: (which: "tuples" | "timeline") => void;
+  // Source ↔ output linking for this block's editor + hosts.
+  link: SourceLink;
   debounceTimer: ReturnType<typeof setTimeout> | null;
   // Most recent fixpoint result that parsed + ran to completion. Seeded
   // with an empty store so the very first render (even on a parse error
@@ -183,6 +186,7 @@ const HELP_ITEMS: Array<[string, string]> = [
   ["End · n", "Last slide"],
   ["t", "Toggle timeline"],
   ["d", "Toggle database"],
+  ["Ctrl-.", "In an editor: cycle timeline bars for the caret line"],
   ["?", "Toggle this help"],
   ["Esc", "Close this help"],
 ];
@@ -300,8 +304,10 @@ function readUrlHash(): Partial<State> {
 
 export function mount(root: HTMLElement, doc: Doc, source: string = ""): RenderHandle {
   const theme = doc.metadata.theme ?? "light";
-  document.body.classList.remove("mode-light", "mode-dark");
-  document.body.classList.add(`mode-${theme}`);
+  // Mode class lives on <html> so the shared theme.css palette applies
+  // (same carrier as index-v2).
+  document.documentElement.classList.remove("mode-light", "mode-dark");
+  document.documentElement.classList.add(`mode-${theme}`);
   const effectiveSlides = buildEffectiveSlides(doc);
   if (effectiveSlides.length === 0) {
     root.innerHTML = `<div class="empty">no slides</div>`;
@@ -509,6 +515,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     errorStrip,
     enabled,
     toggle: toggleFn,
+    link: null!,
     debounceTimer: null,
     lastValidStore: createStore(),
   };
@@ -538,6 +545,7 @@ function mountActive(h: RenderHandle, blockIdx: number, block: Block) {
     },
   });
   active.editor = editor;
+  active.link = attachSourceLink(editor, [tuplesHost, timelineHost]);
   editor.setFrozen(maxEdited(S) > h.state.reveal);
   hostBox.appendChild(toolbar);
   h.activeBlocks.push(active);
@@ -795,6 +803,7 @@ function teardownAll(h: RenderHandle) {
     // Edits live in h.edits, written synchronously on each keystroke, so
     // there is nothing to snapshot here.
     if (a.debounceTimer !== null) clearTimeout(a.debounceTimer);
+    a.link.destroy();
     a.editor.destroy();
     const outBox = a.containerEl.querySelector<HTMLElement>(".pres-output");
     if (outBox) outBox.remove();
@@ -834,6 +843,9 @@ function runAndRender(source: string, active: ActiveBlock): void {
   clearError(active);
   active.lastValidStore = store;
   renderIntoHosts(store, active.hosts, active.enabled);
+  // On error paths above, the previous linking state stays — the hosts
+  // still show lastValidStore.
+  active.link.update(parsed.rules);
 }
 
 function renderIntoHosts(

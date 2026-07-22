@@ -229,10 +229,11 @@ Renders a v2 store as a timeline visualization (SVG or ASCII): moments are laid 
 - `momentAnchor` / `momentTies` / `orderPairs` — edges-variant layout outputs: canonical dot per moment, dashed ties, drawn cover pairs
 - `renderTimelineAscii` — headless text rendering (no DOM/canvas)
 - episode (`~`) bars / fact (`+`) lines — the two tuple classes laid out; `is`/`_constrain` rows go to a sidebar
+- `data-source-line` — stamped on bar rects/labels, fact labels, and sidebar rows from `store.tupleSource`, consumed by `source-link.ts`
 
 # editor.ts
 
-A self-contained code-editor wrapper around a `<textarea>` that adds a line-number gutter, smart editing keybindings (indent/dedent, auto-indent on Enter, smart Home/Delete), auto-grow, a freeze (read-only) mode, an optional symbol/variable completion overlay, and debounced autosave to either a URL query param or a server endpoint. All edits go through `execCommand("insertText")` so native undo and input events keep working.
+A self-contained code-editor wrapper around a `<textarea>` that adds a line-number gutter, smart editing keybindings (indent/dedent, auto-indent on Enter, smart Home/Delete), auto-grow, a freeze (read-only) mode, an optional symbol/variable completion overlay, a line-highlight overlay + caret helpers for source ↔ output linking, and debounced autosave to either a URL query param or a server endpoint. All edits go through `execCommand("insertText")` so native undo and input events keep working.
 
 **Key terms:**
 - `Editor` — textarea wrapper adding a line-number gutter, smart-edit keybindings, auto-grow, freeze mode, autocomplete, and autosave
@@ -242,6 +243,18 @@ A self-contained code-editor wrapper around a `<textarea>` that adds a line-numb
 - `enableAutocomplete` — opt-in flag (on for index-v2, off for pres) for the completion overlay; logic lives in `autocomplete.ts`
 - caret mirror — off-screen div replicating textarea metrics to position the completion box at the cursor
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
+- `highlightLine` / `clearHighlight` / `focusLine` / `caretLine` — line-highlight overlay (positioned off the gutter rows, so it can't drift) and caret helpers used by `source-link.ts`
+
+# source-link.ts
+
+Bidirectional source-line ↔ output linking shared by the v2 editor page (`web-v2.ts`) and presentation-mode code blocks (`pres/render.ts`); see plans/v2-source-timeline-link.md. One linker binds one `Editor` to N output roots whose renderers stamp `data-source-line` (db rows from `render-output.ts`, timeline bars/facts/sidebar rows from `timeline.ts`). Forward: the caret entering a line with an emitting atom highlights every matching element across all outputs (db rows scroll into view; the timeline never auto-scrolls). Reverse: hovering a linked element shows the editor's line-highlight overlay and lights up same-line siblings; clicking moves the caret to that line. `Ctrl-.` cycles through the caret line's timeline occurrences, centering each in its scroll container in turn and wrapping around.
+
+**Key terms:**
+- `attachSourceLink` — binds an `Editor` + output roots; installs delegated hover/click handlers, caret tracking, and the `Ctrl-.` binding
+- `SourceLink` — handle: `update(rules)` after each run, `setCaretLine`, `destroy`
+- `collectPositiveLines` — source lines with at least one emitting atom (assert `~`/`+`/`^`, ask `?`, constrain `!`); only these get forward highlights
+- `source-highlight` / `hover-highlight` / `cycle-focus` — CSS classes applied to matched output elements (hosts style them)
+- cycle state — `{ line, presses }`; press N scrolls to occurrence N mod count, reset on caret-line change or `update`
 
 # autocomplete.ts
 

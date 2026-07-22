@@ -1,55 +1,89 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="mode-light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Presentation</title>
+  <link rel="stylesheet" href="/styles/theme.css" />
   <link rel="stylesheet" href="/styles/editor.css" />
   <style>
+    /* Shared palette + linking/timeline styles come from /styles/theme.css.
+     * Colors pres deliberately keeps different from the shared palette live
+     * in the --pres-* variables below (values preserved from the original
+     * hand-tuned per-mode rules). */
+    html.mode-light {
+      --pres-fg: var(--fg);
+      --pres-title-fg: #111;
+      --pres-date-fg: #777;
+      --pres-code-bg: #f3f3f0;
+      --pres-code-fg: #2a2a2a;
+      --pres-inline-code-bg: #ececec;
+      --pres-panel-bg: var(--bg);
+      --pres-warn-fg: #b8860b;
+      --pres-toggle-active-fg: #222;
+      --pres-toggle-active-border: #b5b5ac;
+      --pres-divider: rgba(0,0,0,0.08);
+      --pres-tuples-fg: var(--fg);
+      --pres-tl-fg: #444;
+    }
+    html.mode-dark {
+      --pres-fg: #e8e8e8;
+      --pres-title-fg: #fff;
+      --pres-date-fg: #888;
+      --pres-code-bg: #111;
+      --pres-code-fg: #d4d4d4;
+      --pres-inline-code-bg: #2a2a2a;
+      --pres-panel-bg: #1f1f1f;
+      --pres-warn-fg: #e0a82e;
+      --pres-toggle-active-fg: #e8e8e8;
+      --pres-toggle-active-border: #555;
+      --pres-divider: rgba(255,255,255,0.1);
+      --pres-tuples-fg: #c8c8c8;
+      --pres-tl-fg: #c8c8c8;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
-    body { font-family: system-ui, sans-serif; display: flex; align-items: safe center; justify-content: center; }
+    body { font-family: system-ui, sans-serif; display: flex; align-items: safe center; justify-content: center; background: var(--bg); color: var(--pres-fg); }
     #pres { width: 100%; max-width: 1100px; padding: 32px; }
     .slide { min-height: 70vh; display: flex; flex-direction: column; position: relative; }
     .slide-number { position: absolute; bottom: 0; right: 0; font-size: 14px; opacity: 0.45; user-select: none; }
     .slide-controls { position: absolute; top: 0; right: 0; display: flex; gap: 8px; align-items: flex-start; }
-    .help-button, .warn-button { padding: 4px 10px; border-radius: 6px;
+    .help-button, .warn-button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
       font: inherit; font-size: 15px; line-height: 1; cursor: pointer; background: transparent; color: #000; opacity: 0.75; }
     .help-button:hover, .warn-button:hover { opacity: 1; }
     .help-button .help-q { color: #d0c; }
-    .warn-button { color: #b8860b; font-weight: 600; }
+    .warn-button { color: var(--pres-warn-fg); font-weight: 600; }
     .warn-list { margin: 0; padding-left: 20px; font-size: 15px; max-width: 60ch; }
     .warn-list li { margin: 6px 0; }
     .help-overlay { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
       background: rgba(0,0,0,0.55); }
     .help-overlay[hidden] { display: none; }
     .help-panel { min-width: 320px; max-width: 90vw; padding: 24px 28px; border-radius: 10px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
+      box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+      background: var(--pres-panel-bg); color: var(--pres-fg); border: 1px solid var(--border-2); }
     .help-title { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
     .help-table { border-collapse: collapse; font-size: 16px; }
     .help-table td { padding: 4px 12px 4px 0; vertical-align: top; }
     .help-key { font-family: monospace; white-space: nowrap; opacity: 0.85; }
     .help-hint { margin-top: 16px; font-size: 13px; opacity: 0.6; }
-    .slide-title, .title-line { font-size: 36px; font-weight: 600; margin-bottom: 24px; }
+    .slide-title, .title-line { font-size: 36px; font-weight: 600; margin-bottom: 24px; color: var(--pres-title-fg); }
     .title-slide { align-items: center; justify-content: center; text-align: center; }
     .title-slide .title-line { font-size: 56px; }
-    .meta-author { margin-top: 12px; font-size: 22px; }
-    .meta-date   { margin-top: 8px; font-size: 18px; }
+    .meta-author { margin-top: 12px; font-size: 22px; color: var(--fg-mute); }
+    .meta-date   { margin-top: 8px; font-size: 18px; color: var(--pres-date-fg); }
     .slide-body { font-size: 22px; line-height: 1.55; }
     .block.para { margin: 14px 0; }
     .block.list { margin: 14px 0 14px 24px; }
     .block.list li { margin: 8px 0; }
-    .block.code { margin: 18px 0; border-radius: 6px; overflow: hidden; }
-    .slide-body code { font-family: monospace; font-size: 0.92em; padding: 1px 5px; border-radius: 3px; }
-    body.mode-light .slide-body code { background: #ececec; color: #2a2a2a; }
-    body.mode-dark  .slide-body code { background: #2a2a2a; color: #d4d4d4; }
+    .block.code { margin: 18px 0; border-radius: 6px; overflow: hidden;
+      background: var(--pres-code-bg); border: 1px solid var(--border-2); color: var(--pres-code-fg); }
+    .slide-body code { font-family: monospace; font-size: 0.92em; padding: 1px 5px; border-radius: 3px;
+      background: var(--pres-inline-code-bg); color: var(--pres-code-fg); }
     .pres-editor-host { padding: 0; color: inherit; }
     .pres-editor-toolbar { display: flex; gap: 6px; padding: 6px 12px; font-size: 12px; }
-    .pres-toggle { font: inherit; padding: 2px 10px; border-radius: 4px; cursor: pointer; background: transparent; }
-    body.mode-light .pres-toggle { color: #555; border: 1px solid #d0d0c8; }
-    body.mode-light .pres-toggle.active { background: #e8e8e0; color: #222; border-color: #b5b5ac; }
-    body.mode-dark  .pres-toggle { color: #aaa; border: 1px solid #333; }
-    body.mode-dark  .pres-toggle.active { background: #2a2a2a; color: #e8e8e8; border-color: #555; }
+    .pres-toggle { font: inherit; padding: 2px 10px; border-radius: 4px; cursor: pointer; background: transparent;
+      color: var(--fg-mute); border: 1px solid var(--border); }
+    .pres-toggle.active { background: var(--hover); color: var(--pres-toggle-active-fg); border-color: var(--pres-toggle-active-border); }
     /* Editor structural rules come from /styles/editor.css. Host overrides: */
     .pres-editor-host .editor-wrap {
       --editor-font-size: 16px;
@@ -58,54 +92,33 @@
       --editor-gutter-fg: rgba(0,0,0,0.35);
       --editor-gutter-border: rgba(0,0,0,0.2);
     }
+    html.mode-dark .pres-editor-host .editor-wrap {
+      --editor-gutter-fg: rgba(255,255,255,0.4);
+      --editor-gutter-border: rgba(255,255,255,0.25);
+    }
     .pres-editor-host .editor-textarea {
       border: none; outline: none; background: transparent;
       color: inherit; display: block;
       padding-top: 14px; padding-right: 16px; padding-bottom: 14px;
     }
-    body.mode-dark .pres-editor-host .editor-wrap {
-      --editor-gutter-fg: rgba(255,255,255,0.4);
-      --editor-gutter-border: rgba(255,255,255,0.25);
-    }
-    .pres-output { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid rgba(0,0,0,0.08); }
-    .pres-output-tuples { font-family: monospace; font-size: 13px; line-height: 1.45; white-space: pre; overflow-x: auto; }
+    .pres-output { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--pres-divider); }
+    .pres-output-tuples { font-family: monospace; font-size: 13px; line-height: 1.45; white-space: pre; overflow-x: auto; color: var(--pres-tuples-fg); }
     .pres-output-timeline { overflow-x: auto; }
-    .pres-output-timeline .timeline-svg { display: block; }
-    body.mode-light .pres-output-timeline .timeline-svg { color: #444; }
-    body.mode-dark  .pres-output-timeline .timeline-svg { color: #c8c8c8; }
-    .pres-eval-error { color: #c0392b; font-family: monospace; font-size: 13px; padding: 4px 0; }
+    .pres-output-timeline .timeline-svg { display: block; color: var(--pres-tl-fg); }
+    .pres-eval-error { color: var(--err); font-family: monospace; font-size: 13px; padding: 4px 0; }
+    /* Source ↔ output linking: shared rules in /styles/theme.css; the
+     * source-side line overlay is .editor-line-highlight in editor.css. */
+    .pres-output-tuples .row { display: inline-block; line-height: inherit; }
     .frag.hidden-frag { visibility: hidden; }
     .empty { opacity: 0.6; }
-    /* DB pane class colors. Theme-scoped below. */
+    /* DB pane class colors. */
     .pres-output-tuples .group-heading { display: block; margin-top: 6px; opacity: 0.7; }
     .pres-output-tuples .pred { font-weight: 600; }
     .pres-output-tuples .var { opacity: 0.8; }
     .pres-output-tuples .interval { opacity: 0.55; }
-
-    /* Light mode (default) */
-    body.mode-light { background: #fdfdfd; color: #1a1a1a; }
-    body.mode-light .slide-title, body.mode-light .title-line { color: #111; }
-    body.mode-light .meta-author { color: #555; }
-    body.mode-light .meta-date   { color: #777; }
-    body.mode-light .block.code { background: #f3f3f0; border: 1px solid #e0e0db; color: #2a2a2a; }
-    body.mode-light .help-button, body.mode-light .warn-button { border: 1px solid #d0d0c8; }
-    body.mode-light .help-panel { background: #fdfdfd; color: #1a1a1a; border: 1px solid #e0e0db; }
-
-    /* Dark mode */
-    body.mode-dark { background: #1a1a1a; color: #e8e8e8; }
-    body.mode-dark .slide-title, body.mode-dark .title-line { color: #fff; }
-    body.mode-dark .meta-author { color: #aaa; }
-    body.mode-dark .meta-date   { color: #888; }
-    body.mode-dark .block.code { background: #111; border: 1px solid #2a2a2a; color: #d4d4d4; }
-    body.mode-dark .pres-output { border-top-color: rgba(255,255,255,0.1); }
-    body.mode-dark .pres-output-tuples { color: #c8c8c8; }
-    body.mode-dark .pres-eval-error { color: #f87171; }
-    body.mode-dark .help-button, body.mode-dark .warn-button { border: 1px solid #333; }
-    body.mode-dark .warn-button { color: #e0a82e; }
-    body.mode-dark .help-panel { background: #1f1f1f; color: #e8e8e8; border: 1px solid #2a2a2a; }
   </style>
 </head>
-<body class="mode-light">
+<body>
   <div id="pres"></div>
   <script type="module" src="/src/pres/main.js"></script>
 </body>

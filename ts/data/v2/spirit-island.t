@@ -60,7 +60,19 @@ look
 target-power E
   (:it E . power:range R)
   (:actor E Spirit)
-  ?X, !spirit:land Spirit X, ^:source E X
-  ?Y, !within-range X Y R,   ^:target E Y
-  is X Source, is Y Target
+  ?X, !land X, ^:source E X
+  ?Y, !land Y, ^:target E Y
+
+target-power .(:actor S)
+  entwined S T
+  spirit:presence T P
+  ^spirit:presence S P
+
+target-power 
+  .(:actor S, spirit:name S mists-shift-and-flow)
+  .(:target.is T)
+  ~may ( true )
+  ~gather.(:to.^is T).(:it I, !spirit:presence S I)
+
+may, ?X, !boolean X, is X true, ^true
 

@@ -33,6 +33,12 @@ export class Editor {
   private lastLineCount = 0;
   private _frozen = false;
 
+  // Line-highlight overlay (source ↔ output linking). Lazily created inside
+  // `wrap` so it positions against the same origin as the gutter rows —
+  // exact alignment regardless of what re-parents the textarea.
+  private highlightEl: HTMLDivElement | null = null;
+  private highlightedLine: number | null = null;
+
   // Autocomplete state. `acBox`/`acMirror` are created lazily on first show.
   private readonly acEnabled: boolean;
   private acBox: HTMLDivElement | null = null;
@@ -82,6 +88,7 @@ export class Editor {
     this.inputHandler = () => this.onInput();
     this.scrollHandler = () => {
       this.gutterEl.scrollTop = this.ta.scrollTop;
+      this.repositionHighlight();
       if (this.acEnabled) this.hideAutocomplete();
     };
     this.mouseDownHandler = (ev) => {
@@ -128,6 +135,71 @@ export class Editor {
   get element(): HTMLTextAreaElement { return this.ta; }
   focus(): void { this.ta.focus(); }
 
+  // 1-indexed line of the caret (selectionStart).
+  caretLine(): number {
+    let line = 1;
+    const pos = this.ta.selectionStart;
+    const v = this.ta.value;
+    for (let i = 0; i < pos; i++) if (v.charCodeAt(i) === 10) line++;
+    return line;
+  }
+
+  // Show the line-highlight overlay at `line`. Vertical placement is read
+  // off the gutter row for that line, so overlay and gutter can't drift.
+  highlightLine(line: number): void {
+    const row = this.gutterEl.children[line - 1] as HTMLElement | undefined;
+    if (row === undefined) { this.clearHighlight(); return; }
+    if (this.highlightEl === null) {
+      this.highlightEl = document.createElement("div");
+      this.highlightEl.className = "editor-line-highlight";
+      this.wrap.appendChild(this.highlightEl);
+    }
+    this.highlightedLine = line;
+    this.repositionHighlight();
+  }
+
+  clearHighlight(): void {
+    this.highlightedLine = null;
+    if (this.highlightEl !== null) this.highlightEl.style.display = "none";
+  }
+
+  // Move the caret to the end of `line` and center it in the viewport.
+  // Works on frozen (readOnly) editors — selection is still allowed there.
+  focusLine(line: number): void {
+    const lines = this.ta.value.split("\n");
+    const li = Math.min(Math.max(line, 1), lines.length) - 1;
+    let lineStart = 0;
+    for (let i = 0; i < li; i++) lineStart += lines[i]!.length + 1;
+    const lineEnd = lineStart + lines[li]!.length;
+    this.ta.focus();
+    this.ta.setSelectionRange(lineEnd, lineEnd);
+    const row = this.gutterEl.children[li] as HTMLElement | undefined;
+    if (row !== undefined) {
+      this.ta.scrollTop = row.offsetTop - this.gutterEl.offsetTop
+        - this.ta.clientHeight / 2 + row.offsetHeight / 2;
+    }
+    this.highlightLine(li + 1);
+  }
+
+  // Sync the overlay to the current scroll position; hide it when its line
+  // is scrolled out of the visible box (or no longer exists).
+  private repositionHighlight(): void {
+    if (this.highlightEl === null || this.highlightedLine === null) return;
+    const row = this.gutterEl.children[this.highlightedLine - 1] as HTMLElement | undefined;
+    if (row === undefined) { this.clearHighlight(); return; }
+    // Row offsets are relative to `wrap` (the nearest positioned ancestor);
+    // subtract the textarea's scroll to get the visual position.
+    const top = row.offsetTop - this.ta.scrollTop;
+    const h = row.offsetHeight;
+    if (top + h <= this.gutterEl.offsetTop || top >= this.gutterEl.offsetTop + this.ta.clientHeight) {
+      this.highlightEl.style.display = "none";
+      return;
+    }
+    this.highlightEl.style.display = "block";
+    this.highlightEl.style.top = `${top}px`;
+    this.highlightEl.style.height = `${h}px`;
+  }
+
   get frozen(): boolean { return this._frozen; }
   setFrozen(v: boolean): void {
     if (this._frozen === v) return;
@@ -150,6 +222,7 @@ export class Editor {
     this.ta.removeEventListener("blur", this.blurHandler);
     this.acBox?.remove();
     this.acMirror?.remove();
+    this.highlightEl?.remove();
     if (!this.adopted) this.wrap.remove();
   }
 

@@ -4,27 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Turn Tool</title>
+  <link rel="stylesheet" href="/styles/theme.css" />
   <link rel="stylesheet" href="/styles/editor.css" />
   <style>
-    /* Theme palette */
-    html.mode-dark {
-      --bg: #1a1a1a; --bg-2: #1e1e1e; --bg-3: #252525;
-      --fg: #d4d4d4; --fg-mute: #aaa; --fg-mute2: #888; --fg-faint: #666;
-      --border: #333; --border-2: #2a2a2a; --hover: #2a2a2a;
-      --syn-head: #4fc1ff; --syn-ref: #c586c0; --syn-sym: #d4d4d4;
-      --syn-pred: #4ec9b0; --syn-var: #dcdcaa;
-      --syn-interval: #666; --syn-group: #888;
-      --err: #f87171; --link: #4fc1ff;
-    }
-    html.mode-light {
-      --bg: #fdfdfd; --bg-2: #f5f5f0; --bg-3: #ebebe5;
-      --fg: #1a1a1a; --fg-mute: #555; --fg-mute2: #666; --fg-faint: #888;
-      --border: #d0d0c8; --border-2: #e0e0db; --hover: #e8e8e0;
-      --syn-head: #0a64a4; --syn-ref: #8a3398; --syn-sym: #1a1a1a;
-      --syn-pred: #007a5a; --syn-var: #885a00;
-      --syn-interval: #999; --syn-group: #777;
-      --err: #c0392b; --link: #0a64a4;
-    }
+    /* Theme palette + linking/timeline styles come from /styles/theme.css. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: monospace; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
     header { padding: 8px 16px; background: var(--bg-3); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
@@ -79,23 +62,10 @@
     /* Timeline rendered inline inside the db pane */
     #timeline-inline { flex: 1; overflow: auto; padding: 12px; min-width: 0; }
     .timeline-svg { display: block; color: var(--fg); }
-    /* Source ↔ output linking */
-    .editors .pane { position: relative; }
-    #db .row { display: inline-block; line-height: inherit; }
-    #db .row[data-source-line] { cursor: pointer; }
-    #db .row.source-highlight { background-color: rgba(59, 130, 246, 0.30); }
-    #db .row.hover-highlight  { background-color: rgba(168, 85, 247, 0.30); }
-    .source-line-highlight {
-      position: absolute;
-      left: 0;
-      right: 0;
-      background-color: rgba(59, 130, 246, 0.25);
-      pointer-events: none;
-      z-index: 1;
-      display: none;
-    }
+    /* Source ↔ output linking: shared rules in /styles/theme.css; the
+     * source-side line overlay is .editor-line-highlight in editor.css. */
     .editors .pane { background: var(--bg); }
-    .editors textarea { background: transparent; position: relative; z-index: 2; }
+    #db .row { display: inline-block; line-height: inherit; }
   </style>
   <script>
     (function() {
