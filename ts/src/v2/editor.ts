@@ -33,11 +33,19 @@ export class Editor {
   private lastLineCount = 0;
   private _frozen = false;
 
-  // Line-highlight overlay (source ↔ output linking). Lazily created inside
-  // `wrap` so it positions against the same origin as the gutter rows —
-  // exact alignment regardless of what re-parents the textarea.
+  // Line/range-highlight overlay (source ↔ output linking). Lazily created
+  // inside `wrap` so it positions against the same origin as the gutter rows —
+  // exact alignment regardless of what re-parents the textarea. With
+  // `startCol`/`endCol` set the overlay covers only that column range
+  // (highlightRange); otherwise it is a full-width line bar (highlightLine).
   private highlightEl: HTMLDivElement | null = null;
-  private highlightedLine: number | null = null;
+  private highlighted: { line: number; startCol?: number; endCol?: number } | null = null;
+  // Character-cell metrics for column → pixel mapping, re-measured on each
+  // highlightRange call (so font-size changes can't go stale) and reused by
+  // repositionHighlight on scroll. Valid because the textarea is monospace,
+  // `white-space: pre`, and never soft-wraps (styles/editor.css).
+  private chMetrics: { ch: number; padLeft: number } | null = null;
+  private chProbe: HTMLSpanElement | null = null;
 
   // Autocomplete state. `acBox`/`acMirror` are created lazily on first show.
   private readonly acEnabled: boolean;
@@ -137,42 +145,65 @@ export class Editor {
 
   // 1-indexed line of the caret (selectionStart).
   caretLine(): number {
-    let line = 1;
-    const pos = this.ta.selectionStart;
-    const v = this.ta.value;
-    for (let i = 0; i < pos; i++) if (v.charCodeAt(i) === 10) line++;
-    return line;
+    return this.caretPos().line;
   }
 
-  // Show the line-highlight overlay at `line`. Vertical placement is read
-  // off the gutter row for that line, so overlay and gutter can't drift.
+  // 1-indexed line and 0-indexed column of the caret (selectionStart), for
+  // matching against atom span column ranges (source-link.ts).
+  caretPos(): { line: number; col: number } {
+    let line = 1;
+    let lineStart = 0;
+    const pos = this.ta.selectionStart;
+    const v = this.ta.value;
+    for (let i = 0; i < pos; i++) {
+      if (v.charCodeAt(i) === 10) { line++; lineStart = i + 1; }
+    }
+    return { line, col: pos - lineStart };
+  }
+
+  // Show the full-width line-highlight overlay at `line`. Vertical placement
+  // is read off the gutter row for that line, so overlay and gutter can't
+  // drift.
   highlightLine(line: number): void {
-    const row = this.gutterEl.children[line - 1] as HTMLElement | undefined;
+    this.setHighlight({ line });
+  }
+
+  // Show the highlight overlay over columns [startCol, endCol) of `line`
+  // (0-indexed source columns, per Span).
+  highlightRange(line: number, startCol: number, endCol: number): void {
+    this.chMetrics = this.measureChMetrics();
+    this.setHighlight({ line, startCol, endCol });
+  }
+
+  private setHighlight(h: { line: number; startCol?: number; endCol?: number }): void {
+    const row = this.gutterEl.children[h.line - 1] as HTMLElement | undefined;
     if (row === undefined) { this.clearHighlight(); return; }
     if (this.highlightEl === null) {
       this.highlightEl = document.createElement("div");
       this.highlightEl.className = "editor-line-highlight";
       this.wrap.appendChild(this.highlightEl);
     }
-    this.highlightedLine = line;
+    this.highlighted = h;
     this.repositionHighlight();
   }
 
   clearHighlight(): void {
-    this.highlightedLine = null;
+    this.highlighted = null;
     if (this.highlightEl !== null) this.highlightEl.style.display = "none";
   }
 
-  // Move the caret to the end of `line` and center it in the viewport.
-  // Works on frozen (readOnly) editors — selection is still allowed there.
-  focusLine(line: number): void {
+  // Move the caret to `line` (at `col`, or the line's end) and center it in
+  // the viewport. Works on frozen (readOnly) editors — selection is still
+  // allowed there.
+  focusLine(line: number, col?: number): void {
     const lines = this.ta.value.split("\n");
     const li = Math.min(Math.max(line, 1), lines.length) - 1;
     let lineStart = 0;
     for (let i = 0; i < li; i++) lineStart += lines[i]!.length + 1;
     const lineEnd = lineStart + lines[li]!.length;
+    const caret = col === undefined ? lineEnd : Math.min(lineStart + Math.max(col, 0), lineEnd);
     this.ta.focus();
-    this.ta.setSelectionRange(lineEnd, lineEnd);
+    this.ta.setSelectionRange(caret, caret);
     const row = this.gutterEl.children[li] as HTMLElement | undefined;
     if (row !== undefined) {
       this.ta.scrollTop = row.offsetTop - this.gutterEl.offsetTop
@@ -181,11 +212,13 @@ export class Editor {
     this.highlightLine(li + 1);
   }
 
-  // Sync the overlay to the current scroll position; hide it when its line
-  // is scrolled out of the visible box (or no longer exists).
+  // Sync the overlay to the current scroll position (vertical and, for a
+  // column range, horizontal); hide it when its line is scrolled out of the
+  // visible box (or no longer exists).
   private repositionHighlight(): void {
-    if (this.highlightEl === null || this.highlightedLine === null) return;
-    const row = this.gutterEl.children[this.highlightedLine - 1] as HTMLElement | undefined;
+    if (this.highlightEl === null || this.highlighted === null) return;
+    const { line, startCol, endCol } = this.highlighted;
+    const row = this.gutterEl.children[line - 1] as HTMLElement | undefined;
     if (row === undefined) { this.clearHighlight(); return; }
     // Row offsets are relative to `wrap` (the nearest positioned ancestor);
     // subtract the textarea's scroll to get the visual position.
@@ -195,9 +228,54 @@ export class Editor {
       this.highlightEl.style.display = "none";
       return;
     }
-    this.highlightEl.style.display = "block";
-    this.highlightEl.style.top = `${top}px`;
-    this.highlightEl.style.height = `${h}px`;
+    const st = this.highlightEl.style;
+    if (startCol !== undefined && endCol !== undefined && this.chMetrics !== null) {
+      // Column range: monospace + pre + no soft-wrap makes x a linear
+      // function of the column. Clip to the textarea's text viewport so a
+      // horizontally scrolled-out range doesn't bleed over the gutter.
+      const { ch, padLeft } = this.chMetrics;
+      const viewLeft = this.ta.offsetLeft + this.ta.clientLeft;
+      const viewRight = viewLeft + this.ta.clientWidth;
+      const x0 = viewLeft + padLeft + startCol * ch - this.ta.scrollLeft;
+      const x1 = viewLeft + padLeft + endCol * ch - this.ta.scrollLeft;
+      const left = Math.max(x0, viewLeft);
+      const right = Math.min(x1, viewRight);
+      if (right <= left) {
+        st.display = "none";
+        return;
+      }
+      st.left = `${left}px`;
+      st.width = `${right - left}px`;
+      st.right = "auto";
+    } else {
+      st.left = "0";
+      st.width = "auto";
+      st.right = "0";
+    }
+    st.display = "block";
+    st.top = `${top}px`;
+    st.height = `${h}px`;
+  }
+
+  // Width of one character cell plus the textarea's left padding, measured
+  // from a hidden probe span carrying the textarea's computed font.
+  private measureChMetrics(): { ch: number; padLeft: number } {
+    if (this.chProbe === null) {
+      this.chProbe = document.createElement("span");
+      this.chProbe.style.position = "absolute";
+      this.chProbe.style.visibility = "hidden";
+      this.chProbe.style.whiteSpace = "pre";
+      this.chProbe.setAttribute("aria-hidden", "true");
+      this.chProbe.textContent = "0".repeat(64);
+      this.wrap.appendChild(this.chProbe);
+    }
+    const cs = getComputedStyle(this.ta);
+    this.chProbe.style.font = cs.font;
+    this.chProbe.style.letterSpacing = cs.letterSpacing;
+    return {
+      ch: this.chProbe.getBoundingClientRect().width / 64,
+      padLeft: parseFloat(cs.paddingLeft) || 0,
+    };
   }
 
   get frozen(): boolean { return this._frozen; }
@@ -223,6 +301,7 @@ export class Editor {
     this.acBox?.remove();
     this.acMirror?.remove();
     this.highlightEl?.remove();
+    this.chProbe?.remove();
     if (!this.adopted) this.wrap.remove();
   }
 

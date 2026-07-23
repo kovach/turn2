@@ -14,7 +14,7 @@
 // `is` rows and `constrain` (`!`) rows are pulled out to the sidebar.
 // See plans/v2-timeline-view.md and plans/v2-timeline-orientation.md.
 
-import type { Atom, Term } from "./term.js";
+import { spanKey, type Atom, type Span, type Term } from "./term.js";
 import type { Store } from "./store.js";
 import { tokenOf } from "./store.js";
 import { renderAtom, renderTerm, renderTermShallow } from "./print.js";
@@ -144,9 +144,9 @@ interface Fact {
 
 interface SidebarSection {
   heading: string;
-  // `line` is the tuple's source line (store.tupleSource), when known —
-  // stamped as data-source-line for source ↔ output linking.
-  rows: { label: string; full: string; line: number | undefined }[];
+  // `span` is the tuple's source span (store.tupleSource), when known —
+  // stamped as data-source-span for source ↔ output linking.
+  rows: { label: string; full: string; span: Span | undefined }[];
 }
 
 export interface TimelineLayout {
@@ -510,12 +510,12 @@ export function layoutTimeline(
   }
 
   // Sidebar.
-  const isRows: { label: string; full: string; line: number | undefined }[] = [];
-  const constrainRows: { label: string; full: string; line: number | undefined }[] = [];
+  const isRows: { label: string; full: string; span: Span | undefined }[] = [];
+  const constrainRows: { label: string; full: string; span: Span | undefined }[] = [];
   for (const { idx, head } of sidebarTuples) {
     const t = store.tuples[idx]!;
     const full = renderAtom(store, t.atom);
-    const line = store.tupleSource[idx]?.line;
+    const span = store.tupleSource[idx];
     if (head === "is") {
       const choice = t.atom.terms[1];
       const value = t.atom.terms[2];
@@ -523,13 +523,13 @@ export function layoutTimeline(
         isRows.push({
           label: `${renderTerm(store, choice)} ↦ ${renderTerm(store, value)}`,
           full,
-          line,
+          span,
         });
       } else {
-        isRows.push({ label: full, full, line });
+        isRows.push({ label: full, full, span });
       }
     } else {
-      constrainRows.push({ label: full, full, line });
+      constrainRows.push({ label: full, full, span });
     }
   }
   isRows.sort((a, b) => a.label.localeCompare(b.label));
@@ -1286,8 +1286,8 @@ export function renderTimeline(
     // right-click collapse toggle in web-v2). Omitted when there is no tuple.
     if (b.tupleIndex >= 0) rect.setAttribute("data-tl-tuple", String(b.tupleIndex));
     if (b.collapsed) rect.setAttribute("data-tl-collapsed", "");
-    const line = store.tupleSource[b.tupleIndex]?.line;
-    if (line !== undefined) rect.setAttribute("data-source-line", String(line));
+    const key = spanKey(store.tupleSource[b.tupleIndex]);
+    if (key !== undefined) rect.setAttribute("data-source-span", key);
     const title = document.createElementNS(SVG_NS, "title");
     title.textContent = b.full;
     rect.appendChild(title);
@@ -1312,8 +1312,8 @@ export function renderTimeline(
     label.setAttribute("font-family", FONT_FAMILY);
     if (o.orientation === "vertical" || b.collapsed) label.setAttribute("text-anchor", "middle");
     label.textContent = b.label;
-    if (line !== undefined) {
-      label.setAttribute("data-source-line", String(line));
+    if (key !== undefined) {
+      label.setAttribute("data-source-span", key);
       // Marks this text as a bar's label so cycle-scroll targets the rect
       // instead (source-link.ts).
       label.setAttribute("data-bar-label", "");
@@ -1369,8 +1369,8 @@ export function renderTimeline(
       label.classList.add("tl-fact-label");
       label.textContent = f.label;
       // tupleIndex is -1 for synthetic "+N more" rows.
-      const line = f.tupleIndex >= 0 ? store.tupleSource[f.tupleIndex]?.line : undefined;
-      if (line !== undefined) label.setAttribute("data-source-line", String(line));
+      const key = f.tupleIndex >= 0 ? spanKey(store.tupleSource[f.tupleIndex]) : undefined;
+      if (key !== undefined) label.setAttribute("data-source-span", key);
       svg.appendChild(label);
     }
   }
@@ -1396,7 +1396,8 @@ export function renderTimeline(
         r.classList.add("timeline-sidebar-row");
         r.title = row.full;
         r.textContent = row.label;
-        if (row.line !== undefined) r.setAttribute("data-source-line", String(row.line));
+        const rowKey = spanKey(row.span);
+        if (rowKey !== undefined) r.setAttribute("data-source-span", rowKey);
         sidebarEl.appendChild(r);
       }
     }

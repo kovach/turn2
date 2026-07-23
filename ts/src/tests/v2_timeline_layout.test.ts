@@ -195,7 +195,7 @@ console.log("PASS: moves stay adjacent to setup; lane invariants hold");
 
 // --- Source provenance (plans/v2-source-timeline-link.md) ---
 // Every bar/fact tupleIndex must round-trip to a recorded source line so the
-// renderer can stamp data-source-line for source ↔ output linking.
+// renderer can stamp data-source-span for source ↔ output linking.
 for (const b of layout.bars) {
   const span = store.tupleSource[b.tupleIndex];
   assert.ok(
@@ -230,12 +230,12 @@ assert.ok(sidebarLayout.sidebar.length > 0, "expected an `is` sidebar section");
 for (const section of sidebarLayout.sidebar) {
   for (const row of section.rows) {
     assert.ok(
-      row.line !== undefined && row.line >= 1,
-      `sidebar row "${row.label}" has no source line`,
+      row.span !== undefined && row.span.line >= 1,
+      `sidebar row "${row.label}" has no source span`,
     );
   }
 }
-console.log("PASS: sidebar rows carry source-line provenance");
+console.log("PASS: sidebar rows carry source-span provenance");
 
 // --- Collapsed intervals (`opts.collapsed`) ---
 const collapseSrc = `

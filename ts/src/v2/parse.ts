@@ -13,13 +13,22 @@ export interface ParseError {
   message: string;
 }
 
+// `startCol`/`endCol` on atom / equal / exception tokens are 0-indexed
+// columns into the original source line (comment stripping only slices the
+// tail, so indices into the stripped line are original columns). They cover
+// the token's full trimmed extent including the marker / `=` / braces
+// (plans/v2-atom-span-provenance.md). Tokens produced by re-tokenizing a
+// text *fragment* (exception RHS) carry fragment-relative columns; the
+// caller re-bases them via `remapItemLines`.
 type Token =
   | { tag: "open"; line: number }
   | { tag: "close"; sequence: boolean; line: number }
-  | { tag: "atom"; marker: Marker; text: string; line: number }
+  | { tag: "atom"; marker: Marker; text: string; line: number; startCol: number; endCol: number }
   // Exception block `{...}` (plans/v2-exceptions.md). `text` is the inner
-  // text, braces stripped.
-  | { tag: "exception"; text: string; line: number }
+  // text, braces stripped and trimmed; `textStartCol` is the column of
+  // `text`'s first char in the source line, so fragment-relative columns in
+  // the parsed RHS can be re-based onto the line.
+  | { tag: "exception"; text: string; line: number; startCol: number; endCol: number; textStartCol: number }
   // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
   // `text` is the inner text, brackets stripped; may span multiple source
   // lines (joined with spaces). `line` is the opening line, `endLine` the
@@ -30,7 +39,7 @@ type Token =
   // command name and the `:=`; the RHS tokenizes normally and follows as an
   // `aggcomp` token.
   | { tag: "macroDef"; headText: string; line: number }
-  | { tag: "equal"; text: string; line: number }
+  | { tag: "equal"; text: string; line: number; startCol: number; endCol: number }
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number }
@@ -146,7 +155,15 @@ export function tokenize(input: string): Token[] | ParseError {
         if (end < 0) {
           return { line: lineno, message: "unterminated '{' (exception block must close on the same line)" };
         }
-        tokens.push({ tag: "exception", text: raw.slice(pos + 1, end).trim(), line: lineno });
+        const inner = raw.slice(pos + 1, end);
+        tokens.push({
+          tag: "exception",
+          text: inner.trim(),
+          line: lineno,
+          startCol: pos,
+          endCol: end + 1,
+          textStartCol: pos + 1 + (inner.length - inner.trimStart().length),
+        });
         pos = end + 1;
         atomStart = true;
         continue;
@@ -320,11 +337,16 @@ export function tokenize(input: string): Token[] | ParseError {
       }
       const text = raw.slice(start, pos).trim();
       if (text.length > 0) {
+        // `start` sits on a non-whitespace char (leading ws was skipped
+        // above), so the trim only dropped trailing ws and the token's
+        // source extent is start..start+text.length — marker included.
+        const startCol = start;
+        const endCol = start + text.length;
         const m = text[0]!;
         // `=` is the equality marker only when followed by whitespace (or
         // bare). `=foo` stays a Symbol-headed match atom.
         if (m === "=" && (text.length === 1 || /\s/.test(text[1]!))) {
-          tokens.push({ tag: "equal", text: text.slice(1).trim(), line: lineno });
+          tokens.push({ tag: "equal", text: text.slice(1).trim(), line: lineno, startCol, endCol });
         } else {
           let marker: Marker;
           let body: string;
@@ -335,7 +357,7 @@ export function tokenize(input: string): Token[] | ParseError {
             marker = "match";
             body = text;
           }
-          tokens.push({ tag: "atom", marker, text: body, line: lineno });
+          tokens.push({ tag: "atom", marker, text: body, line: lineno, startCol, endCol });
         }
       }
       atomStart = false;
@@ -708,7 +730,7 @@ function parseBodyItems(
     }
     if (tok.tag === "exception") {
       if (fragment) return { line: tok.line, message: "exception RHS may not contain an exception" };
-      const exc = parseExceptionBlock(tok.text, tok.line);
+      const exc = parseExceptionBlock(tok);
       if ("message" in exc) return exc;
       top.items.push(exc);
       top.needsContent = false;
@@ -724,7 +746,7 @@ function parseBodyItems(
       continue;
     }
     if (tok.tag === "equal") {
-      const parsedEq = parseEqualText(tok.text, tok.line);
+      const parsedEq = parseEqualText(tok.text, tok.line, tok.startCol, tok.endCol);
       if ("message" in parsedEq) return parsedEq;
       top.items.push({ kind: "atom", atom: parsedEq });
       top.needsContent = false;
@@ -736,7 +758,7 @@ function parseBodyItems(
       // appeared where a rule body was expected (e.g. right after `#def`).
       return { line: tok.line, message: "'#macro' must begin its own definition" };
     }
-    const parsed = parseAtomText(tok.text, tok.marker, tok.line);
+    const parsed = parseAtomText(tok.text, tok.marker, tok.line, tok.startCol, tok.endCol);
     if ("message" in parsed) return parsed;
     top.items.push({ kind: "atom", atom: parsed });
     top.needsContent = false;
@@ -752,7 +774,8 @@ function parseBodyItems(
 
 // Parse the inner text of a `{p t1..tn => e}` exception block (braces
 // already stripped by the tokenizer). See plans/v2-exceptions.md.
-function parseExceptionBlock(text: string, line: number): BodyItem | ParseError {
+function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyItem | ParseError {
+  const { text, line } = tok;
   const arrow = findTopFatArrow(text);
   if (arrow < 0) return { line, message: "exception block requires '=>'" };
   const lhsText = text.slice(0, arrow).trim();
@@ -780,9 +803,12 @@ function parseExceptionBlock(text: string, line: number): BodyItem | ParseError 
   }
   // RHS: same machinery as a normal rule body. Errors and spans from the
   // fragment carry sub-tokenizer line numbers (always 1 — the block is a
-  // single line); remap both to the block's source line. An empty RHS is
-  // allowed: `{p t1..tn =>}` suppresses `p` in this context (expand skips
-  // the exception-case rule).
+  // single line) and fragment-relative columns; remap both to the block's
+  // source position. These atoms are spliced verbatim into the generated
+  // exception rule by `applyExceptions`, so an emitting RHS atom reaches an
+  // `Emit` under its own span — the columns must be true source columns.
+  // An empty RHS is allowed: `{p t1..tn =>}` suppresses `p` in this context
+  // (expand skips the exception-case rule).
   let right: BodyItem[] = [];
   if (rhsText.length > 0) {
     const rhsToks = tokenize(rhsText);
@@ -791,19 +817,28 @@ function parseExceptionBlock(text: string, line: number): BodyItem | ParseError 
     const parsed = parseBodyItems(rhsToks, pos, line, true);
     if (!Array.isArray(parsed)) return { line, message: parsed.message };
     right = parsed;
-    remapItemLines(right, line);
+    const rhsRaw = text.slice(arrow + 2);
+    const rhsLead = rhsRaw.length - rhsRaw.trimStart().length;
+    remapItemLines(right, line, tok.textStartCol + arrow + 2 + rhsLead);
   }
-  return { kind: "exception", left: { terms }, right, span: { line } };
+  return { kind: "exception", left: { terms }, right, span: { line, startCol: tok.startCol, endCol: tok.endCol } };
 }
 
-// Stamp `line` onto every span in a fragment parsed from single-line text.
-function remapItemLines(items: BodyItem[], line: number): void {
+// Re-base every span in a fragment parsed from single-line text: stamp
+// `line`, and shift fragment-relative columns to source columns by
+// `colOffset`. Column-less spans (subs, aggcomps) just get the line.
+function remapItemLines(items: BodyItem[], line: number, colOffset: number): void {
+  const remapSpan = (s: Span): void => {
+    s.line = line;
+    if (s.startCol !== undefined) s.startCol += colOffset;
+    if (s.endCol !== undefined) s.endCol += colOffset;
+  };
   for (const it of items) {
     if (it.kind === "dot") { it.line = line; continue; }
-    if (it.kind === "sub") { it.span.line = line; remapItemLines(it.inner, line); continue; }
-    if (it.kind === "exception") { it.span.line = line; remapItemLines(it.right, line); continue; }
-    if (it.kind === "aggcomp") { it.span.line = line; remapItemLines(it.items, line); continue; }
-    it.atom.span.line = line;
+    if (it.kind === "sub") { remapSpan(it.span); remapItemLines(it.inner, line, colOffset); continue; }
+    if (it.kind === "exception") { remapSpan(it.span); remapItemLines(it.right, line, colOffset); continue; }
+    if (it.kind === "aggcomp") { remapSpan(it.span); remapItemLines(it.items, line, colOffset); continue; }
+    remapSpan(it.atom.span);
   }
 }
 
@@ -1283,7 +1318,7 @@ function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {
   return { relation, aggregator, span: { line } };
 }
 
-function parseEqualText(text: string, line: number): RuleAtom | ParseError {
+function parseEqualText(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   if (findTopArrow(text) >= 0) {
     return { line, message: "'=' atom cannot carry '-> weight'" };
   }
@@ -1293,16 +1328,16 @@ function parseEqualText(text: string, line: number): RuleAtom | ParseError {
   if (terms.length !== 2) {
     return { line, message: `'=' atom must have exactly two terms, got ${terms.length}` };
   }
-  return { tag: "Equal", lhs: terms[0]!, rhs: terms[1]!, span: { line } };
+  return { tag: "Equal", lhs: terms[0]!, rhs: terms[1]!, span: { line, startCol, endCol } };
 }
 
-function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | ParseError {
+function parseAtomText(text: string, marker: Marker, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   // `!(...)` compound constrain (with optional whitespace before `(`).
   // The body is either `(sub, sub, ...)` for a compound, or a single
   // atom shape. Single-atom `!foo` / `!foo -> Z` is canonicalized into a
   // one-element `subAtoms` list so the IR shape is uniform downstream.
   if (marker === "constrain") {
-    return parseConstrainBody(text, line);
+    return parseConstrainBody(text, line, startCol, endCol);
   }
   // Optional trailing `-> term` weight. Top-level arrow only (depth 0).
   const arrow = findTopArrow(text);
@@ -1337,7 +1372,7 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
   // is an aggregate, not a match.
   let outMarker: Marker = marker;
   if (marker === "match" && weight !== undefined) outMarker = "aggregate";
-  const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line } };
+  const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line, startCol, endCol } };
   if (weight !== undefined) out.weight = weight;
   return out;
 }
@@ -1346,7 +1381,7 @@ function parseAtomText(text: string, marker: Marker, line: number): RuleAtom | P
 //   single-atom plain: `foo X Y`
 //   single-atom agg:   `foo X -> W`
 //   compound:          `(sub, sub, ...)` where each sub is one of the above
-function parseConstrainBody(text: string, line: number): RuleAtom | ParseError {
+function parseConstrainBody(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   const trimmed = text.trim();
   const subs: SubConstrain[] = [];
   if (trimmed.startsWith("(")) {
@@ -1380,7 +1415,7 @@ function parseConstrainBody(text: string, line: number): RuleAtom | ParseError {
     marker: "constrain",
     atom: subs[0]!.atom,
     subAtoms: subs,
-    span: { line },
+    span: { line, startCol, endCol },
   };
 }
 

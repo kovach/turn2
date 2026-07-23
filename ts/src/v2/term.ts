@@ -21,8 +21,17 @@ export type NodeId = number;
 
 export interface Span {
   line: number;      // 1-indexed line in original input
-  startCol?: number;
-  endCol?: number;
+  startCol?: number; // 0-indexed, inclusive; line.slice(startCol, endCol)
+  endCol?: number;   // is the atom's source text (marker char included)
+}
+
+// DOM attribute value for per-atom source ↔ output linking
+// (`data-source-span`, see source-link.ts): "12:4-19". Returns undefined for
+// a column-less span so a regression in the parser's column stamping surfaces
+// as missing links rather than collapsing distinct atoms onto one line key.
+export function spanKey(s: Span | undefined): string | undefined {
+  if (s === undefined || s.startCol === undefined || s.endCol === undefined) return undefined;
+  return `${s.line}:${s.startCol}-${s.endCol}`;
 }
 
 // Substitution trail: two parallel mutable arrays. Bind = push; backtrack = `.length = mark`.

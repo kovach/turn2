@@ -6,7 +6,8 @@ The core term layer: the `Term`/`Atom` data types shared by every phase, source 
 
 **Key terms:**
 - `Term` — the term algebra: `Symbol` | `Variable` | `Atom` | `Id` | `Wildcard` | `Ref`
-- `Atom` / `Span` — a term list; a 1-indexed source position
+- `Atom` / `Span` — a term list; a source position: 1-indexed line plus 0-indexed `startCol`/`endCol` covering one atom's text (marker included)
+- `spanKey` — `"line:startCol-endCol"` DOM key for `data-source-span` linking; `undefined` for a column-less span
 - `NodeId` — integer key space for hashconsed terms (disjoint ranges per tag)
 - `Trail` — substitution trail: `newTrail`/`trailPush`/`trailLength`/`trailUnwind`/`trailLookup`
 - constructors — `sym`, `vari`, `ref`, `atom`, `idTerm`, `isId`
@@ -235,7 +236,7 @@ Episodes listed in `opts.collapsed` render collapsed: episodes contained in a co
 - `momentAnchor` / `momentTies` / `orderPairs` — edges-variant layout outputs: canonical dot per moment, dashed ties, drawn cover pairs
 - `renderTimelineAscii` — headless text rendering (no DOM/canvas)
 - episode (`~`) bars / fact (`+`) lines — the two tuple classes laid out; `is`/`_constrain` rows go to a sidebar
-- `data-source-line` — stamped on bar rects/labels, fact labels, and sidebar rows from `store.tupleSource`, consumed by `source-link.ts`
+- `data-source-span` — stamped (via `spanKey`) on bar rects/labels, fact labels, and sidebar rows from `store.tupleSource`, consumed by `source-link.ts`; every `Emit.span` carries columns, and span-less tuples (aggregate values) stamp nothing
 
 # editor.ts
 
@@ -249,14 +250,15 @@ A self-contained code-editor wrapper around a `<textarea>` that adds a line-numb
 - `enableAutocomplete` — opt-in flag (on for index-v2, off for pres) for the completion overlay; logic lives in `autocomplete.ts`
 - caret mirror — off-screen div replicating textarea metrics to position the completion box at the cursor
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
-- `highlightLine` / `clearHighlight` / `focusLine` / `caretLine` — line-highlight overlay (positioned off the gutter rows, so it can't drift) and caret helpers used by `source-link.ts`
+- `highlightLine` / `highlightRange` / `clearHighlight` / `focusLine` / `caretLine` / `caretPos` — highlight overlay (full line, or a column range mapped col → px off a hidden monospace probe) and caret helpers used by `source-link.ts`
 
 # source-link.ts
 
-Bidirectional source-line ↔ output linking shared by the v2 editor page (`web-v2.ts`) and presentation-mode code blocks (`pres/render.ts`); see plans/v2-source-timeline-link.md. One linker binds one `Editor` to N output roots whose renderers stamp `data-source-line` (db rows from `render-output.ts`, timeline bars/facts/sidebar rows from `timeline.ts`). Forward: the caret entering a line with an emitting atom highlights every matching element across all outputs (db rows scroll into view; the timeline never auto-scrolls). Reverse: hovering a linked element shows the editor's line-highlight overlay and lights up same-line siblings; clicking moves the caret to that line. `Ctrl-.` cycles through the caret line's timeline occurrences, centering each in its scroll container in turn and wrapping around.
+Bidirectional source-atom ↔ output linking shared by the v2 editor page (`web-v2.ts`) and presentation-mode code blocks (`pres/render.ts`); see plans/v2-source-timeline-link.md and plans/v2-atom-span-provenance.md. One linker binds one `Editor` to N output roots whose renderers stamp `data-source-span` (a `spanKey`; db rows from `render-output.ts`, timeline bars/facts/sidebar rows from `timeline.ts`). Forward: the caret sitting inside an emitting atom highlights that atom's elements across all outputs; a caret elsewhere on the line falls back to all of the line's emitting atoms (db rows scroll into view; the timeline never auto-scrolls). Reverse: hovering a linked element shows the editor's column-range overlay and lights up same-atom siblings; clicking moves the caret into that atom. `Ctrl-.` cycles through the active atom's timeline occurrences, centering each in its scroll container in turn and wrapping around.
 
 **Key terms:**
 - `attachSourceLink` — binds an `Editor` + output roots; installs delegated hover/click handlers, caret tracking, and the `Ctrl-.` binding
+- `collectPositiveSpans` — emitting-atom spans indexed by line; the caret column picks the containing span
 - `SourceLink` — handle: `update(rules)` after each run, `setCaretLine`, `destroy`
 - `collectPositiveLines` — source lines with at least one emitting atom (assert `~`/`+`/`^`, ask `?`, constrain `!`); only these get forward highlights
 - `source-highlight` / `hover-highlight` / `cycle-focus` — CSS classes applied to matched output elements (hosts style them)

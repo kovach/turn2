@@ -1,4 +1,4 @@
-import type { Term } from "./term.js";
+import { spanKey, type Span, type Term } from "./term.js";
 import { refTagOf } from "./hashcons.js";
 import { atomFingerprint, renderTermShallow } from "./print.js";
 import { lessThan, tokenOf, type Store } from "./store.js";
@@ -43,7 +43,7 @@ function renderEndpoint(store: Store, term: Term): string {
   return renderTermShallow(store, term);
 }
 
-function renderTupleRow(store: Store, i: number): { atom: string; interval: string; line: number | undefined } {
+function renderTupleRow(store: Store, i: number): { atom: string; interval: string; span: Span | undefined } {
   const t = store.tuples[i]!;
   const head = t.atom.terms[0];
   const headStr = head !== undefined && head.tag === "Symbol"
@@ -52,12 +52,12 @@ function renderTupleRow(store: Store, i: number): { atom: string; interval: stri
   const args = t.atom.terms.slice(1, -1).map((x) => renderTermDb(store, x)).join(" ");
   const atomStr = args === "" ? headStr : `${headStr} ${args}`;
   const intervalStr = `[${renderEndpoint(store, t.l)}, ${renderEndpoint(store, t.r)}]`;
-  return { atom: atomStr, interval: intervalStr, line: store.tupleSource[i]?.line };
+  return { atom: atomStr, interval: intervalStr, span: store.tupleSource[i] };
 }
 
 function emitRows(
   lines: string[],
-  rendered: { atom: string; interval: string; line: number | undefined }[],
+  rendered: { atom: string; interval: string; span: Span | undefined }[],
 ): void {
   let maxAtomLen = 0;
   for (const r of rendered) {
@@ -68,7 +68,8 @@ function emitRows(
   for (const r of rendered) {
     const plainLen = r.atom.replace(/<[^>]+>/g, "").length;
     const gap = " ".repeat(Math.max(2, pad - plainLen + 2));
-    const attr = r.line !== undefined ? ` data-source-line="${r.line}"` : "";
+    const key = spanKey(r.span);
+    const attr = key !== undefined ? ` data-source-span="${key}"` : "";
     lines.push(`  <span class="row"${attr}>${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span></span>`);
   }
 }

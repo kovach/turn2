@@ -1,3 +1,8 @@
+# tie visual provenance to atom spans, not lines
+plan: plans/v2-atom-span-provenance.md
+
+followup: this should ultimately be grounded on a reflection mechanism that links tuples to the source in a queryable way
+
 # exception default-case provenance
 plan: plans/v2-exception-default-provenance.md
 

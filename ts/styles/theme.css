@@ -27,10 +27,10 @@ html.mode-light {
 }
 
 /* --- Source ↔ output linking (v2/source-link.ts) --- */
-/* Only linked elements carry data-source-line; the background rules cover
+/* Only linked elements carry data-source-span; the background rules cover
  * HTML outputs (db rows, timeline sidebar rows). SVG shapes ignore
  * background-color — bar rects get fill-based rules below instead. */
-[data-source-line] { cursor: pointer; }
+[data-source-span] { cursor: pointer; }
 .source-highlight { background-color: rgba(59, 130, 246, 0.30); }
 .hover-highlight  { background-color: rgba(168, 85, 247, 0.30); }
 
