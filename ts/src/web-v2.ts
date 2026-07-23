@@ -6,11 +6,11 @@
 import { parse } from "./v2/parse.js";
 import { runFixpoint } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
-import { renderTuples, renderTimelineH } from "./v2/render-output.js";
+import { renderTuples, renderTimelineH, timelineCollapseKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import { attachSourceLink } from "./v2/source-link.js";
 import type { Atom, Term } from "./v2/term.js";
-import type { Store } from "./v2/store.js";
+import { tokenOf, type Store } from "./v2/store.js";
 import type { ComponentOptions } from "./v2/types.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
 
@@ -250,9 +250,58 @@ function refreshDbViewButtons(): void {
 }
 refreshDbViewButtons();
 
+// Episodes the user has collapsed in the timeline, keyed by structural
+// fingerprint (see timelineCollapseKey) so a collapse sticks across the
+// re-evaluations that edits and appended `is` rows trigger. Right-clicking a
+// bar toggles its key. Deliberately in-memory only: unlike the theme and the
+// split position, this state is about one program's content, so it does not
+// outlive the page.
+const collapsedKeys = new Set<string>();
+
+// Collapse keys of every episode spanning the same interval as `tupleIndex`,
+// itself included — the set that one `...` bar stands for.
+function intervalPeers(store: Store, tupleIndex: number): string[] {
+  const t = store.tuples[tupleIndex];
+  if (t === undefined) return [];
+  const lTok = tokenOf(store, t.l);
+  const rTok = tokenOf(store, t.r);
+  const out: string[] = [];
+  for (let i = 0; i < store.tuples.length; i++) {
+    const u = store.tuples[i]!;
+    if (tokenOf(store, u.l) !== lTok || tokenOf(store, u.r) !== rTok) continue;
+    const key = timelineCollapseKey(store, i);
+    if (key !== null) out.push(key);
+  }
+  return out;
+}
+
+timelineInlineEl.addEventListener("contextmenu", (e: MouseEvent) => {
+  const target = (e.target as Element | null)?.closest("[data-tl-tuple]");
+  if (target === null || target === undefined) return;
+  const idx = Number(target.getAttribute("data-tl-tuple"));
+  if (lastStore === null || !Number.isInteger(idx)) return;
+  const key = timelineCollapseKey(lastStore, idx);
+  if (key === null) return;
+  e.preventDefault();
+  if (collapsedKeys.has(key)) {
+    // Expanding clears every episode over this interval, not just the one the
+    // stand-in is named after: co-extensive episodes collapse together, so a
+    // peer key left behind would keep the interval folded with no bar left to
+    // click.
+    for (const peer of intervalPeers(lastStore, idx)) collapsedKeys.delete(peer);
+  } else {
+    collapsedKeys.add(key);
+  }
+  renderDbPane(lastStore);
+  link.setCaretLine(editor.caretLine());
+});
+
 function renderDbPane(store: Store): void {
   if (dbView === "timeline") {
-    renderTimelineH(timelineInlineEl, store, { hideInternal: hideInternalEl.checked });
+    renderTimelineH(timelineInlineEl, store, {
+      hideInternal: hideInternalEl.checked,
+      collapsedKeys,
+    });
   } else {
     renderTuples(dbEl, store, {
       hideInternal: hideInternalEl.checked,

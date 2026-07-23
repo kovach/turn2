@@ -60,6 +60,77 @@ export function renderTerm(store: Store, term: Term): string {
   }
 }
 
+// --- Structural fingerprints (identity across runs, not display) ---
+//
+// A hashcons token (`*17`) identifies a term only within one run: it is an
+// allocation counter, so it shifts whenever the program is re-evaluated over
+// different content — a user edit, or an `is` row appended by a click. What
+// IS stable is the *body* the evaluator built: an emitted tuple's trailing id
+// slot fingerprints its firing structurally (rule name, atom index, chain of
+// enclosing moments — see `freshIdTemplate` in expand.ts), so two runs that
+// derive a tuple the same way build the same body.
+//
+// That body must never be expanded into a term or a string: it is a DAG whose
+// shared subterms duplicate under expansion, so its printed size grows
+// exponentially in derivation depth — far more expensive than running the
+// program. Instead we hash it in place, memoized per `Ref`: each distinct ref
+// is visited once and contributes its arity, making a fingerprint linear in
+// the hashcons DAG the evaluator already built.
+//
+// The hash mixes symbol/variable *names* and structure only — never tokens —
+// so it is comparable across runs. It is a fingerprint, not an injection:
+// distinct tuples can in principle collide (64 bits, so not in practice), and
+// tuples with identical derivations deliberately share one.
+
+// FNV-1a; `seed` picks one of two independent 32-bit lanes.
+function fnv1a(s: string, seed: number): number {
+  let h = seed;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+const hex8 = (n: number): string => n.toString(16).padStart(8, "0");
+// 64-bit fingerprint as 16 hex chars: two FNV lanes over the same input.
+const fp = (s: string): string => hex8(fnv1a(s, 0x811c9dc5)) + hex8(fnv1a(s, 0x9e3779b1));
+
+// One memo per Store: ref id → fingerprint. Keyed weakly so a superseded
+// store's table is collectable with it.
+const fpMemos = new WeakMap<Store, Map<number, string>>();
+
+function termFp(store: Store, term: Term, memo: Map<number, string>): string {
+  switch (term.tag) {
+    case "Symbol":   return fp(`S${term.name}`);
+    case "Variable": return fp(`V${term.name}`);
+    case "Wildcard": return fp("W");
+    case "Atom":     return fp("A" + term.atom.terms.map((t) => termFp(store, t, memo)).join(""));
+    case "Id":       return fp("I" + term.atom.terms.map((t) => termFp(store, t, memo)).join(""));
+    case "Ref": {
+      const hit = memo.get(term.id);
+      if (hit !== undefined) return hit;
+      const body = store.hash.refToAtom.get(term.id);
+      // No stored body — nothing structural to hash. Falling back to the
+      // token is run-local, but this is unreachable for stored tuples.
+      const out = body === undefined
+        ? fp(`R${term.id}`)
+        : fp((refTagOf(store.hash, term.id) === "Id" ? "I" : "A")
+             + body.terms.map((t) => termFp(store, t, memo)).join(""));
+      memo.set(term.id, out);
+      return out;
+    }
+  }
+}
+
+// Fingerprint of a stored atom, including the trailing universal id slot —
+// that slot is what makes distinct firings of one rule distinguishable.
+export function atomFingerprint(store: Store, atom: Atom): string {
+  let memo = fpMemos.get(store);
+  if (memo === undefined) { memo = new Map(); fpMemos.set(store, memo); }
+  return fp("T" + atom.terms.map((t) => termFp(store, t, memo)).join(""));
+}
+
 export function renderAtom(store: Store, atom: Atom): string {
   // Drop the trailing universal id slot (every emitted tuple's atom carries
   // one). Rendered separately by tuple printers when needed; users see only

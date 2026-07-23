@@ -195,6 +195,7 @@ The surface-syntax printer for hashconsed v2 terms, producing text that `parse` 
 **Key terms:**
 - `renderTerm` / `renderAtom` — full surface render (re-parseable); stops at Id-backed `Ref`s
 - `renderTermShallow` / `renderAtomShallow` — render that stops at any `Ref` boundary (`*<id>`); used by render-output/timeline
+- `atomFingerprint` — 64-bit structural hash of a stored atom *including* its trailing id slot: identity for a tuple across re-evaluations, where hashcons tokens (allocation counters) shift. Hashes names and structure only, memoized per `Ref` on a per-`Store` `WeakMap`, so it costs one visit per distinct ref — the id bodies are DAGs whose expansion is exponential in derivation depth (a ttt atom expands to ~9.5M nodes) and must never be materialized. Used for the timeline's collapse keys
 - id-opacity invariant — `Id`s always render as opaque `*<id>` handles, never unfolded
 - `tokensEq` — token-level term equality via hashcons tokens
 - `compressRefs` — share-aware DAG dump: each `Ref` body emitted once as `= V<i> (…)`
@@ -216,6 +217,7 @@ UI glue that renders a store into a DOM host as either a syntax-highlighted tupl
 **Key terms:**
 - `renderTuples` — tuple-listing renderer (grouped by head or temporally ordered) into HTML spans with source-line attributes
 - `renderTimelineH` — horizontal timeline view (delegates to `timeline.ts`; `momentStyle` spine|edges variant, defaulting to edges)
+- `timelineCollapseKey` / `resolveCollapsed` — collapse identity for an episode (`atomFingerprint`: token-free, so it survives edits and appended `is` rows) and its resolution against a store into `CollapsedInterval`s
 - `temporalOrder` — orders tuples by longest-path depth via `lessThan`
 - `hideInternal` / `temporal` — view options (hide `_`-prefixed internal rows; temporal vs. grouped)
 
@@ -223,9 +225,12 @@ UI glue that renders a store into a DOM host as either a syntax-highlighted tupl
 
 Renders a v2 store as a timeline visualization (SVG or ASCII): moments are laid out along a time axis using a Hasse-reduced partial order, episode (`~`) tuples become labeled bars stacked in lanes, fact (`+`) tuples become lines + labels, and `is`/`constrain` rows are pulled into a sidebar. The layout pass is orientation-agnostic and is then mapped to pixels by a projector supporting horizontal and vertical orientations plus three lane-packing strategies. A horizontal-only `MomentStyle` "edges" variant (plans/v2-timeline-edge-moments.md) gives each moment its own column, but with two-tier spacing (plans/v2-timeline-fractional-columns.md): columns are ordered by (longest-path rank, token), and per-step gaps are floored to the full step (`minColWidth`) across a rank boundary but only to a small fractional width (`minFracWidth`) between same-rank — necessarily incomparable — moments, so comparable moments stay a step apart while incomparable ones cluster tightly. It draws each moment's dot on a canonical bar edge (dashed vertical ties to other bars sharing the moment), and replaces spine arrows with orthogonal dot-to-dot cover arrows (right/up/down only, routed around bars by fewest crossings then fewest turns), suppressing pairs a bar already shows as its own endpoints.
 
+Episodes listed in `opts.collapsed` render collapsed: episodes contained in a collapsed interval `[l, r]`, and facts whose start moment lies in `[l, r)`, are dropped before ranking (so the interior moments vanish with them), and the interval is replaced by a single narrow `name...` bar (the collapsed episode's head symbol; width floored at `COLLAPSED_BAR_W` and never sized to what it hides) that keeps the collapsed episode's tuple index for source linking. Containment is judged against the uncollapsed reachability and includes the endpoints, so co-extensive episodes (`~a, ^b` puts two bars on one interval) collapse as a unit into one stand-in and expand together. The entry's `tupleIndex` names the owning episode: it decides the stand-in's label and click target, not what is hidden. Nested collapsed intervals are subsumed by their outermost container, and collapses over the same interval are one collapse. `web-v2.ts` toggles collapse by right-clicking a bar, keyed by `timelineCollapseKey` so it survives re-evaluation.
+
 **Key terms:**
 - `renderTimeline` — builds the SVG (Hasse arrows, moment dots, episode bars, fact stubs) + sidebar; used by render-output
 - `layoutTimeline` — orientation-agnostic layout: ranks moments by Hasse-reduced order, classifies tuples, packs lanes
+- `CollapsedInterval` / `opts.collapsed` — moment-token pair plus owning `tupleIndex`, drawn as one `name...` bar hiding everything the interval contains
 - `Orientation` / `LaneMode` / `MomentStyle` — horizontal|vertical axis; compact|nested|tree bar-packing; spine|edges moment placement
 - `momentAnchor` / `momentTies` / `orderPairs` — edges-variant layout outputs: canonical dot per moment, dashed ties, drawn cover pairs
 - `renderTimelineAscii` — headless text rendering (no DOM/canvas)

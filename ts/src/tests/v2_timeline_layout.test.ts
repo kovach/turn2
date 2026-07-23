@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { parse } from "../v2/parse.js";
 import { runFixpoint } from "../v2/fixpoint.js";
+import { timelineCollapseKey } from "../v2/render-output.js";
+import { compressRefs, renderAtom } from "../v2/print.js";
 import { layoutTimeline, DEFAULT_OPTS, type TimelineOpts, type TimelineLayout } from "../v2/timeline.js";
 
 const SOURCE = `
@@ -234,5 +236,230 @@ for (const section of sidebarLayout.sidebar) {
   }
 }
 console.log("PASS: sidebar rows carry source-line provenance");
+
+// --- Collapsed intervals (`opts.collapsed`) ---
+const collapseSrc = `
+~game
+
+game, ~turn
+
+turn
+  ( ~action, + drew );
+  ( ~cleanup )
+
+action, ~play
+
+game, + score
+`;
+const collapseParsed = parse(collapseSrc);
+if ("message" in collapseParsed) {
+  throw new Error(`collapse parse error line ${collapseParsed.line}: ${collapseParsed.message}`);
+}
+const collapseStore = runFixpoint(collapseParsed, 200, 5000).store;
+const baseCollapse = layoutTimeline(collapseStore, { ...DEFAULT_OPTS, laneMode: "tree" }, () => 0);
+const barNamed = (l: TimelineLayout, name: string) => {
+  const b = l.bars.find((x) => x.label.startsWith(name));
+  assert.ok(b !== undefined, `expected a "${name}" bar`);
+  return b;
+};
+for (const name of ["game", "turn", "action", "play", "cleanup"]) barNamed(baseCollapse, name);
+
+const turnBar = barNamed(baseCollapse, "turn");
+const collapsedLayout = layoutTimeline(
+  collapseStore,
+  { ...DEFAULT_OPTS, laneMode: "tree", collapsed: [{ l: turnBar.lTok, r: turnBar.rTok }] },
+  () => 0,
+);
+assert.deepEqual(
+  collapsedLayout.bars.map((b) => b.label).sort(),
+  ["turn...", barNamed(baseCollapse, "game").label].sort(),
+  `collapsing turn should leave only the outer game bar plus the "turn..." stand-in; ` +
+  `got ${collapsedLayout.bars.map((b) => b.label).join(", ")}`,
+);
+const standIn = collapsedLayout.bars.find((b) => b.collapsed)!;
+assert.equal(standIn.label, "turn...", "the stand-in is labeled with the collapsed episode's name");
+assert.equal(standIn.lTok, turnBar.lTok);
+assert.equal(standIn.rTok, turnBar.rTok);
+// The stand-in keeps the collapsed episode's tuple, so source linking works.
+assert.equal(standIn.tupleIndex, turnBar.tupleIndex);
+// `drew` starts inside the collapsed span and is hidden; `score` starts at
+// the game's start (outside it) and survives.
+const factLabels = collapsedLayout.facts.map((f) => f.label);
+assert.ok(!factLabels.some((l) => l.startsWith("drew")), `drew should be hidden; got ${factLabels.join(", ")}`);
+assert.ok(factLabels.some((l) => l.startsWith("score")), `score should survive; got ${factLabels.join(", ")}`);
+
+// An interval nested inside another collapsed one is subsumed — no second
+// stand-in bar appears.
+const actionBar = barNamed(baseCollapse, "action");
+const nestedLayout = layoutTimeline(
+  collapseStore,
+  {
+    ...DEFAULT_OPTS, laneMode: "tree",
+    collapsed: [{ l: turnBar.lTok, r: turnBar.rTok }, { l: actionBar.lTok, r: actionBar.rTok }],
+  },
+  () => 0,
+);
+assert.equal(nestedLayout.bars.filter((b) => b.collapsed).length, 1, "nested collapse should be subsumed");
+assert.deepEqual(
+  nestedLayout.bars.map((b) => b.label).sort(),
+  collapsedLayout.bars.map((b) => b.label).sort(),
+);
+
+// Collapsing an inner interval leaves its siblings alone.
+const innerLayout = layoutTimeline(
+  collapseStore,
+  { ...DEFAULT_OPTS, laneMode: "tree", collapsed: [{ l: actionBar.lTok, r: actionBar.rTok }] },
+  () => 0,
+);
+const innerLabels = innerLayout.bars.map((b) => b.label);
+assert.ok(innerLabels.includes("action..."), `expected an "action..." bar; got ${innerLabels.join(", ")}`);
+assert.ok(!innerLabels.some((l) => l.startsWith("play")), "play is inside action and should be hidden");
+assert.ok(innerLabels.some((l) => l.startsWith("cleanup")), "cleanup is a sibling and should survive");
+assert.ok(innerLabels.some((l) => l.startsWith("turn")), "turn contains action and should survive");
+console.log("PASS: collapsed intervals hide contained episodes and interior facts");
+
+// Co-extensive episodes (`~a, ^b` emits two bars over one interval) collapse
+// as a unit: collapsing either folds both into one stand-in, which is labeled
+// with the episode that was collapsed and carries its tuple, so right-clicking
+// it expands them all again.
+{
+  const dupSrc = `
+~a, ^b
+
+a, ~c
+`;
+  const dupParsed = parse(dupSrc);
+  if ("message" in dupParsed) throw new Error(`dup parse error: ${dupParsed.message}`);
+  const dupStore = runFixpoint(dupParsed, 200, 5000).store;
+  const base = layoutTimeline(dupStore, { ...DEFAULT_OPTS, laneMode: "tree" }, () => 0);
+  const bBar = base.bars.find((x) => x.label.startsWith("b"))!;
+  const aBar = base.bars.find((x) => x.label.startsWith("a"))!;
+  assert.ok(bBar !== undefined && aBar !== undefined, "expected both a and b bars");
+  assert.equal(aBar.lTok, bBar.lTok, "fixture requires a and b to share an interval");
+  assert.equal(aBar.rTok, bBar.rTok, "fixture requires a and b to share an interval");
+  assert.ok(base.bars.some((x) => x.label.startsWith("c")), "expected a nested c bar");
+
+  // Collapsing b — the second of the pair — folds a and the nested c with it.
+  const collapsedB = layoutTimeline(
+    dupStore,
+    {
+      ...DEFAULT_OPTS, laneMode: "tree",
+      collapsed: [{ l: bBar.lTok, r: bBar.rTok, tupleIndex: bBar.tupleIndex }],
+    },
+    () => 0,
+  );
+  assert.deepEqual(
+    collapsedB.bars.map((x) => x.label), ["b..."],
+    `collapsing b should fold every co-extensive bar; got ${collapsedB.bars.map((x) => x.label).join(", ")}`,
+  );
+  // Named after the episode that was collapsed, not whichever comes first.
+  assert.equal(collapsedB.bars[0]!.tupleIndex, bBar.tupleIndex, "the stand-in stays b's click target");
+
+  // Collapsing a is symmetric — same fold, its own label.
+  const collapsedA = layoutTimeline(
+    dupStore,
+    {
+      ...DEFAULT_OPTS, laneMode: "tree",
+      collapsed: [{ l: aBar.lTok, r: aBar.rTok, tupleIndex: aBar.tupleIndex }],
+    },
+    () => 0,
+  );
+  assert.deepEqual(collapsedA.bars.map((x) => x.label), ["a..."]);
+  assert.equal(collapsedA.bars[0]!.tupleIndex, aBar.tupleIndex);
+
+  // Both collapsed at once is still one interval, hence one stand-in.
+  const collapsedBoth = layoutTimeline(
+    dupStore,
+    {
+      ...DEFAULT_OPTS, laneMode: "tree",
+      collapsed: [
+        { l: aBar.lTok, r: aBar.rTok, tupleIndex: aBar.tupleIndex },
+        { l: bBar.lTok, r: bBar.rTok, tupleIndex: bBar.tupleIndex },
+      ],
+    },
+    () => 0,
+  );
+  assert.equal(collapsedBoth.bars.length, 1, "one interval collapses to one bar");
+  assert.ok(collapsedBoth.bars[0]!.collapsed);
+  console.log("PASS: co-extensive episodes collapse and expand as a unit");
+}
+
+// --- Collapse keys survive re-evaluation ---
+// The editor re-runs the program on every edit, and appends an `^ is …` row
+// when the user resolves a choice. Hashcons ids shift across those runs, so
+// the collapse key must not depend on them: an episode that still derives the
+// same way must keep its key, or the timeline would silently expand.
+{
+  const choiceSrc = `
++ cell c1
+
+~game
+  ? C
+  ! cell C
+  ~pick C
+
+pick C
+  is C V
+  ~use V
+`;
+  const p1 = parse(choiceSrc);
+  if ("message" in p1) throw new Error(`choice parse error: ${p1.message}`);
+  const r1 = runFixpoint(p1, 200, 5000);
+  assert.equal(r1.status.kind, "active-choices", `expected an active choice; got ${r1.status.kind}`);
+  if (r1.status.kind !== "active-choices") throw new Error("unreachable");
+
+  const keysOf = (store: typeof r1.store): Map<string, string> => {
+    const m = new Map<string, string>();
+    for (let i = 0; i < store.tuples.length; i++) {
+      const key = timelineCollapseKey(store, i);
+      if (key === null) continue;
+      const head = store.tuples[i]!.atom.terms[0];
+      if (head?.tag === "Symbol" && !head.name.startsWith("_")) m.set(head.name, key);
+    }
+    return m;
+  };
+  const before = keysOf(r1.store);
+  assert.ok(before.has("game"), `expected a game episode; got ${[...before.keys()].join(", ")}`);
+  assert.ok(before.has("pick"), `expected a pick episode; got ${[...before.keys()].join(", ")}`);
+
+  // Resolve the choice the way web-v2's click handler does: reify the active
+  // term with `compressRefs` (raw `*<token>` wouldn't survive the re-run —
+  // that token shift is exactly why the collapse key can't use one) and append
+  // an `^ is` row.
+  const choice = r1.status.choices[0]!;
+  const { bindings, results } = compressRefs([choice.activeTerms[0]!], r1.store);
+  const p2 = parse(`${choiceSrc}\n${bindings.join("\n")}\n^ is ${results[0]} c1\n`);
+  if ("message" in p2) throw new Error(`resolved parse error: ${p2.message}`);
+  const r2 = runFixpoint(p2, 200, 5000);
+  const after = keysOf(r2.store);
+
+  for (const name of ["game", "pick"]) {
+    assert.equal(
+      after.get(name), before.get(name),
+      `the ${name} episode's collapse key must survive the appended \`is\` row`,
+    );
+  }
+  // The hashcons tokens did move — that shift is what the old atom-rendered
+  // key tripped over.
+  assert.notEqual(
+    renderAtom(r2.store, r2.store.tuples.find((t) => {
+      const h = t.atom.terms[0];
+      return h?.tag === "Symbol" && h.name === "pick";
+    })!.atom),
+    renderAtom(r1.store, r1.store.tuples.find((t) => {
+      const h = t.atom.terms[0];
+      return h?.tag === "Symbol" && h.name === "pick";
+    })!.atom),
+    "this fixture is only meaningful while the appended row shifts pick's token",
+  );
+
+  // Sanity: the key is a fixed-size fingerprint, not an expansion of the id
+  // DAG — expanding one of these bodies is exponential in derivation depth.
+  assert.ok(
+    /^[0-9a-f]{16}$/.test(after.get("pick")!),
+    `collapse keys must be a 64-bit fingerprint; got ${after.get("pick")}`,
+  );
+  console.log("PASS: collapse keys survive an appended `is` resolution");
+}
 
 console.log("ALL v2 timeline-layout tests passed");

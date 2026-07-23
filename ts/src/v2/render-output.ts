@@ -1,8 +1,8 @@
 import type { Term } from "./term.js";
 import { refTagOf } from "./hashcons.js";
-import { renderTermShallow } from "./print.js";
-import { lessThan, type Store } from "./store.js";
-import { renderTimeline } from "./timeline.js";
+import { atomFingerprint, renderTermShallow } from "./print.js";
+import { lessThan, tokenOf, type Store } from "./store.js";
+import { renderTimeline, type CollapsedInterval } from "./timeline.js";
 
 export interface TuplesOptions {
   hideInternal?: boolean;
@@ -12,6 +12,8 @@ export interface TuplesOptions {
 export interface TimelineOptions {
   hideInternal?: boolean;
   momentStyle?: "spine" | "edges";
+  // Episodes (by `timelineCollapseKey`) whose intervals render collapsed.
+  collapsedKeys?: Iterable<string>;
 }
 
 function escapeHtml(s: string): string {
@@ -150,7 +152,43 @@ export function renderTuples(host: HTMLElement, store: Store, opts: TuplesOption
   host.innerHTML = lines.join("\n");
 }
 
+// Collapse keys identify an episode across re-evaluations of the program —
+// including the ones triggered by appending an `is` row for a click — so a
+// collapsed interval stays collapsed. Moment tokens and hashcons ids can't do
+// that (they shift with interning order), hence `atomFingerprint`: a memoized
+// structural hash of the atom including its derivation-fingerprinting id slot.
+// Two firings that derive identically share a key and collapse together; an
+// episode whose derivation an edit changes loses its key, and expands.
+export function timelineCollapseKey(store: Store, tupleIndex: number): string | null {
+  const t = store.tuples[tupleIndex];
+  if (t === undefined) return null;
+  if (tokenOf(store, t.r) === store.topTok) return null; // a fact, not an episode
+  return atomFingerprint(store, t.atom);
+}
+
+// Resolve collapse keys against the current store's tuples.
+export function resolveCollapsed(store: Store, keys: Iterable<string>): CollapsedInterval[] {
+  const want = new Set(keys);
+  if (want.size === 0) return [];
+  const out: CollapsedInterval[] = [];
+  for (let i = 0; i < store.tuples.length; i++) {
+    const key = timelineCollapseKey(store, i);
+    if (key === null || !want.has(key)) continue;
+    const t = store.tuples[i]!;
+    // Carry the tuple index: it identifies which episode was collapsed when
+    // several share one interval (`~a, ^b`).
+    out.push({ l: tokenOf(store, t.l), r: tokenOf(store, t.r), tupleIndex: i });
+  }
+  return out;
+}
+
 export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineOptions = {}): void {
-  const out = renderTimeline(store, { hideInternal: opts.hideInternal ?? true, orientation: "horizontal", laneMode: "tree", momentStyle: opts.momentStyle ?? "edges" });
+  const out = renderTimeline(store, {
+    hideInternal: opts.hideInternal ?? true,
+    orientation: "horizontal",
+    laneMode: "tree",
+    momentStyle: opts.momentStyle ?? "edges",
+    collapsed: opts.collapsedKeys === undefined ? [] : resolveCollapsed(store, opts.collapsedKeys),
+  });
   host.replaceChildren(out.main);
 }

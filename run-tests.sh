@@ -17,6 +17,8 @@ else
 fi
 for f in "${files[@]}"; do
   echo "  $f"
-  npx tsx "$f"
+  # In-process loader, not the tsx CLI: the CLI spawns a child node behind a
+  # unix-socket IPC server, which sandboxes may forbid (listen EPERM).
+  node --import tsx "$f"
 done
 echo "all tests passed"

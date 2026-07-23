@@ -34,12 +34,11 @@ turn, (actor P), did-win -> 0
   ?C
   ~choice C
   !eligible C
-
-  is C Cell    -- The external harness writes `is` rows for each user input
+  is C Cell -- The external harness writes `is` rows for each user input
     +filled Cell P
     ~did-fill
 
-turn
+turn 
   filled Cell P
   +fills Cell -> 1
 

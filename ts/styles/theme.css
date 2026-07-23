@@ -46,3 +46,7 @@ html.mode-dark .timeline-svg { --tl-bar-bg: #2e2e2e; --tl-bar-line: #fff; --tl-b
 .timeline-svg .tl-bar.source-highlight { fill: var(--tl-bar-hl-caret); }
 .timeline-svg .tl-bar.hover-highlight  { fill: var(--tl-bar-hl-hover); }
 .timeline-svg .tl-bar.cycle-focus      { stroke-width: 3; }
+/* Collapsed intervals: dashed outline, muted `...` label. Right-clicking
+ * one expands it again (web-v2.ts). */
+.timeline-svg .tl-bar-collapsed { stroke-dasharray: 3,2; }
+.timeline-svg .tl-bar-collapsed-label { opacity: 0.7; }

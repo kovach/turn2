@@ -6,4 +6,5 @@
   - if the change adds files, include a note in the plan to update `ts/src/v2/overview.md`
   - at the end of each plan, note your model name and version
 - don't try to run ts programs at /tmp; the relative imports will always fail. instead write any temp programs under `ts/src/`
-- most of the work now should only be done on the "v2" implementation
+- work should only be done on the "v2" implementation
+- read `discussions/turn-tutorial.md` for help writing Turn programs (sometimes called the "v2" language)

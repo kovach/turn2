@@ -41,7 +41,32 @@ const END_TICK_PX = 10;
 // turns vertical, so it clears the bar instead of running along its edge.
 const PAIR_EXIT_STEP = 8;
 
+// Minimum pixel width requested for a collapsed interval's bar. Its label is
+// only the episode's head symbol plus an ellipsis, so the bar stays narrow —
+// it never grows to fit the contents it is hiding.
+const COLLAPSED_BAR_W = 30;
+const COLLAPSED_SUFFIX = "...";
+
 export type Measurer = (text: string, fontPx: number) => number;
+
+// One collapsed episode: the interval it spans, as a pair of moment tokens
+// (`tokenOf(store, term)`), plus the tuple it came from. Rendering it
+// collapsed replaces it with a single narrow `name...` bar and drops what it
+// contains — episodes strictly inside [l, r], and facts whose start moment
+// lies in [l, r).
+//
+// Containment includes the endpoints, so episodes co-extensive with this one
+// collapse into the same bar (`~a, ^b` emits two bars over one interval;
+// collapsing either folds both, and expanding restores both). `tupleIndex`
+// names the episode the collapse belongs to: the stand-in takes its label and
+// acts as its click target, but does not otherwise change what is hidden.
+// Omit it when no particular episode owns the interval; the first one
+// spanning it is used.
+export interface CollapsedInterval {
+  l: number;
+  r: number;
+  tupleIndex?: number;
+}
 
 let _measureCtx: CanvasRenderingContext2D | null = null;
 function defaultMeasurer(text: string, fontPx: number): number {
@@ -66,6 +91,10 @@ export interface TimelineOpts {
   margin: number;
   laneMode: LaneMode;
   momentStyle: MomentStyle;
+  // Intervals to draw collapsed; see CollapsedInterval. Entries whose
+  // endpoints aren't displayed moments, or that aren't ordered l < r, are
+  // ignored; an interval nested inside another collapsed one is subsumed.
+  collapsed: CollapsedInterval[];
 }
 
 export const DEFAULT_OPTS: TimelineOpts = {
@@ -80,6 +109,7 @@ export const DEFAULT_OPTS: TimelineOpts = {
   margin: 16,
   laneMode: "tree",
   momentStyle: "spine",
+  collapsed: [],
 };
 
 interface MomentNode {
@@ -89,12 +119,16 @@ interface MomentNode {
 }
 
 interface Bar {
+  // Index of the tuple this bar draws; -1 for a collapsed interval with no
+  // episode of its own (see `collapsed`).
   tupleIndex: number;
   lTok: number;
   rTok: number;
   lane: number;
   label: string;
   full: string;
+  // True for the `...` stand-in bar of a collapsed interval.
+  collapsed: boolean;
   // Index of this bar among all bars sharing its starting rank (lane order).
   // Used by the vertical projector to stagger label y-positions so labels
   // for bars that start at the same moment don't overlap.
@@ -169,40 +203,14 @@ function isInternalHead(name: string | null): boolean {
 
 // --- Layout (orientation-agnostic) ---
 
-export function layoutTimeline(
-  store: Store,
-  opts: TimelineOpts,
-  measure: Measurer = defaultMeasurer,
-): TimelineLayout {
-  const moments = new Map<number, MomentNode>();
-  const sidebarTuples: { idx: number; head: string }[] = [];
-  const mainTuples: number[] = [];
-
-  for (let i = 0; i < store.tuples.length; i++) {
-    const t = store.tuples[i]!;
-    const head = headSym(t.atom);
-    if (head !== null && SIDEBAR_HEADS.has(head)) {
-      sidebarTuples.push({ idx: i, head });
-      continue;
-    }
-    if (opts.hideInternal && isInternalHead(head)) continue;
-    mainTuples.push(i);
-    const lTok = tokenOf(store, t.l);
-    const rTok = tokenOf(store, t.r);
-    if (!moments.has(lTok)) moments.set(lTok, { tok: lTok, term: t.l, rank: 0 });
-    if (!moments.has(rTok)) moments.set(rTok, { tok: rTok, term: t.r, rank: 0 });
-  }
-  if (!moments.has(store.botTok)) moments.set(store.botTok, { tok: store.botTok, term: store.bot, rank: 0 });
-  if (!moments.has(store.topTok)) moments.set(store.topTok, { tok: store.topTok, term: store.top, rank: 0 });
-
-  // Reachability over the FULL moment-order graph, projected onto displayed
-  // moments. This catches transitive orderings through hidden (filtered)
-  // moments — without it, two displayed moments connected only via hidden
-  // intermediaries would land at the same rank, violating the visual
-  // ordering invariant. bot/top are baked in: bot is below every other
-  // displayed moment, top is above every other. (`store.orderFwd` itself
-  // omits bot/top edges per `addOrder`'s contract.)
-  const displayed = new Set(moments.keys());
+// Reachability over the FULL moment-order graph, projected onto `displayed`.
+// This catches transitive orderings through hidden (filtered, or collapsed)
+// moments — without it, two displayed moments connected only via hidden
+// intermediaries would land at the same rank, violating the visual ordering
+// invariant. bot/top are baked in: bot is below every other displayed moment,
+// top is above every other. (`store.orderFwd` itself omits bot/top edges per
+// `addOrder`'s contract.)
+function reachability(store: Store, displayed: Set<number>): Map<number, Set<number>> {
   const botTok = store.botTok;
   const topTok = store.topTok;
   const gt = new Map<number, Set<number>>();
@@ -228,6 +236,126 @@ export function layoutTimeline(
     }
     gt.set(m, reach);
   }
+  return gt;
+}
+
+export function layoutTimeline(
+  store: Store,
+  opts: TimelineOpts,
+  measure: Measurer = defaultMeasurer,
+): TimelineLayout {
+  const sidebarTuples: { idx: number; head: string }[] = [];
+  const allMainTuples: number[] = [];
+
+  for (let i = 0; i < store.tuples.length; i++) {
+    const t = store.tuples[i]!;
+    const head = headSym(t.atom);
+    if (head !== null && SIDEBAR_HEADS.has(head)) {
+      sidebarTuples.push({ idx: i, head });
+      continue;
+    }
+    if (opts.hideInternal && isInternalHead(head)) continue;
+    allMainTuples.push(i);
+  }
+
+  const botTok = store.botTok;
+  const topTok = store.topTok;
+
+  const buildMoments = (idxs: number[]): Map<number, MomentNode> => {
+    const m = new Map<number, MomentNode>();
+    for (const i of idxs) {
+      const t = store.tuples[i]!;
+      const lTok = tokenOf(store, t.l);
+      const rTok = tokenOf(store, t.r);
+      if (!m.has(lTok)) m.set(lTok, { tok: lTok, term: t.l, rank: 0 });
+      if (!m.has(rTok)) m.set(rTok, { tok: rTok, term: t.r, rank: 0 });
+    }
+    if (!m.has(botTok)) m.set(botTok, { tok: botTok, term: store.bot, rank: 0 });
+    if (!m.has(topTok)) m.set(topTok, { tok: topTok, term: store.top, rank: 0 });
+    return m;
+  };
+
+  let moments = buildMoments(allMainTuples);
+  let gt = reachability(store, new Set(moments.keys()));
+
+  // Collapse pass: drop everything inside the requested intervals and stand
+  // each one up as a single `...` bar. Runs against the uncollapsed
+  // reachability so containment is judged on the full displayed order; the
+  // moment set and reachability are then rebuilt over what survives, which
+  // makes the interior moments (and their ranks) vanish.
+  let mainTuples = allMainTuples;
+  const collapsedBars: { lTok: number; rTok: number; tupleIndex: number; label: string; full: string }[] = [];
+  if (opts.collapsed.length > 0) {
+    const leq0 = (a: number, b: number): boolean => a === b || (gt.get(a)?.has(b) ?? false);
+    const wanted = opts.collapsed.filter((I) =>
+      I.l !== I.r && moments.has(I.l) && moments.has(I.r) && leq0(I.l, I.r));
+    const inside = (l: number, r: number, J: { l: number; r: number }): boolean =>
+      leq0(J.l, l) && leq0(r, J.r);
+    // Outermost only: a collapse nested in another is subsumed by it. Collapses
+    // over the same interval are one collapse — whichever came first owns it,
+    // and its stand-in covers them all.
+    const ivs = wanted.filter((I, i) => !wanted.some((J, j) =>
+      j !== i && inside(I.l, I.r, J)
+      && !(J.l === I.l && J.r === I.r && j > i)));
+
+    // Resolve each collapse to the episode that owns it: the one the stand-in
+    // is named after and stands in for as a click target. Every co-extensive
+    // episode collapses with it, so the owner only decides identity, not what
+    // is hidden. Falls back to the first episode spanning the interval when
+    // the caller named none.
+    const owned = ivs.map((I) => {
+      let rep = I.tupleIndex ?? -1;
+      if (rep < 0) {
+        for (const i of allMainTuples) {
+          const t = store.tuples[i]!;
+          if (tokenOf(store, t.r) === topTok) continue;
+          if (tokenOf(store, t.l) === I.l && tokenOf(store, t.r) === I.r) { rep = i; break; }
+        }
+      }
+      return { l: I.l, r: I.r, owner: rep };
+    });
+
+    const kept: number[] = [];
+    for (const i of allMainTuples) {
+      const t = store.tuples[i]!;
+      const lTok = tokenOf(store, t.l);
+      const rTok = tokenOf(store, t.r);
+      const hidden = rTok === topTok
+        // Fact: hidden when its start moment lies in [I.l, I.r). Facts at
+        // I.r start where the collapsed span ends, so they stay.
+        ? owned.some((I) => I.r !== lTok && leq0(I.l, lTok) && leq0(lTok, I.r))
+        // Episode: hidden when contained in [I.l, I.r], endpoints included —
+        // so every episode co-extensive with the collapsed one folds into the
+        // same stand-in, and expanding it brings them all back together.
+        : owned.some((I) => inside(lTok, rTok, I));
+      if (!hidden) kept.push(i);
+    }
+
+    for (const I of owned) {
+      // Label the bar with the collapsed episode's name — `turn...` — so it
+      // still says what was folded away. Keeping the owner's tuple index makes
+      // the stand-in the source-link and right-click target for it.
+      const rep = I.owner;
+      const name = rep >= 0 ? headSym(store.tuples[rep]!.atom) : null;
+      const label = truncate(name ?? "", opts.barLabelMaxLen) + COLLAPSED_SUFFIX;
+      const full = rep >= 0 ? `${renderAtom(store, store.tuples[rep]!.atom)} (collapsed)` : "(collapsed)";
+      collapsedBars.push({ lTok: I.l, rTok: I.r, tupleIndex: rep, label, full });
+    }
+
+    const allMoments = moments;
+    mainTuples = kept;
+    moments = buildMoments(mainTuples);
+    // The collapsed endpoints must survive even when no remaining tuple
+    // mentions them.
+    for (const I of ivs) {
+      for (const tok of [I.l, I.r]) {
+        if (!moments.has(tok)) moments.set(tok, { ...allMoments.get(tok)!, rank: 0 });
+      }
+    }
+    gt = reachability(store, new Set(moments.keys()));
+  }
+
+  const displayed = new Set(moments.keys());
 
   // Hasse reduction over the displayed sub-poset: succ(m) = direct covers.
   // u → v iff v ∈ gt(u) and no w ∈ gt(u), w ≠ v has v ∈ gt(w).
@@ -303,7 +431,7 @@ export function layoutTimeline(
   for (const [u, tos] of succ) for (const v of tos) edges.push({ from: u, to: v });
 
   // Classify main tuples into bars / facts.
-  const rawBars: { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string }[] = [];
+  const rawBars: RawBar[] = [];
   const factsByMoment = new Map<number, { tupleIndex: number; label: string; full: string }[]>();
 
   for (const i of mainTuples) {
@@ -319,8 +447,17 @@ export function layoutTimeline(
     } else {
       const lRank = moments.get(lTok)!.rank;
       const rRank = moments.get(rTok)!.rank;
-      rawBars.push({ tupleIndex: i, lTok, rTok, lRank, rRank, label, full });
+      rawBars.push({ tupleIndex: i, lTok, rTok, lRank, rRank, label, full, collapsed: false });
     }
+  }
+  for (const c of collapsedBars) {
+    rawBars.push({
+      tupleIndex: c.tupleIndex,
+      lTok: c.lTok, rTok: c.rTok,
+      lRank: moments.get(c.lTok)!.rank,
+      rRank: moments.get(c.rTok)!.rank,
+      label: c.label, full: c.full, collapsed: true,
+    });
   }
 
   // For nested mode, containment uses the moment partial order (the
@@ -448,7 +585,10 @@ export function layoutTimeline(
     const lR = moments.get(b.lTok)!.rank;
     const rR = moments.get(b.rTok)!.rank;
     if (rR <= lR) continue;
-    const need = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
+    // A collapsed bar only has to fit `name...`, floored at COLLAPSED_BAR_W —
+    // never the width of what it hides.
+    const labelW = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
+    const need = b.collapsed ? Math.max(COLLAPSED_BAR_W, labelW) : labelW;
     let have = 0;
     for (let r = lR; r < rR; r++) have += colWidths[r]!;
     if (need > have) {
@@ -471,6 +611,7 @@ export function layoutTimeline(
     tupleIndex: b.tupleIndex,
     lTok: b.lTok, rTok: b.rTok,
     lane: b.lane, label: b.label, full: b.full,
+    collapsed: b.collapsed,
     startGroupRow: b.startGroupRow,
   }));
 
@@ -508,7 +649,7 @@ function truncate(s: string, n: number): string {
 
 // --- Lane-pack strategies ---
 
-type RawBar = { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string };
+type RawBar = { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string; collapsed: boolean };
 type PartialBar = Bar & { lRank: number };
 
 // Greedy interval-graph packing — minimum lane count.
@@ -624,6 +765,7 @@ function makePlacer(
         tupleIndex: b.tupleIndex,
         lTok: b.lTok, rTok: b.rTok,
         lane: lane[i]!, label: b.label, full: b.full,
+        collapsed: b.collapsed,
         startGroupRow: 0, lRank: b.lRank,
       };
     }
@@ -686,6 +828,7 @@ function placeBar(b: RawBar, laneEnds: number[]): PartialBar {
     tupleIndex: b.tupleIndex,
     lTok: b.lTok, rTok: b.rTok,
     lane, label: b.label, full: b.full,
+    collapsed: b.collapsed,
     startGroupRow: 0, lRank: b.lRank,
   };
 }
@@ -1138,6 +1281,11 @@ export function renderTimeline(
     rect.setAttribute("stroke", "currentColor");
     rect.setAttribute("stroke-width", "1");
     rect.classList.add("tl-bar");
+    if (b.collapsed) rect.classList.add("tl-bar-collapsed");
+    // Identifies the bar's tuple for host-side interactions (e.g. the
+    // right-click collapse toggle in web-v2). Omitted when there is no tuple.
+    if (b.tupleIndex >= 0) rect.setAttribute("data-tl-tuple", String(b.tupleIndex));
+    if (b.collapsed) rect.setAttribute("data-tl-collapsed", "");
     const line = store.tupleSource[b.tupleIndex]?.line;
     if (line !== undefined) rect.setAttribute("data-source-line", String(line));
     const title = document.createElementNS(SVG_NS, "title");
@@ -1146,15 +1294,23 @@ export function renderTimeline(
     svg.appendChild(rect);
     const lp = proj.barLabelPos(lM.rank, b.lane, b.startGroupRow);
     const label = document.createElementNS(SVG_NS, "text");
-    label.setAttribute("x", String(lp.x));
+    // `...` sits centered in its fixed-width bar rather than left-aligned.
+    label.setAttribute("x", String(b.collapsed && o.orientation === "horizontal" ? r.x + r.w / 2 : lp.x));
     label.setAttribute("y", String(lp.y));
+    if (b.collapsed) label.classList.add("tl-bar-collapsed-label");
+    // The label sits over its rect and swallows pointer events, so it carries
+    // the same tuple attributes — otherwise right-clicking a bar's text (in
+    // particular a collapsed bar's `...`, which fills most of its width)
+    // would miss the collapse toggle.
+    if (b.tupleIndex >= 0) label.setAttribute("data-tl-tuple", String(b.tupleIndex));
+    if (b.collapsed) label.setAttribute("data-tl-collapsed", "");
     // Theme-dependent color comes from host CSS (.tl-bar-label); fallback
     // to the SVG's currentColor.
     label.setAttribute("fill", "currentColor");
     label.classList.add("tl-bar-label");
     label.setAttribute("font-size", String(BAR_LABEL_PX));
     label.setAttribute("font-family", FONT_FAMILY);
-    if (o.orientation === "vertical") label.setAttribute("text-anchor", "middle");
+    if (o.orientation === "vertical" || b.collapsed) label.setAttribute("text-anchor", "middle");
     label.textContent = b.label;
     if (line !== undefined) {
       label.setAttribute("data-source-line", String(line));
