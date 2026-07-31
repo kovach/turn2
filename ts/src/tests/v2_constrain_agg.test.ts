@@ -131,6 +131,51 @@ turn
   console.log("PASS: last on empty contribution set yields no options");
 }
 
+// 4b) Negation-as-default inside a choice: a plain constraint grounds the
+//    key, and a `bool` aggregate read at that key must fall back to the
+//    aggregator's default (0) when the relation has no contributions at
+//    all. Unlike cases 2-4 the key is *bound* rather than enumerated, so
+//    `runAggSub` has to consult the running substitution — enumerating a
+//    free key over an empty relation yields no groups, hence no options.
+{
+  const src = `
+#agg said key -> bool
+
++ word hi, + word there, + word wow, + turn
+
+turn
+  ? Y
+  ! word Y
+  ! said Y -> 0
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  const opts = optionSet(store, status.components[0]!.options);
+  assert.deepEqual([...opts].sort(), ["hi", "there", "wow"], `got: ${[...opts].join(" | ")}`);
+  console.log("PASS: `!word Y, !said Y -> 0` falls back to the bool default for every word");
+}
+
+// 4c) Same shape inside a single `!(...)` block, so the grounding holds
+//    within one compound row's sub-atoms and not just across two rows.
+{
+  const src = `
+#agg said key -> bool
+
++ word hi, + word there, + word wow, + turn
+
+turn
+  ? Y
+  !(word Y, said Y -> 0)
+`;
+  const { store, status } = runFixpoint(ok(src));
+  assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  const opts = optionSet(store, status.components[0]!.options);
+  assert.deepEqual([...opts].sort(), ["hi", "there", "wow"], `got: ${[...opts].join(" | ")}`);
+  console.log("PASS: `!(word Y, said Y -> 0)` grounds the agg key within one compound row");
+}
+
 // 5) User-supplied case: `at e -> last` with sequential ~game subrules.
 {
   const src = `

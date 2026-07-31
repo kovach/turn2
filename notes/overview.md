@@ -1,7 +1,15 @@
+# 26/07/24
+
 # tie visual provenance to atom spans, not lines
 plan: plans/v2-atom-span-provenance.md
 
 followup: this should ultimately be grounded on a reflection mechanism that links tuples to the source in a queryable way
+
+# small things
+- editor: source provenance tracked through exceptions
+- editor: collapsible timeline bars
+- parser: newline + no whitespace -> start of new rule
+- semantics: some/none for `[Q | ...]`
 
 # exception default-case provenance
 plan: plans/v2-exception-default-provenance.md

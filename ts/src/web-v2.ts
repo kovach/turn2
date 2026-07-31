@@ -512,7 +512,7 @@ async function bootstrap(): Promise<void> {
   if (playgroundMode) {
     const code = new URL(window.location.href).searchParams.get("code");
     if (code) {
-      try { sourceEl.value = b64UrlDecode(code); }
+      try { editor.value = b64UrlDecode(code); }
       catch { /* malformed — leave empty */ }
     }
     // Ensure the URL always carries the current code (even if empty/missing).
@@ -525,7 +525,7 @@ async function bootstrap(): Promise<void> {
       const res = await fetch(`/api/v2-file/${encodeURIComponent(name)}`);
       if (res.ok) {
         const { content } = await res.json() as { content: string };
-        sourceEl.value = content;
+        editor.value = content;
         loadedFile = name;
       } else if (res.status === 404) {
         // File doesn't exist yet; attach anyway so the first edit creates it.

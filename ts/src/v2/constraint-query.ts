@@ -498,7 +498,9 @@ function runAggSub(
   const aggTerms: Term[] = [atom.terms[0]!];
   for (let i = 1; i < arity - 1; i++) {
     const t = atom.terms[i]!;
-    aggTerms.push(slotSet.has(tokenOf(store, t)) ? SYM_FREE : t);
+    const bt = sub.get(tokenOf(store, t));
+    const t2 = bt !== undefined ? bt : t;
+    aggTerms.push(slotSet.has(tokenOf(store, t2)) ? SYM_FREE : t2);
   }
   aggTerms.push(SYM_FREE); // weight position always free
   const aggPattern: Atom = { terms: aggTerms };
