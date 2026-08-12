@@ -15,6 +15,8 @@
     #file-name { font-size: 13px; color: var(--fg-mute); }
     #status-line { font-size: 12px; color: var(--fg-mute2); margin-left: auto; }
     #status-line.error { color: var(--err); }
+    .gas-ctl { font-size: 11px; color: var(--fg-mute2); display: inline-flex; align-items: center; gap: 4px; }
+    .gas-ctl input { width: 62px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 2px 4px; font-family: monospace; font-size: 11px; }
     #theme-toggle { background: transparent; color: var(--fg-mute2); border: 1px solid var(--border); padding: 3px 10px; font-family: monospace; font-size: 11px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; }
     #theme-toggle:hover { color: var(--fg); }
     .workspace { flex: 1; display: grid; grid-template-columns: minmax(0, var(--split-left, 1fr)) 5px minmax(0, 1fr); min-height: 0; }
@@ -82,6 +84,8 @@
   <header>
     <span id="file-name"></span>
     <span id="status-line">—</span>
+    <label class="gas-ctl" title="Max fixpoint iterations before giving up">gas <input type="number" id="gas" min="1" step="10" /></label>
+    <label class="gas-ctl" title="Max tuples added before giving up">tuples <input type="number" id="tuple-gas" min="1" step="500" /></label>
     <button id="theme-toggle" type="button" title="Toggle light/dark">Theme</button>
     <script>
       document.getElementById("theme-toggle").addEventListener("click", function() {

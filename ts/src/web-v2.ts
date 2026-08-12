@@ -60,8 +60,28 @@ const timelineInlineEl = document.getElementById("timeline-inline") as HTMLDivEl
 const dbViewDatabaseEl = document.getElementById("db-view-database") as HTMLButtonElement;
 const dbViewTimelineEl = document.getElementById("db-view-timeline") as HTMLButtonElement;
 
-const GAS = 100;
-const TUPLE_GAS = 3000;
+const gasEl = document.getElementById("gas") as HTMLInputElement;
+const tupleGasEl = document.getElementById("tuple-gas") as HTMLInputElement;
+
+// Gas defaults. Both limits are editable in the header, but the edit lasts
+// only for the session — every reload starts back at these values.
+const GAS_DEFAULT = 100;
+const TUPLE_GAS_DEFAULT = 3000;
+
+// Current limits, read from the inputs so an edit takes effect on the next
+// run. A blank or non-positive field falls back to the default rather than
+// running with zero gas.
+function gasLimits(): { gas: number; tupleGas: number } {
+  const gas = Number(gasEl.value);
+  const tupleGas = Number(tupleGasEl.value);
+  return {
+    gas: Number.isInteger(gas) && gas > 0 ? gas : GAS_DEFAULT,
+    tupleGas: Number.isInteger(tupleGas) && tupleGas > 0 ? tupleGas : TUPLE_GAS_DEFAULT,
+  };
+}
+
+gasEl.value = String(GAS_DEFAULT);
+tupleGasEl.value = String(TUPLE_GAS_DEFAULT);
 
 let currentDisplayName: string | null = null;
 let currentDisplayModule: DisplayModule | null = null;
@@ -364,9 +384,10 @@ async function run(): Promise<void> {
     return;
   }
 
+  const { gas, tupleGas } = gasLimits();
   let result;
   try {
-    result = runFixpoint(parsed, GAS, TUPLE_GAS);
+    result = runFixpoint(parsed, gas, tupleGas);
   } catch (e) {
     // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
     // other evaluation failure — show it rather than swallowing it.
@@ -388,7 +409,12 @@ async function run(): Promise<void> {
       setStatus(`done — ${iterations} iter${iterations === 1 ? "" : "s"}, ${store.tuples.length} tuples`, false);
       break;
     case "gas":
-      setStatus(`gas — exceeded ${GAS} iterations`, true);
+      // Either limit can trigger this, so report where the run stopped
+      // against both.
+      setStatus(
+        `gas — stopped at ${status.iterations}/${gas} iters, ${status.tuples}/${tupleGas} tuples`,
+        true,
+      );
       break;
     case "active-choices":
       setStatus(`active-choices(${status.choices.length}) — ${iterations} iter${iterations === 1 ? "" : "s"}`, false);
@@ -498,6 +524,18 @@ const link = attachSourceLink(editor, [dbEl, timelineInlineEl]);
 hideInternalEl.addEventListener("change", () => {
   void run();
 });
+
+// Gas edits re-run immediately. `change` (not `input`) so typing a
+// multi-digit number doesn't re-run per keystroke.
+for (const el of [gasEl, tupleGasEl]) {
+  el.addEventListener("change", () => {
+    const { gas, tupleGas } = gasLimits();
+    // Normalize the field: an empty or bad value shows the default it fell
+    // back to rather than silently disagreeing with what ran.
+    el.value = String(el === gasEl ? gas : tupleGas);
+    void run();
+  });
+}
 
 dbTemporalEl.addEventListener("change", () => {
   if (lastStore !== null) {
