@@ -79,6 +79,12 @@ export function renderRuleAtom(atom: RuleAtom): string {
       return `Equal ${renderTermRaw(atom.lhs)} = ${renderTermRaw(atom.rhs)}`;
     case "JsCall":
       return `JsCall ${renderTermRaw(atom.out)} = @js(${atom.func} ${atom.args.map(renderTermRaw).join(" ")})`;
+    case "JsIterate": {
+      // `[clause k]` once resolveJsModes has run; `[clause ?]` on the
+      // earlier stage dumps (decompose/split/filter).
+      const clause = atom.defIndex !== undefined ? String(atom.defIndex) : "?";
+      return `JsIterate ${atom.func} ${atom.args.map(renderTermRaw).join(" ")} [clause ${clause}]`;
+    }
     case "Match": {
       const c = atom.constraint ? `[${atom.constraint}]` : "";
       return `Match${c} ${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
@@ -127,6 +133,11 @@ export function renderProgram(program: Program, opts: RenderOptions = {}): strin
   }
   for (const def of program.jsDefs.values()) {
     parts.push(`#js (${def.name} ${def.params.join(" ")}) { ... }`);
+  }
+  for (const clauses of program.jsRels.values()) {
+    for (const c of clauses) {
+      parts.push(`#js-def ${c.name} ${c.params.map((p) => p.mode + p.name).join(" ")} { ... }`);
+    }
   }
   if (parts.length > 0) parts.push("");
   parts.push(program.rules.map((r) => renderRule(r, opts)).join("\n\n"));

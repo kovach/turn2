@@ -9,8 +9,9 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "./term.js";
-import type { JsDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
+import type { JsDef, JsRelDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
+import { resolveJsModes } from "./js-rel.js";
 
 // The named intermediate rule-lists of the expansion pipeline, in order. The
 // CLI's `--stage` flag dumps these; `expand` returns the final `variants`.
@@ -19,6 +20,7 @@ export interface ExpandStages {
   decomposed: Rule[];
   split: Rule[];
   filtered: Rule[];
+  resolved: Rule[];
   variants: Rule[];
 }
 
@@ -27,7 +29,7 @@ export function expandStages(program: Program): ExpandStages {
   const macroExpanded = program.rules;
   program = applyExceptions(program);
   const decomposed = program.rules.map((r) => {
-    const { rule, essential } = decomposeRule(r, program.jsDefs, program.reactive);
+    const { rule, essential } = decomposeRule(r, program.jsDefs, program.jsRels, program.reactive);
     return pruneChains(rule, essential);
   });
   const split: Rule[] = [];
@@ -38,9 +40,14 @@ export function expandStages(program: Program): ExpandStages {
   const filtered = split.filter((r) =>
     r.body.some((a) => a.tag === "Emit" || a.tag === "AssertLt"),
   );
+  // Resolve `#js-def` clause selection (plans/v2-js-relations.md). Needs the
+  // post-split flat bodies (a consumer slice's leading Match makes the
+  // cross-split chain variables visible as bound); runs before the delta
+  // variants since those only re-tag Match constraints.
+  const resolved = resolveJsModes(filtered, program.jsRels);
   const variants: Rule[] = [];
-  for (const rule of filtered) variants.push(...generateDeltaVariants(rule));
-  return { macroExpanded, decomposed, split, filtered, variants };
+  for (const rule of resolved) variants.push(...generateDeltaVariants(rule));
+  return { macroExpanded, decomposed, split, filtered, resolved, variants };
 }
 
 export function expand(program: Program): Program {
@@ -50,6 +57,7 @@ export function expand(program: Program): Program {
     schema: program.schema,
     reactive: program.reactive,
     jsDefs: program.jsDefs,
+    jsRels: program.jsRels,
     macros: new Map(),
   };
 }
@@ -94,7 +102,7 @@ export function expandMacros(program: Program): Program {
   // with meaning outside the expression. `aggCompOutCols` also validates the
   // body's levels the same way a rule-embedded expression is validated.
   for (const def of macros.values()) {
-    const outward = new Set(aggCompOutCols(def.body, new Set(), null));
+    const outward = new Set(aggCompOutCols(def.body, new Set(), null, program.jsRels));
     for (const p of def.params) {
       if (!outward.has(p)) {
         throw new Error(
@@ -369,6 +377,10 @@ export function applyExceptions(program: Program): Program {
       const pTerm = exc.left.terms[0]!;
       if (pTerm.tag !== "Symbol") throw new Error("internal: exception LHS head is not a Symbol");
       const p = pTerm.name;
+      // A js relation is never emitted, so there is nothing to intercept.
+      if (program.jsRels.has(p)) {
+        throw new Error(`rule '${R.name}': js relation '${p}' cannot be an exception's left-hand side`);
+      }
       const tTerms = exc.left.terms.slice(1);
 
       // 1. Flag payload Ve = (vars(e) ∩ vars(prefix(R))) \ vars(t1..tn) and
@@ -661,6 +673,7 @@ function collectProgramSymbols(program: Program): Set<string> {
   for (const r of program.rules) walk(r.body);
   for (const key of program.schema.keys()) out.add(key);
   for (const key of program.jsDefs.keys()) out.add(key);
+  for (const key of program.jsRels.keys()) out.add(key);
   return out;
 }
 
@@ -786,6 +799,9 @@ interface DecState {
   essential: Set<string>;
   // `#js` function table (for `@js(...)` lowering: existence + arity checks).
   jsDefs: Map<string, JsDef>;
+  // `#js-def` relation table (plans/v2-js-relations.md): match atoms whose
+  // head is a key lower to `JsIterate`; any other appearance is an error.
+  jsRels: Map<string, JsRelDef[]>;
   // Counter for fresh `_js_<k>` result Variables.
   jsCounter: number;
   // Relations declared `#reactive`: their `head ... -> weight` reads lower to
@@ -826,6 +842,7 @@ const SYM_R: Term = { tag: "Symbol", name: "r" };
 function decomposeRule(
   rule: Rule,
   jsDefs: Map<string, JsDef>,
+  jsRels: Map<string, JsRelDef[]>,
   reactive: Set<string>,
 ): { rule: Rule; essential: Set<string> } {
   const state: DecState = {
@@ -839,6 +856,7 @@ function decomposeRule(
     existentialNames: new Set(),
     anonExistCounter: 0,
     jsDefs,
+    jsRels,
     jsCounter: 0,
     reactive,
   };
@@ -1081,6 +1099,11 @@ function decomposeBody(
     }
     if (a.tag === "Atom") {
       state.lexPos++;
+      // js relations (plans/v2-js-relations.md): a plain match atom whose
+      // head names a `#js-def` relation lowers to a JsIterate and leaves
+      // the running anchor untouched (js relations are timeless). Any
+      // other appearance throws inside decomposeJsRel.
+      if (decomposeJsRel(a, state)) continue;
       if (a.marker === "match") {
         const next = decomposeMatch(a, state, XL, XR);
         XL = next.XL;
@@ -1114,6 +1137,53 @@ function decomposeBody(
     state.out.push(a);
   }
   return { XL, XR };
+}
+
+// Handle an `Atom` whose head (or, for `!(...)`, a sub-atom's head) names a
+// `#js-def` relation (plans/v2-js-relations.md). Returns true when the atom
+// was consumed (a `JsIterate` was pushed); false to continue the normal
+// marker dispatch. Non-match uses throw: a js relation's match sites never
+// read the store, so an emitted/ask/constrain row under the name would be
+// silently invisible to every match — the exact bug this rejects. The check
+// is deliberately arity-blind (unlike exceptions, where arity is part of
+// predicate identity): an off-arity emit is almost certainly the same
+// conceptual relation, misused.
+function decomposeJsRel(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+): boolean {
+  if (a.subAtoms !== undefined) {
+    for (const s of a.subAtoms) {
+      const h = s.atom.terms[0];
+      if (h !== undefined && h.tag === "Symbol" && state.jsRels.has(h.name)) {
+        throw new Error(
+          `rule '${state.ruleName}': js relation '${h.name}' cannot appear inside a '!(...)' constrain block`,
+        );
+      }
+    }
+    return false;
+  }
+  const h = a.atom.terms[0];
+  if (h === undefined || h.tag !== "Symbol" || !state.jsRels.has(h.name)) return false;
+  if (a.marker !== "match" || a.weight !== undefined) {
+    throw new Error(
+      `rule '${state.ruleName}': js relation '${h.name}' can only be used as a plain match atom ` +
+      `(no '~'/'+'/'^'/'?'/'!' marker, no '-> weight')`,
+    );
+  }
+  const arity = state.jsRels.get(h.name)![0]!.params.length;
+  const args = a.atom.terms.slice(1);
+  if (args.length !== arity) {
+    throw new Error(
+      `rule '${state.ruleName}': js relation '${h.name}' takes ${arity} argument(s), given ${args.length}`,
+    );
+  }
+  state.out.push({ tag: "JsIterate", func: h.name, args, span: a.span });
+  // Args enter the chain like a match's user vars: enumerated bindings are
+  // per-firing identity, so downstream fresh-id templates must fingerprint
+  // them (dedup correctness). collectVarsTerm also rejects `@js(...)` here.
+  for (const t of args) collectVarsTerm(t, state);
+  return true;
 }
 
 function decomposeMatch(
@@ -1362,18 +1432,28 @@ function aggCompOutCols(
   comp: AggCompRA,
   prefixSeen: Set<string>,
   state: DecState | null,
+  jsRels: Map<string, JsRelDef[]>,
 ): string[] {
   const where = state === null ? "macro body" : `rule '${state.ruleName}'`;
   const join: string[] = [];
   const seen = new Set<string>();
   for (const it of comp.body) {
     if (it.tag === "AggComp") {
-      for (const n of aggCompOutCols(it, prefixSeen, state)) {
+      for (const n of aggCompOutCols(it, prefixSeen, state, jsRels)) {
         if (!seen.has(n)) { seen.add(n); join.push(n); }
       }
       continue;
     }
     if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
+    // js relations are rejected inside `[ ... ]` queries: the query is
+    // reified and evaluated by comp-aggregate.ts's own join, which only
+    // matches stored tuples (plans/v2-js-relations.md, out of scope).
+    const ih = it.atom.terms[0];
+    if (ih !== undefined && ih.tag === "Symbol" && jsRels.has(ih.name)) {
+      throw new Error(
+        `${where}: js relation '${ih.name}' cannot appear inside a '[ ... ]' aggregate query`,
+      );
+    }
     for (const t of it.atom.terms) {
       if (state !== null && isJsHead(t)) jsNotAllowed(state);
       noteFreeVars(t, prefixSeen, seen, join);
@@ -1459,7 +1539,7 @@ function decomposeAggComp(
   const k = state.lexPos;
   const prefixSeen = new Set(state.seen);
 
-  const free = aggCompOutCols(a, prefixSeen, state);
+  const free = aggCompOutCols(a, prefixSeen, state, state.jsRels);
 
   const fvTerm = (name: string): Term => ({
     tag: "Id",

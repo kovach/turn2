@@ -27,6 +27,7 @@ import {
 } from "./store.js";
 import { getOrCreateHead } from "./stats.js";
 import { decodeTerm, encodeTerm } from "./js-values.js";
+import { JS_REL_YIELD_CAP, type CompiledJsRel } from "./js-rel.js";
 
 // A compiled `#js` function: takes the hashcons store + raw Term args, decodes
 // the args, runs the user body, and encodes the result. See compileJsDefs.
@@ -52,6 +53,7 @@ interface Ctx {
   store: Store;
   schema: Map<string, string>;
   jsFuncs: Map<string, CompiledJs>;
+  jsRels: Map<string, CompiledJsRel[]>;
   trail: Trail;
   ruleName: string;
   ruleIdx: number;
@@ -62,12 +64,14 @@ export function evaluateRule(
   store: Store,
   schema: Map<string, string>,
   jsFuncs: Map<string, CompiledJs>,
+  jsRels: Map<string, CompiledJsRel[]> = new Map(),
   ruleIdx = -1,
 ): void {
   const ctx: Ctx = {
     store,
     schema,
     jsFuncs,
+    jsRels,
     trail: newTrail(),
     ruleName: rule.name,
     ruleIdx,
@@ -95,10 +99,77 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
     case "Max":        evalMaxMin(a, ctx, next, true); return;
     case "Min":        evalMaxMin(a, ctx, next, false); return;
     case "JsCall":     evalJsCall(a, ctx, next); return;
+    case "JsIterate":  evalJsIterate(a, ctx, next); return;
     case "Atom":
     case "Sub":
     case "Exception":
       throw new Error(`internal: pre-expand RuleAtom '${a.tag}' reached evaluator (decomposition pass missing?)`);
+  }
+}
+
+// Enumerate a `#js-def` relation (plans/v2-js-relations.md). The resolved
+// clause's generator receives the decoded `+`-position args; each yielded
+// array unifies against the `-`-position arg terms as a backtracking choice
+// point (an already-bound `-` arg filters — that's how a `-` clause serves a
+// bound call position). The generator is stepped manually so continuation
+// errors (GasError from `next()`) propagate unwrapped while user-body
+// errors are surfaced with the relation name.
+function evalJsIterate(
+  a: Extract<RuleAtom, { tag: "JsIterate" }>,
+  ctx: Ctx,
+  next: () => void,
+): void {
+  const clauses = ctx.jsRels.get(a.func);
+  const clause = clauses?.[a.defIndex ?? -1];
+  if (clause === undefined) {
+    throw new Error(`internal: js relation '${a.func}' reached eval without mode resolution`);
+  }
+  const args = a.args.map((t) => substTerm(t, ctx.trail));
+  const bound: unknown[] = [];
+  const outIdx: number[] = [];
+  for (let i = 0; i < clause.modes.length; i++) {
+    if (clause.modes[i] === "+") {
+      // Ground by the mode pass's binding analysis; decodeTerm throws an
+      // internal error otherwise.
+      bound.push(decodeTerm(args[i]!, ctx.store.hash));
+    } else {
+      outIdx.push(i);
+    }
+  }
+  let it: Iterator<unknown>;
+  try {
+    it = clause.gen(...bound)[Symbol.iterator]();
+  } catch (e) {
+    throw new Error(`#js-def ${a.func} threw: ${(e as Error).message}`);
+  }
+  let yields = 0;
+  for (;;) {
+    let res: IteratorResult<unknown>;
+    try {
+      res = it.next();
+    } catch (e) {
+      throw new Error(`#js-def ${a.func} threw: ${(e as Error).message}`);
+    }
+    if (res.done === true) return;
+    if (++yields > JS_REL_YIELD_CAP) {
+      throw new Error(`#js-def ${a.func}: yield limit exceeded (possible infinite generator)`);
+    }
+    const row = res.value;
+    if (!Array.isArray(row) || row.length !== outIdx.length) {
+      throw new Error(
+        `#js-def ${a.func}: yield must be an array of ${outIdx.length} value(s) (the '-' arguments)`,
+      );
+    }
+    const mark = trailLength(ctx.trail);
+    let ok = true;
+    for (let j = 0; j < outIdx.length; j++) {
+      if (!unifyTerms(args[outIdx[j]!]!, encodeTerm(row[j]), ctx.trail, ctx.store.hash)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) next();
+    trailUnwind(ctx.trail, mark);
   }
 }
 

@@ -149,6 +149,23 @@ export type RuleAtom =
     }
   // ----- Post-expand only -----
   //
+  // Enumerate a `#js-def` relation (plans/v2-js-relations.md). Produced by
+  // decomposition for a match atom whose head names a js relation; carries
+  // the user argument terms only (no head symbol, no trailing id slot — js
+  // relations have no stored rows) and does not touch the running anchor
+  // (js relations are timeless). `defIndex` selects the clause; it is set
+  // by `resolveJsModes` (js-rel.ts) and an internal error if still
+  // undefined at eval. At eval, `+`-mode args are decoded to JS values, the
+  // generator runs, and each yielded array unifies against the `-`-mode
+  // arg terms as a backtracking choice point.
+  | {
+      tag: "JsIterate";
+      func: string;
+      args: Term[];
+      defIndex?: number;
+      span: Span;
+    }
+  //
   // Stored-tuple lookup. The matched tuple's atom unifies against `atom`,
   // and its endpoints unify with `l` / `r` (typically fresh `_l_<k>` /
   // `_r_<k>` Variables that downstream atoms reference).
@@ -245,6 +262,19 @@ export interface JsDef {
   span: Span;
 }
 
+// One clause of a js relation, from a `#js-def name ±p1 .. ±pn { body }`
+// directive (plans/v2-js-relations.md). `body` is a JS *generator* body: it
+// receives the `+` (bound) params as JS parameters and yields arrays of the
+// `-` (unbound) argument values, in `-`-position order. A relation may have
+// several clauses with distinct mode vectors (same arity); `resolveJsModes`
+// picks the earliest clause ≤ each call site's binding modes.
+export interface JsRelDef {
+  name: string;
+  params: { mode: "+" | "-"; name: string }[];
+  body: string; // raw JS generator source between the braces
+  span: Span;
+}
+
 // Static link from an exception default rule's emitted relation back to the
 // prime relation it re-emits from (plans/v2-exception-default-provenance.md).
 // Derived by `applyExceptions` from the *final* default-rule bodies — after
@@ -275,6 +305,10 @@ export interface Program {
   reactive: Set<string>;
   // `name -> definition` for `#js` functions.
   jsDefs: Map<string, JsDef>;
+  // `name -> clauses in declaration order` for `#js-def` relations
+  // (plans/v2-js-relations.md). Disjoint from `jsDefs`, `macros`, and
+  // `schema` keys (enforced at parse).
+  jsRels: Map<string, JsRelDef[]>;
   // `name -> definition` for `head P1..Pn := [ ... ]` aggregation synonyms.
   // Eliminated by `expandMacros` before any other expand pass, which leaves
   // this map empty (plans/v2-aggregation-synonyms.md).

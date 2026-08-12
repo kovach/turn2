@@ -46,14 +46,14 @@ The aggregator registry (duplicated from v1): named fold definitions used by sch
 Defines the v2 intermediate representation (IR): the `RuleAtom` algebra spanning both pre-expand (parser output) and post-expand (evaluator input) phases, the `Rule`/`Program` containers, stored `Tuple`s, and the result types for a fixpoint run including blocked-choice reporting. It documents the compilation pipeline (parse → expand → fixpoint eval → Store) and how source markers desugar into explicit anchor IR.
 
 **Key terms:**
-- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`, `AggComp`, `Exception`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`)
+- `RuleAtom` — the core tagged-union IR node: pre-expand (`Atom`, `Sub`, `AggComp`, `Exception`), both-phase (`Equal`, `JsCall`), post-expand (`Match`, `Emit`, `Le`, `AssertLt`, `Max`, `Min`, `JsIterate`)
 - `Marker` — pre-expand source marker (`match`/`episode`/`fact`/`anchor`/`ask`/`constrain`/`aggregate`) driving desugaring
 - `MatchConstraint` — semi-naive eval tag (`"any" | "delta" | "old"`) on `Match` atoms
-- `Rule` / `Program` — named rule (body + delta fields) and the top-level container (`rules`, `schema`, `jsDefs`, `macros`)
+- `Rule` / `Program` — named rule (body + delta fields) and the top-level container (`rules`, `schema`, `jsDefs`, `jsRels`, `macros`)
 - `MacroDef` — an aggregation synonym `#macro head P1..Pn := [ ... ]`: a name, arity-many distinct parameter variable names, and one `AggComp` body. Eliminated by `expandMacros` (plans/v2-aggregation-synonyms.md)
 - `AggComp.reduce` — `{ op, varName, out, bare }`: the reduction op, the query-side column `varName` being folded (internal to the query, invisible outward), and the pattern `out` unified against the folded value (binds its unbound variables outward, or filters). `bare` flags the sugar `[ Q | op V ]`, which the parser desugars by freshening `V` on the query side (plans/v2-agg-output-var.md). The existence ops `some`/`none` (`[ Q | some V ]`, plans/v2-bracket-some.md) have no folded value: `out` is a `Wildcard` (encoded as `*cq-any`), so they bind nothing and contribute no output column — `V` is eliminated from scope and `some` acts as a guard binding only `joinCols − {V}`. `none` is the negation (succeeds iff the query is empty) and requires `joinCols − {V}` be empty (it binds nothing at all)
 - `Tuple` — stored datum: `atom` plus interval endpoints `l`/`r`
-- `SchemaDecl` / `JsDef` — relation→aggregator declaration; user-defined `#js` function
+- `SchemaDecl` / `JsDef` / `JsRelDef` — relation→aggregator declaration; user-defined `#js` function; one `#js-def` js-relation clause (mode-marked params + generator body, plans/v2-js-relations.md). `RuleAtom` gains the post-expand `JsIterate` variant: a js-relation match lowered to a generator enumeration (arg terms only — no head, no trailing id slot, no anchor effect), with `defIndex` naming the clause picked by `resolveJsModes`
 - `FixpointStatus` — run outcome (`done`/`gas`/`active-choices`/`empty-fringe-error`)
 - `ComponentOptions` / `BlockedChoose` — per-component choice enumeration; a blocked choose row
 
@@ -72,14 +72,16 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 - bool-weight validation — enforces `-> bool` weight restrictions
 - `#macro head P1..Pn := [ ... ]` macro definitions — the `#macro` command consumes its header through the `:=` and emits a `macroDef` token; the RHS tokenizes normally and arrives as the following `aggcomp` token, which reuses the multi-line `[` handling. Because the command marks the definition, `:=` keeps no special meaning anywhere else. `parseMacroDef` checks a Symbol head, distinct non-`_` Variable parameters, and `params.length === lexical arity`, then records a `MacroDef` in `Program.macros`. A definition is self-delimiting (it ends at its body's `]`, tracked by the `aggcomp` token's `endLine`), so no blank line is needed before the next definition or rule; only trailing content on the body's own line is an error (plans/v2-aggregation-synonyms.md)
 - `#def`/`#agg` commands — rule naming and schema declarations
+- `#js-def name ±p1 .. ±pn { body }` — one js-relation clause (plans/v2-js-relations.md): unparenthesized signature with `+` (bound) / `-` (enumerated) mode marks, generator body collected with the `#js` one-liner/multi-line rules. Clauses accumulate per name in `Program.jsRels` (declaration order = selection priority); parse enforces same arity across a name's clauses, distinct mode vectors, and that js-relation names are disjoint from `#js` functions, macros, and schema (`#agg`/`#reactive`) declarations — a js relation claims its name exclusively, since match sites never read the store
 
 # expand.ts
 
 The expansion pipeline that lowers parsed pre-expand rules into the flat post-expand IR: it runs anchor decomposition (`decomposeRule` + `pruneChains`), universal rule-splitting on every `Emit`, dead-slice filtering, and semi-naive delta-variant generation. The core anchor-decomposition pass threads SSA running-anchor variables and a `*chain` fingerprint, lowering each marker (match/episode/fact/anchor/ask/constrain/aggregate) into the right combination of `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal`. `Max`/`Min` appear only at matches (the anchor intersection with a stored tuple's endpoints); emit and sequence-sub anchor updates are statically determined by the running-anchor invariant and emit no atoms.
 
 **Key terms:**
-- `expand` — top-level pipeline: macros → exceptions → decompose → prune → split → filter → delta-variants
-- `expandStages` — same pipeline returning each named intermediate rule-list (`macroExpanded`/`decomposed`/`split`/`filtered`/`variants`); `expand` is its `variants`. Used by the `v2-cli.ts` `--stage` dumps
+- `expand` — top-level pipeline: macros → exceptions → decompose → prune → split → filter → js-mode-resolve → delta-variants
+- `expandStages` — same pipeline returning each named intermediate rule-list (`macroExpanded`/`decomposed`/`split`/`filtered`/`resolved`/`variants`); `expand` is its `variants`. Used by the `v2-cli.ts` `--stage` dumps
+- `decomposeJsRel` — js relations (plans/v2-js-relations.md): a plain match atom whose head names a `#js-def` relation pushes a `JsIterate` (args enter the chain as essential, like a match's user vars) and leaves the running anchor untouched — js relations are timeless, so no `Le`/`Max`/`Min` and no `_l_/_r_` slots. Every other appearance of a js-relation name throws: non-match markers and weights here, `!(...)` sub-atoms here, `[ ... ]` query items in `aggCompOutCols`, exception LHS in `applyExceptions` — those all read tuples through paths a js relation never populates. The `resolved` stage then runs `resolveJsModes` (js-rel.ts) on the post-split bodies, before delta variants (which only re-tag Match constraints)
 - `expandMacros` — the pipeline's **first** pass: source-to-source elimination of aggregation-synonym uses, run before `applyExceptions` so exception rewriting sees the relation reads a macro body performs. Rejects recursion (direct or mutual), normalizes each macro body to be macro-free in topological order, checks that every parameter names an *outward* variable of its body (a top-level output column), then replaces each qualifying use — a `match`-marker atom with no weight whose head is a macro name — with a deep copy of the body under a name-keyed map: arguments for parameters, fresh names for everything else. Non-qualifying occurrences (other markers, `-> weight`, an exception LHS, an atom inside `!(...)`) are errors: a macro name is not a relation. Leaves `Program.macros` empty, so a second invocation is a no-op — `runFixpoint` also calls it directly, mirroring `applyExceptions` (plans/v2-aggregation-synonyms.md)
 - `applyExceptions` — source-to-source elimination of `{p t1..tn => e}` `Exception` atoms before any other pass: renames emitting `p` occurrences to a fresh `_<p>_prime<k>` across the working set, has the host rule broadcast its context via a plain `_<p>_ctx<k>` anchor emit (exceptions never gate `;` progression; LHS vars are exception-local, with prefix-bound ones re-unified via the ctx payload), and generates `<rule>_watch<j>` / `<rule>_exn<j>` / `<rule>_default<j>` rules around a `bool` flag relation `_<p>_exn<k>` (the `_exn` rule is skipped for an empty RHS — bare suppression) (plans/v2-exceptions.md, amended by plans/v2-exception-watchers.md). Also invoked directly by `runFixpoint` so `computeAggStrata` sees exception-free rules. Sets `Program.provLinks`: one `{head, prime, arity}` record per default rule, derived from the *final* default-rule bodies (a later exception on the same relation renames an earlier default's emit head), consumed by `resolveExceptionProvenance` in fixpoint.ts (plans/v2-exception-default-provenance.md)
 - `decomposeRule` — anchor-decomposition pass; threads SSA anchor vars and a `*chain` fingerprint, lowering each `Marker` to post-expand atoms
@@ -100,11 +102,12 @@ A backward-pass chain-liveness optimization run between `decomposeRule` and `spl
 
 # eval.ts
 
-The single-rule evaluator: a CPS-style backtracking interpreter over the flat post-expand `RuleAtom` primitives, mutating a `Store` by matching stored tuples and emitting new ones. All anchor manipulation is now explicit IR, so this is a flat dispatch over `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal` with a binding trail for backtracking; pre-expand atoms reaching it throw.
+The single-rule evaluator: a CPS-style backtracking interpreter over the flat post-expand `RuleAtom` primitives, mutating a `Store` by matching stored tuples and emitting new ones. All anchor manipulation is now explicit IR, so this is a flat dispatch over `Match`/`Emit`/`Le`/`AssertLt`/`Max`/`Min`/`Equal`/`JsCall`/`JsIterate` with a binding trail for backtracking; pre-expand atoms reaching it throw.
 
 **Key terms:**
 - `evaluateRule` — public entry; runs the CPS backtracking interpreter, mutating the `Store`
 - `evalSeq` — dispatches on atom tag and chains continuations over a binding trail (unwound on backtrack)
+- `evalJsIterate` — enumerate a `#js-def` relation (plans/v2-js-relations.md): decode the resolved clause's `+`-position args, run its generator, unify each yielded array against the `-`-position arg terms as a backtracking choice point (a bound `-` arg filters). Steps the iterator manually so continuation errors (GasError) propagate unwrapped while user-body errors surface with the relation name; `JS_REL_YIELD_CAP` guards runaway generators
 - semi-naive gen filter — a `Match`'s `delta`/`old` `MatchConstraint` filters candidates by generation
 
 # js-values.ts
@@ -114,6 +117,15 @@ The single Term ↔ JS value boundary for user-defined `#js` functions (see `pla
 **Key terms:**
 - `decodeTerm` / `encodeTerm` — ground `Term` → JS value (expanding `Ref`s) and JS value → raw `Term`
 - term↔value mapping — compound ⇄ array, non-numeric Symbol ⇄ string, numeric Symbol → number, boolean → Symbol (encode-only)
+
+# js-rel.ts
+
+js relations (`#js-def`, plans/v2-js-relations.md): mode selection and clause compilation. A js relation is a set of generator clauses over one name/arity, each with a mode vector (`+` = bound at call, a JS parameter; `-` = enumerated, yielded). Modes are ordered `- < +` pointwise; `resolveJsModes` — run in `expandStages` between `filtered` and the delta variants, on the post-split flat bodies — does a left-to-right binding analysis per rule and stamps each `JsIterate` with the earliest declared clause ≤ the call site's modes (a `-` clause position serves a bound argument by yield-then-filter; no clause → compile error naming the rule and modes). Post-split is what makes cross-slice bindings visible: a consumer slice's leading Match unifies the stored row's trailing idTpl, so recovered chain variables count as bound.
+
+**Key terms:**
+- `resolveJsModes` — per-rule left-to-right binding analysis (Match/Emit bind everything they mention; Equal binds one side when the other is fully bound; JsCall/Max/Min bind `out`) + earliest-clause selection; sets `JsIterate.defIndex`
+- `compileJsRels` / `CompiledJsRel` — compile each clause's body once via the generator-function constructor with the `+` params as JS parameters; consumed by `evalJsIterate`
+- `JS_REL_YIELD_CAP` — per-call yield limit (no tuple is emitted between yields, so gas can't interrupt an infinite generator)
 
 # store.ts
 
@@ -135,7 +147,7 @@ The v2 store: interval-bearing hashconsed tuples, head indexing, and the moment-
 The top-level evaluation driver. It expands a program, runs an inner loop firing all rules to quiescence (semi-naive), then at quiescence collects blocked do-agg/choose rows; it closes the earliest tier of aggregates (re-entering the inner loop) or, if the earliest tier is all choices, halts with `active-choices` (or `empty-fringe-error`). Gas exhaustion is caught and surfaced as a `gas` status.
 
 **Key terms:**
-- `runFixpoint` — public entry; expands the program, runs the loop, returns a `FixpointResult` (`{ store, iterations, status }`); catches `GasError` → `gas`
+- `runFixpoint` — public entry; expands the program, compiles `#js`/`#js-def` bodies (`compileJsDefs`/`compileJsRels`), runs the loop, returns a `FixpointResult` (`{ store, iterations, status }`); catches `GasError` → `gas`
 - `resolveExceptionProvenance` — post-fixpoint `tupleSource` fixup on every return path (including `gas`): an exception default rule re-emits a matched `_<p>_prime<k>` tuple with identical args and endpoints (only head + trailing id slot differ) but its Emit's static span is the exception's line; this pass re-attributes each tuple of a `Program.provLinks` head to the span of its structurally matching prime tuple, following links transitively for chained exceptions, keeping the tuple's own span when no match exists (emits that escaped renaming: weighted or off-arity). So `tupleSource` is not always the firing Emit's span (plans/v2-exception-default-provenance.md)
 - inner loop / outer loop — fire all rules to quiescence, then close the earliest aggregate tier or surface blocked choices
 - delta-safe skip — skips rules with empty deltas via `deltaSafeSkip`/`deltaHead`/`prevHeads`

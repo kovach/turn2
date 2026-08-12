@@ -5,7 +5,7 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
-import type { JsDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
 import { aggregators } from "./aggregators.js";
 
 export interface ParseError {
@@ -51,6 +51,7 @@ type Command =
   | { kind: "agg"; decl: SchemaDecl }
   | { kind: "reactive"; decl: SchemaDecl }
   | { kind: "js"; name: string; params: string[]; body: string; line: number }
+  | { kind: "js-rel"; def: JsRelDef; line: number }
   | { kind: "exit"; line: number };
 
 export function parse(input: string): Program | ParseError {
@@ -266,8 +267,10 @@ export function tokenize(input: string): Token[] | ParseError {
           atomStart = true;
           continue;
         }
-        if (name === "js") {
-          // Two forms, neither of which counts braces (so the body may contain
+        if (name === "js" || name === "js-def") {
+          // `#js` (term function) and `#js-def` (relation clause,
+          // plans/v2-js-relations.md) share the body-collection rules. Two
+          // forms, neither of which counts braces (so the body may contain
           // arbitrary JS — strings, templates, nested braces):
           //   - one-liner: `#js (sig) { body }` — `}` is the last char, body is
           //     between the first `{` and the last `}` on the line.
@@ -280,7 +283,7 @@ export function tokenize(input: string): Token[] | ParseError {
           const sigPart = rawLine.slice(afterJs);
           const bracePos = sigPart.indexOf("{");
           if (bracePos < 0) {
-            return { line: lineno, message: "'#js' signature must be followed by '{'" };
+            return { line: lineno, message: `'#${name}' signature must be followed by '{'` };
           }
           const sig = sigPart.slice(0, bracePos).trim();
           const afterBrace = sigPart.slice(bracePos + 1);
@@ -293,14 +296,14 @@ export function tokenize(input: string): Token[] | ParseError {
             for (;;) {
               endLi++;
               if (endLi >= lines.length) {
-                return { line: lineno, message: "'#js' body is missing a closing '}' at column 0" };
+                return { line: lineno, message: `'#${name}' body is missing a closing '}' at column 0` };
               }
               const bl = lines[endLi]!;
               const blank = bl.trim() === "";
               const indented = bl.length > 0 && /\s/.test(bl[0]!);
               if (!blank && !indented) {
                 if (bl[0] !== "}") {
-                  return { line: endLi + 1, message: "'#js' body must be indented; expected '}' at column 0" };
+                  return { line: endLi + 1, message: `'#${name}' body must be indented; expected '}' at column 0` };
                 }
                 break;
               }
@@ -311,9 +314,9 @@ export function tokenize(input: string): Token[] | ParseError {
             // One-liner: body is between `{` and the last `}` on the line.
             body = afterBrace.slice(0, afterBrace.lastIndexOf("}"));
           } else {
-            return { line: lineno, message: "'#js' body must close with '}' on the same line, or put '{' last and indent the body below" };
+            return { line: lineno, message: `'#${name}' body must close with '}' on the same line, or put '{' last and indent the body below` };
           }
-          tokens.push({ tag: "command", name: "js", argText: sig, body, line: lineno });
+          tokens.push({ tag: "command", name, argText: sig, body, line: lineno });
           li = endLi;       // multi-line: past the `}` line; one-liner: unchanged
           pos = raw.length; // exit the inner while for the signature line
           atomStart = true;
@@ -431,6 +434,9 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
   if (tok.name === "js") {
     return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
   }
+  if (tok.name === "js-def") {
+    return parseJsRelCommand(tok.argText, tok.body ?? "", tok.line);
+  }
   if (tok.name === "exit") {
     if (tok.argText.trim().length > 0) {
       return { line: tok.line, message: "'#exit' takes no arguments" };
@@ -471,11 +477,49 @@ function parseJsCommand(sig: string, body: string, line: number): Command | Pars
   return { kind: "js", name, params, body, line };
 }
 
+// Parse a `#js-def` directive (plans/v2-js-relations.md): `sig` is the
+// unparenthesized `name ±p1 .. ±pn` text between the command name and the
+// `{`; `body` is the raw JS generator source between the braces. Each param
+// carries a mode: `+` = bound at call (a JS parameter of the generator),
+// `-` = enumerated (yielded).
+function parseJsRelCommand(sig: string, body: string, line: number): Command | ParseError {
+  const parts = sig.trim().length === 0 ? [] : sig.trim().split(/\s+/);
+  if (parts.length === 0) {
+    return { line, message: "'#js-def' signature must be 'name ±param...'" };
+  }
+  const name = parts[0]!;
+  if (!isSymToken(name)) {
+    return { line, message: `'#js-def' name must be a lowercase symbol (got '${name}')` };
+  }
+  if (/^r\d+$/.test(name)) {
+    return { line, message: `'#js-def' name '${name}' is reserved for auto-naming` };
+  }
+  const params: JsRelDef["params"] = [];
+  for (const p of parts.slice(1)) {
+    const mode = p[0];
+    if (mode !== "+" && mode !== "-") {
+      return { line, message: `'#js-def' parameter must be marked '+' (bound) or '-' (enumerated) (got '${p}')` };
+    }
+    const pname = p.slice(1);
+    // `+` params become JS parameters of the generator; validate `-` names
+    // the same way for uniformity.
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(pname)) {
+      return { line, message: `'#js-def' parameter must be a valid JS identifier (got '${p}')` };
+    }
+    if (params.some((q) => q.name === pname)) {
+      return { line, message: `duplicate '#js-def' parameter '${pname}' (in '${name}')` };
+    }
+    params.push({ mode, name: pname });
+  }
+  return { kind: "js-rel", def: { name, params, body, span: { line } }, line };
+}
+
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
   const reactive = new Set<string>();
   const jsDefs = new Map<string, JsDef>();
+  const jsRels = new Map<string, JsRelDef[]>();
   const macros = new Map<string, MacroDef>();
   let i = 0;
 
@@ -510,7 +554,33 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (jsDefs.has(cmd.name)) {
           return { line: cmd.line, message: `duplicate '#js' function '${cmd.name}'` };
         }
+        if (jsRels.has(cmd.name)) {
+          return { line: cmd.line, message: `'#js' name '${cmd.name}' is already a '#js-def' relation` };
+        }
         jsDefs.set(cmd.name, { name: cmd.name, params: cmd.params, body: cmd.body, span: { line: cmd.line } });
+        continue;
+      }
+      if (cmd.kind === "js-rel") {
+        const def = cmd.def;
+        if (jsDefs.has(def.name)) {
+          return { line: cmd.line, message: `'#js-def' name '${def.name}' is already a '#js' function` };
+        }
+        const clauses = jsRels.get(def.name);
+        if (clauses === undefined) {
+          jsRels.set(def.name, [def]);
+          continue;
+        }
+        if (clauses[0]!.params.length !== def.params.length) {
+          return {
+            line: cmd.line,
+            message: `'#js-def ${def.name}' clauses must agree on arity (got ${def.params.length}, expected ${clauses[0]!.params.length})`,
+          };
+        }
+        const modes = def.params.map((p) => p.mode).join("");
+        if (clauses.some((c) => c.params.map((p) => p.mode).join("") === modes)) {
+          return { line: cmd.line, message: `duplicate '#js-def ${def.name}' mode signature (${def.params.map((p) => p.mode).join(" ")})` };
+        }
+        clauses.push(def);
         continue;
       }
       // cmd.kind === "def" — attach to the rule that follows. Skip any
@@ -553,7 +623,21 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const boolErr = validateBoolWeights(rules, schema);
   if (boolErr !== null) return boolErr;
 
-  return { rules, schema, reactive, jsDefs, macros };
+  // js relations claim their name exclusively: a stored-relation schema or a
+  // macro under the same name would make match sites ambiguous (js matches
+  // never read the store). Checked after the loop since declaration order is
+  // free (a `#macro`/`#agg` may lexically precede or follow the `#js-def`).
+  for (const [name, clauses] of jsRels) {
+    const line = clauses[0]!.span.line;
+    if (macros.has(name)) {
+      return { line, message: `'#js-def' name '${name}' is already a macro` };
+    }
+    if (schema.has(name)) {
+      return { line, message: `js relation '${name}' cannot have a schema declaration ('#agg'/'#reactive')` };
+    }
+  }
+
+  return { rules, schema, reactive, jsDefs, jsRels, macros };
 }
 
 // Parse a macro definition `#macro head P1..Pn := [ ... ]`

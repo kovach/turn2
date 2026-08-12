@@ -7,6 +7,7 @@
 import type { FixpointStatus, Program, ProvLink } from "./types.js";
 import type { Span } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
+import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
 import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
 import { applyExceptions, expand, expandMacros } from "./expand.js";
 import {
@@ -43,6 +44,7 @@ export function runFixpoint(
   program = applyExceptions(program);
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
+  const jsRelFuncs = compileJsRels(expanded.jsRels);
   // Aggregate dependency strata: computed from the pre-expand rules (markers
   // still present) so the outer loop can order same-moment reactive
   // finalizations by dependency. See plans/v2-reactive-aggregates.md.
@@ -54,7 +56,7 @@ export function runFixpoint(
   let totalIters = 0;
 
   try {
-    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, strata);
+    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, strata);
     resolveExceptionProvenance(store, program.provLinks);
     return result;
   } catch (e) {
@@ -144,10 +146,10 @@ function findPrimeTuple(store: Store, prime: string, idx: number): number | unde
   return undefined;
 }
 
-function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, strata: Map<string, number>): FixpointResult {
+function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, strata: Map<string, number>): FixpointResult {
   let totalIters = startIters;
   while (true) {
-    const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs);
+    const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs, jsRelFuncs);
     totalIters += innerIters;
     if (totalIters >= gas) {
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
@@ -227,7 +229,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
   }
 }
 
-function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<string, CompiledJs>): number {
+function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>): number {
   let iter = 0;
   while (iter < gas) {
     const before = storeSize(store);
@@ -255,7 +257,7 @@ function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<str
         continue;
       }
       rulesRan++;
-      evaluateRule(rule, store, program.schema, jsFuncs, i);
+      evaluateRule(rule, store, program.schema, jsFuncs, jsRelFuncs, i);
     }
     const after = storeSize(store);
     store.stats.iterations.push({

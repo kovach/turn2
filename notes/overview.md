@@ -1,3 +1,42 @@
+# extending icon
+plan: plans/v2-icon-layout.md
+
+- currently we use `icon I` and `icon:name I N` to display and label clickable icons
+- now we add `left:right I1 I2` and `above:below I1 I2` for visual arrangement.
+- the GUI should pack icons into a grid layout, respecting each constraint if possible
+- default can match current behavior: icons entered into a row
+- we assume no conflict between the layout constraints and the current `at X -> L` handling: we ignore `left:right x y` unless it is true that `at x -> z` and `at y -> z` (both have same parent) (same for `above:below`)
+
+# js relations
+plan: plans/v2-js-relations.md
+
+currently we have `#js (inc x) { return x + 1; }` to define term-level js functions.
+
+this change allows the following:
+
+```
+-- we use `+`, `-` to denote *mode*
+#js-def range +Lo +Hi -I {
+  for (let i = Lo; i < Hi; i++) {
+    yield [i]; // yield just the unbound arguments
+  }
+}
+```
+
+then a use like
+```
+range 0 8 I, range 0 8 J, ^foo I J
+```
+
+- allowed only as match atoms
+- a given relation may have several `js-def` with different mode markings
+  - modes are ordered: `- < +`, and the overall order is the product order across the arguments
+  - at compilation, we choose the earliest `js-def` that is ≤ the match atom
+  - to do this, we need to do simple left-to-right binding analysis on rules.
+  - we do this as a final stage: after expansion/splitting/etc
+- must be pure functions
+
+# 26/08/12
 # 26/07/24
 
 # tie visual provenance to atom spans, not lines

@@ -30,6 +30,7 @@ export const STAGES = [
   "decompose",
   "split",
   "filter",
+  "modes",
   "delta",
   "expand",
   "eval",
@@ -45,6 +46,7 @@ const STAGE_DOC: Record<Stage, string> = {
   decompose: "lower each marker (match/episode/fact/…) into the post-expand IR (Match/Emit/Le/AssertLt/Max/Min).",
   split: "slice every rule at each Emit into producer/consumer halves.",
   filter: "drop sliced tails with no observable effect (no Emit, no AssertLt).",
+  modes: "resolve each js-relation call to a '#js-def' clause by binding-mode analysis.",
   delta: "clone each surviving rule into its semi-naive delta variants.",
   expand: "the final expanded program the evaluator consumes (= delta).",
   eval: "run the program to fixpoint and render the resulting store.",
@@ -106,6 +108,7 @@ function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
     case "decompose": return expandStages(parsed).decomposed;
     case "split": return expandStages(parsed).split;
     case "filter": return expandStages(parsed).filtered;
+    case "modes": return expandStages(parsed).resolved;
     case "delta": return expandStages(parsed).variants;
     case "expand": return expand(parsed).rules;
     default: {
