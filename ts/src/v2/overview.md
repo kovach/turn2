@@ -288,7 +288,7 @@ The DOM-free core of the editor's symbol/variable completion (`editor.ts` owns t
 
 # default-display.ts
 
-The bundled fallback display module (used when a program declares no `-- display:` directive). It renders an interactive icon tree from `icon T` / `icon:name` / `at X -> L` relations filtered to the selected choice-component's moment, shows clickable group/chip headers for active choice components, and commits choices via `DisplayApi.commit` when an icon matches a component slot (with a pending state for ambiguous multi-slot matches).
+The bundled fallback display module (used when a program declares no `-- display:` directive). It renders an interactive icon tree from `icon T` / `icon:name` / `at X -> L` relations filtered to the selected choice-component's moment, arranges each container's siblings per `left:right` / `above:below` constraints (via `icon-layout.ts`), shows clickable group/chip headers for active choice components, and commits choices via `DisplayApi.commit` when an icon matches a component slot (with a pending state for ambiguous multi-slot matches).
 
 **Key terms:**
 - `createDefaultDisplay` — factory for the fallback `DisplayModule` (used when no `-- display:` directive)
@@ -296,3 +296,15 @@ The bundled fallback display module (used when a program declares no `-- display
 - icon tree — built from `icon` / `icon:name` / `at X -> L` rows within the selected component's moment
 - `ClickIntent` / `commit` — clicking an icon matching a choice slot commits `{ activeTerms, optionTuple }`
 - `aggregateOver` — used to resolve `at` parent links when a schema is present
+- `collectConstraints` / `scopeConstraints` — read `left:right` / `above:below` rows at the moment, then keep each one only in containers where both endpoints are siblings (`ROOT_KEY` is the top-level container); the rest are counted for a warning
+- `renderContainer` — one container's icons: plain wrapping row when the layout is a single cell, otherwise a `.dd-grid` with one `.dd-grid-cell` per occupied position
+
+# icon-layout.ts
+
+Grid packing for the default display, store-free and DOM-free so it can be tested headless. Given one container's sibling icon keys plus `left:right` / `above:below` edges, it assigns each icon a `(row, col)` by longest-path layering: column = depth in the `left:right` DAG, row = depth in the `above:below` DAG, so every surviving edge is strictly satisfied and icons pack up-and-left. The two axes are independent — a cycle drops only its own axis's edges. With no constraints everything lands in cell `(0,0)`, which the caller renders as the historical wrapping row. See plans/v2-icon-layout.md.
+
+**Key terms:**
+- `layoutIcons` — top entry: members + edges → `IconLayout` (`placements`, `rows`, `cols`, `hCycle`, `vCycle`)
+- `longestPathDepths` — memoized DFS over predecessors; on a cycle reports `cycle: true` and flat depths
+- `siblingEdges` — drops self-edges and edges naming non-members, so callers may pass a superset
+- `isTrivialLayout` — single-cell test; the caller's signal to skip the grid entirely

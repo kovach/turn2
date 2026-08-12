@@ -1,11 +1,11 @@
 -- Each turn has three phases: Action, then Buy, then Clean-up
-turn _
-  ~action-phase _ ;
-  ~buy-phase _ ;
-  ~cleanup-phase _
+turn
+  ~action-phase;
+  ~buy-phase ;
+  ~cleanup-phase
 
 -- In your Action phase, you can play one Action card from your hand.
-action-phase _
+action-phase
   ~do-action
 
 do-action

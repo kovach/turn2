@@ -5,6 +5,9 @@
 // Layout: one icon div per `icon T` row, nested under its parent(s) per
 // `at X -> L` rows. Both `icon` and `at` are restricted to rows whose
 // interval contains the selected component's choice-component moment M.
+// Within a container, `left:right A B` / `above:below A B` rows arrange the
+// sibling icons on a grid (see icon-layout.ts); a container with no such
+// constraints renders as a plain wrapping row, as it always has.
 //
 // Interaction: when active choice components are present, render group
 // headers above the icon tree; one is "selected" and drives both the
@@ -21,6 +24,7 @@ import type { Store } from "./store.js";
 import type { ComponentOptions } from "./types.js";
 import { candidatesByHead, intervalContains, tokenOf } from "./store.js";
 import { aggregateOver } from "./scheduler.js";
+import { isTrivialLayout, layoutIcons, type LayoutEdge } from "./icon-layout.js";
 
 interface ClickIntent {
   activeTerms: Term[];
@@ -60,6 +64,8 @@ const CSS = `
 .dd-icons { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; min-width: 200px; font-size: 16px; }
 .dd-icon { padding: 6px 10px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg-2); font-family: monospace; font-size: 16px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
 .dd-icon-children { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 6px; }
+.dd-grid { display: grid; gap: 6px; grid-auto-columns: min-content; align-items: start; justify-items: start; }
+.dd-grid-cell { display: flex; flex-wrap: wrap; gap: 6px; }
 .dd-icon.clickable { cursor: pointer; border-color: var(--syn-head); }
 .dd-icon.ambiguous { cursor: pointer; border-color: var(--syn-ref); }
 .dd-icon.pending { background: var(--bg-3); border-style: dashed; }
@@ -73,6 +79,34 @@ interface IconNode {
   termKey: number;
   label: string;
   parents: number[];       // termKeys of parents (or [] for top-level)
+}
+
+// Pseudo-parent for icons with no `at` parent: the top-level row is a
+// container like any other, so a program with no `at` rows can still use
+// `left:right` / `above:below`.
+const ROOT_KEY = -1;
+
+interface Constraints {
+  horizontal: LayoutEdge[];
+  vertical: LayoutEdge[];
+}
+
+interface ScopedConstraints {
+  byContainer: Map<number, Constraints>;
+  // Constraints between icons that never share a container.
+  ignored: number;
+}
+
+interface LayoutWarnings {
+  hCycle: boolean;
+  vCycle: boolean;
+}
+
+// Threaded through rendering: per-container constraints plus the mutable
+// warning flags the containers raise as they lay themselves out.
+interface LayoutCtx {
+  byContainer: Map<number, Constraints>;
+  warn: LayoutWarnings;
 }
 
 interface RenderState {
@@ -214,6 +248,69 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     return { childToParents, orphans };
   }
 
+  // Collect `left:right A B` / `above:below A B` rows whose interval contains
+  // M and whose endpoints are both icons. Non-icon endpoints are dropped here;
+  // sibling scoping happens in `scopeConstraints`.
+  function collectConstraints(
+    store: Store,
+    M: Term,
+    iconKeys: Set<number>,
+  ): { cons: Constraints; dropped: number } {
+    let dropped = 0;
+    function collect(head: string): LayoutEdge[] {
+      const out: LayoutEdge[] = [];
+      for (const idx of candidatesByHead(store, head)) {
+        const t = store.tuples[idx]!;
+        const ts = t.atom.terms;
+        // [head, A, B, id]
+        if (ts.length !== 4) continue;
+        if (!intervalContains(store, t.l, t.r, M, M)) continue;
+        const from = tokenOf(store, ts[1]!);
+        const to = tokenOf(store, ts[2]!);
+        if (!iconKeys.has(from) || !iconKeys.has(to)) { dropped++; continue; }
+        out.push({ from, to });
+      }
+      return out;
+    }
+    const horizontal = collect("left:right");
+    const vertical = collect("above:below");
+    return { cons: { horizontal, vertical }, dropped };
+  }
+
+  // Restrict each constraint to the containers in which both endpoints are
+  // siblings. An edge used by no container is counted as ignored.
+  function scopeConstraints(
+    containers: Map<number, IconNode[]>,
+    cons: Constraints,
+  ): ScopedConstraints {
+    const byContainer = new Map<number, Constraints>();
+    const usedH = new Set<number>();
+    const usedV = new Set<number>();
+
+    for (const [key, members] of containers) {
+      const memberKeys = new Set(members.map((m) => m.termKey));
+      const horizontal: LayoutEdge[] = [];
+      const vertical: LayoutEdge[] = [];
+      cons.horizontal.forEach((e, i) => {
+        if (e.from === e.to) return;
+        if (!memberKeys.has(e.from) || !memberKeys.has(e.to)) return;
+        usedH.add(i);
+        horizontal.push(e);
+      });
+      cons.vertical.forEach((e, i) => {
+        if (e.from === e.to) return;
+        if (!memberKeys.has(e.from) || !memberKeys.has(e.to)) return;
+        usedV.add(i);
+        vertical.push(e);
+      });
+      byContainer.set(key, { horizontal, vertical });
+    }
+
+    const ignored =
+      (cons.horizontal.length - usedH.size) + (cons.vertical.length - usedV.size);
+    return { byContainer, ignored };
+  }
+
   // candidates(T, C_sel): set of slot indices i such that some option row
   // has tokensEq(row[i], T). Returns the set as an array of (slotIdx, var).
   function candidatesFor(
@@ -314,12 +411,64 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     });
   }
 
+  // Render one container's worth of sibling icons. With no applicable
+  // constraint the layout is a single cell and we emit the historical
+  // wrapping-row markup; otherwise a grid, one cell div per occupied
+  // position, icons within a cell (unrelated by any constraint) side by side.
+  function renderContainer(
+    containerKey: number,
+    members: IconNode[],
+    baseClass: string,
+    childrenOf: Map<number, IconNode[]>,
+    comp: ComponentOptions | null,
+    store: Store,
+    rerender: () => void,
+    lay: LayoutCtx,
+  ): HTMLElement {
+    const el = document.createElement("div");
+    const cons = lay.byContainer.get(containerKey);
+    const layout = layoutIcons(
+      members.map((m) => m.termKey),
+      cons?.horizontal ?? [],
+      cons?.vertical ?? [],
+    );
+    if (layout.hCycle) lay.warn.hCycle = true;
+    if (layout.vCycle) lay.warn.vCycle = true;
+
+    if (isTrivialLayout(layout)) {
+      el.className = baseClass;
+      for (const m of members) {
+        el.appendChild(renderIcon(m, childrenOf, comp, store, rerender, lay));
+      }
+      return el;
+    }
+
+    el.className = `${baseClass} dd-grid`;
+    const cells = new Map<string, HTMLElement>();
+    for (let i = 0; i < members.length; i++) {
+      const p = layout.placements[i]!;
+      const cellKey = `${p.row},${p.col}`;
+      let cell = cells.get(cellKey);
+      if (cell === undefined) {
+        cell = document.createElement("div");
+        cell.className = "dd-grid-cell";
+        cell.style.gridRow = String(p.row + 1);
+        cell.style.gridColumn = String(p.col + 1);
+        cells.set(cellKey, cell);
+        el.appendChild(cell);
+      }
+      cell.appendChild(renderIcon(members[i]!, childrenOf, comp, store, rerender, lay));
+    }
+    return el;
+  }
+
   function renderIcon(
     icon: IconNode,
     childrenOf: Map<number, IconNode[]>,
     comp: ComponentOptions | null,
     store: Store,
     rerender: () => void,
+    lay: LayoutCtx,
   ): HTMLElement {
     const el = document.createElement("div");
     el.className = "dd-icon";
@@ -330,12 +479,10 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
     const kids = childrenOf.get(icon.termKey);
     if (kids && kids.length > 0) {
-      const kidsEl = document.createElement("div");
-      kidsEl.className = "dd-icon-children";
-      for (const k of kids) {
-        kidsEl.appendChild(renderIcon(k, childrenOf, comp, store, rerender));
-      }
-      el.appendChild(kidsEl);
+      el.appendChild(renderContainer(
+        icon.termKey, kids, "dd-icon-children",
+        childrenOf, comp, store, rerender, lay,
+      ));
       el.classList.add("dd-icon-container");
     }
 
@@ -461,16 +608,22 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     const { childToParents, orphans } = collectAt(store, M, iconKeys, ctx.schema);
     const { roots, childrenOf, cycleWarning } = buildIconTree(icons, childToParents);
 
+    const containers = new Map<number, IconNode[]>([[ROOT_KEY, roots]]);
+    for (const [pk, kids] of childrenOf) containers.set(pk, kids);
+    const { cons, dropped } = collectConstraints(store, M, iconKeys);
+    const scoped = scopeConstraints(containers, cons);
+    const lay: LayoutCtx = {
+      byContainer: scoped.byContainer,
+      warn: { hCycle: false, vCycle: false },
+    };
+
     const groups = renderGroups(ctx, store, rerender);
     if (groups) container.appendChild(groups);
 
-    const iconsEl = document.createElement("div");
-    iconsEl.className = "dd-icons";
     const comp = ctx.components[state.selectedIdx] ?? null;
-    for (const r of roots) {
-      iconsEl.appendChild(renderIcon(r, childrenOf, comp, store, rerender));
-    }
-    container.appendChild(iconsEl);
+    container.appendChild(renderContainer(
+      ROOT_KEY, roots, "dd-icons", childrenOf, comp, store, rerender, lay,
+    ));
 
     if (cycleWarning) {
       const w = document.createElement("div");
@@ -483,6 +636,18 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       w.className = "dd-warn";
       w.textContent = `warning: ${orphans.length} \`at\` target(s) missing \`icon\``;
       container.appendChild(w);
+    }
+    function warn(text: string): void {
+      const w = document.createElement("div");
+      w.className = "dd-warn";
+      w.textContent = text;
+      container.appendChild(w);
+    }
+    if (lay.warn.hCycle) warn("warning: `left:right` cycle; horizontal layout ignored");
+    if (lay.warn.vCycle) warn("warning: `above:below` cycle; vertical layout ignored");
+    const unusable = dropped + scoped.ignored;
+    if (unusable > 0) {
+      warn(`warning: ${unusable} layout constraint(s) ignored (not sibling icons)`);
     }
   }
 

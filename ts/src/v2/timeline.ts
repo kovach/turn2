@@ -1403,24 +1403,5 @@ export function renderTimeline(
     }
   }
 
-  if (opts.orientation === "horizontal") attachHorizontalWheelScroll(svg);
-
   return { main: svg, sidebar: sidebarEl };
-}
-
-// Translate vertical wheel deltas into horizontal scroll on the timeline's
-// scroll container. Pure vertical wheel (mouse wheel, no shift, no deltaX)
-// scrolls the container left/right; shift-wheel and trackpad horizontal
-// gestures pass through to default behavior.
-function attachHorizontalWheelScroll(svg: SVGSVGElement): void {
-  svg.addEventListener("wheel", (e: WheelEvent) => {
-    if (e.shiftKey) return;
-    if (e.deltaX !== 0) return;
-    if (e.deltaY === 0) return;
-    const scroller = svg.parentElement;
-    if (!scroller) return;
-    if (scroller.scrollWidth <= scroller.clientWidth) return;
-    e.preventDefault();
-    scroller.scrollLeft += e.deltaY;
-  }, { passive: false });
 }
