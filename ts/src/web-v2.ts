@@ -97,6 +97,52 @@ function revealGasControls(): void {
   tupleGasCtlEl.classList.remove("hidden");
 }
 
+// --- Collapsible panes ---
+//
+// Each `[data-collapse]` label in the page names one pane here; clicking it
+// folds the pane down to its label row (the editor folds the whole left grid
+// column away, splitter included). Persisted, unlike the timeline collapse
+// state, because it's a layout preference rather than program content.
+const COLLAPSE_KEY = "v2-collapsed";
+const collapsePanes: Record<string, HTMLElement> = {
+  editor: document.querySelector(".editors") as HTMLElement,
+  display: document.querySelector(".display-pane") as HTMLElement,
+  db: document.querySelector(".db-pane") as HTMLElement,
+  info: document.querySelector(".info-pane") as HTMLElement,
+};
+const workspaceEl = document.querySelector(".workspace") as HTMLElement;
+const collapsed = new Set<string>();
+try {
+  const raw = localStorage.getItem(COLLAPSE_KEY);
+  if (raw !== null) {
+    for (const k of JSON.parse(raw) as string[]) {
+      if (Object.prototype.hasOwnProperty.call(collapsePanes, k)) collapsed.add(k);
+    }
+  }
+} catch { /* ignore */ }
+
+function refreshCollapse(): void {
+  for (const [key, el] of Object.entries(collapsePanes)) {
+    el.classList.toggle("collapsed", collapsed.has(key));
+  }
+  workspaceEl.classList.toggle("editor-collapsed", collapsed.has("editor"));
+  document.querySelectorAll("[data-collapse]").forEach((el) => {
+    el.classList.toggle("collapsed", collapsed.has(el.getAttribute("data-collapse") ?? ""));
+  });
+}
+
+document.querySelectorAll("[data-collapse]").forEach((el) => {
+  el.addEventListener("click", () => {
+    const key = el.getAttribute("data-collapse");
+    if (key === null || !Object.prototype.hasOwnProperty.call(collapsePanes, key)) return;
+    if (collapsed.has(key)) collapsed.delete(key);
+    else collapsed.add(key);
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsed])); } catch { /* ignore */ }
+    refreshCollapse();
+  });
+});
+refreshCollapse();
+
 let currentDisplayName: string | null = null;
 let currentDisplayModule: DisplayModule | null = null;
 const injectedStyles = new Set<string>();
@@ -270,7 +316,7 @@ function escapeHtml(s: string): string {
 // (renderTimelineH). Only the active view is rendered on each run; switching
 // re-renders the newly visible view from `lastStore`.
 const DB_VIEW_KEY = "v2-db-view";
-let dbView: "database" | "timeline" = "database";
+let dbView: "database" | "timeline" = "timeline";
 try {
   const v = sessionStorage.getItem(DB_VIEW_KEY);
   if (v === "database" || v === "timeline") dbView = v;

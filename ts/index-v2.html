@@ -64,6 +64,24 @@
     .db-view-btn:hover { color: var(--fg); }
     .db-view-btn.active { background: var(--hover); color: var(--fg); border-color: var(--fg-faint); }
     .hidden { display: none !important; }
+    /* Collapsible panes: every [data-collapse] label toggles the pane it names
+     * (see web-v2.ts). A collapsed pane keeps its label row and drops
+     * everything else, so the label stays clickable to bring it back. */
+    .pane-toggle { cursor: pointer; user-select: none; }
+    .pane-toggle:hover { color: var(--fg); }
+    .pane-toggle::before { content: "▾ "; font-size: 9px; opacity: 0.7; }
+    .pane-toggle.collapsed::before { content: "▸ "; }
+    .display-pane.collapsed, .db-pane.collapsed, .info-pane.collapsed { flex: 0 0 auto; }
+    .display-pane.collapsed > :not(.pane-label),
+    .db-pane.collapsed > :not(.pane-label),
+    .info-pane.collapsed > :not(.pane-label) { display: none !important; }
+    /* Hand the freed vertical space to the first pane below that is still open. */
+    .display-pane.collapsed ~ .db-pane:not(.collapsed),
+    .display-pane.collapsed ~ .db-pane.collapsed ~ .info-pane:not(.collapsed) { flex: 1 1 auto; }
+    .workspace.editor-collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
+    .workspace.editor-collapsed .editors,
+    .workspace.editor-collapsed #splitter { display: none; }
+    .db-pane .pane-label .label-left { display: flex; align-items: center; gap: 10px; }
     /* Timeline rendered inline inside the db pane */
     #timeline-inline { flex: 1; overflow: auto; padding: 12px; min-width: 0; }
     .timeline-svg { display: block; color: var(--fg); }
@@ -82,7 +100,7 @@
 </head>
 <body>
   <header>
-    <span id="file-name"></span>
+    <span id="file-name" class="pane-toggle" data-collapse="editor" title="Click to collapse/show the editor"></span>
     <span id="status-line">—</span>
     <!-- Hidden until a run actually trips a gas limit; see web-v2.ts. -->
     <label class="gas-ctl hidden" id="gas-ctl" title="Max fixpoint iterations before giving up">gas <input type="number" id="gas" min="1" step="10" /></label>
@@ -107,22 +125,25 @@
     <div id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <div class="right-column">
       <div class="display-pane">
-        <div class="pane-label"><span>Display</span></div>
+        <div class="pane-label"><span class="pane-toggle" data-collapse="display">Display</span></div>
         <div id="display"></div>
       </div>
       <div class="db-pane">
         <div class="pane-label">
-          <span class="db-view-toggle">
-            <button type="button" class="db-view-btn active" id="db-view-database">Database</button>
-            <button type="button" class="db-view-btn" id="db-view-timeline">Timeline</button>
+          <span class="label-left">
+            <span class="pane-toggle" data-collapse="db">Result</span>
+            <span class="db-view-toggle">
+              <button type="button" class="db-view-btn" id="db-view-database">Database</button>
+              <button type="button" class="db-view-btn active" id="db-view-timeline">Timeline</button>
+            </span>
           </span>
           <span><label style="font-size: 11px; color: #888;"><input type="checkbox" id="hide-internal" checked /> hide internal</label><label style="font-size: 11px; color: #888; margin-left: 8px;"><input type="checkbox" id="db-temporal" checked /> temporal</label></span>
         </div>
-        <div id="db"></div>
-        <div id="timeline-inline" class="hidden"></div>
+        <div id="db" class="hidden"></div>
+        <div id="timeline-inline"></div>
       </div>
       <div class="info-pane">
-        <div class="pane-label"><span>Info</span></div>
+        <div class="pane-label"><span class="pane-toggle" data-collapse="info">Info</span></div>
         <div id="info"></div>
       </div>
     </div>
