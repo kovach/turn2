@@ -62,11 +62,13 @@ const dbViewTimelineEl = document.getElementById("db-view-timeline") as HTMLButt
 
 const gasEl = document.getElementById("gas") as HTMLInputElement;
 const tupleGasEl = document.getElementById("tuple-gas") as HTMLInputElement;
+const gasCtlEl = document.getElementById("gas-ctl") as HTMLLabelElement;
+const tupleGasCtlEl = document.getElementById("tuple-gas-ctl") as HTMLLabelElement;
 
 // Gas defaults. Both limits are editable in the header, but the edit lasts
 // only for the session — every reload starts back at these values.
-const GAS_DEFAULT = 100;
-const TUPLE_GAS_DEFAULT = 3000;
+const GAS_DEFAULT = 150;
+const TUPLE_GAS_DEFAULT = 10000;
 
 // Current limits, read from the inputs so an edit takes effect on the next
 // run. A blank or non-positive field falls back to the default rather than
@@ -82,6 +84,18 @@ function gasLimits(): { gas: number; tupleGas: number } {
 
 gasEl.value = String(GAS_DEFAULT);
 tupleGasEl.value = String(TUPLE_GAS_DEFAULT);
+
+// The gas fields are clutter for programs that terminate, so they stay hidden
+// until a run actually runs out of gas. Once revealed they stay up for the rest
+// of the session — otherwise raising a limit past the trip point would hide the
+// field you'd need to lower it again.
+let gasCtlsShown = false;
+function revealGasControls(): void {
+  if (gasCtlsShown) return;
+  gasCtlsShown = true;
+  gasCtlEl.classList.remove("hidden");
+  tupleGasCtlEl.classList.remove("hidden");
+}
 
 let currentDisplayName: string | null = null;
 let currentDisplayModule: DisplayModule | null = null;
@@ -409,6 +423,7 @@ async function run(): Promise<void> {
       setStatus(`done — ${iterations} iter${iterations === 1 ? "" : "s"}, ${store.tuples.length} tuples`, false);
       break;
     case "gas":
+      revealGasControls();
       // Either limit can trigger this, so report where the run stopped
       // against both.
       setStatus(
