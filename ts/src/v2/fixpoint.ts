@@ -4,7 +4,7 @@
 // re-enter the inner loop. If the earliest tier is all choices, halt with
 // `active-choices`.
 
-import type { FixpointStatus, Program, ProvLink } from "./types.js";
+import type { FixpointStatus, Program, ProvLink, Rule } from "./types.js";
 import type { Span } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
@@ -27,6 +27,10 @@ export interface FixpointResult {
   store: Store;
   iterations: number;
   status: FixpointStatus;
+  // The expanded rules the evaluator actually ran (set by `runFixpoint`;
+  // absent on the inner `runLoop` results). Needed to decode per-tuple
+  // bindings from the id slot (`tupleBindings` in print.ts).
+  rules?: Rule[];
 }
 
 export function runFixpoint(
@@ -58,13 +62,13 @@ export function runFixpoint(
   try {
     const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, strata);
     resolveExceptionProvenance(store, program.provLinks);
-    return result;
+    return { ...result, rules: expanded.rules };
   } catch (e) {
     if (e instanceof GasError) {
       // Partial (gas-limited) stores feed the views too — fix up their
       // provenance as well.
       resolveExceptionProvenance(store, program.provLinks);
-      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
+      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rules: expanded.rules };
     }
     throw e;
   }

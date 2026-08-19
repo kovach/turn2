@@ -146,7 +146,7 @@ interface SidebarSection {
   heading: string;
   // `span` is the tuple's source span (store.tupleSource), when known —
   // stamped as data-source-span for source ↔ output linking.
-  rows: { label: string; full: string; span: Span | undefined }[];
+  rows: { label: string; full: string; span: Span | undefined; tupleIndex: number }[];
 }
 
 export interface TimelineLayout {
@@ -510,8 +510,8 @@ export function layoutTimeline(
   }
 
   // Sidebar.
-  const isRows: { label: string; full: string; span: Span | undefined }[] = [];
-  const constrainRows: { label: string; full: string; span: Span | undefined }[] = [];
+  const isRows: SidebarSection["rows"] = [];
+  const constrainRows: SidebarSection["rows"] = [];
   for (const { idx, head } of sidebarTuples) {
     const t = store.tuples[idx]!;
     const full = renderAtom(store, t.atom);
@@ -524,12 +524,13 @@ export function layoutTimeline(
           label: `${renderTerm(store, choice)} ↦ ${renderTerm(store, value)}`,
           full,
           span,
+          tupleIndex: idx,
         });
       } else {
-        isRows.push({ label: full, full, span });
+        isRows.push({ label: full, full, span, tupleIndex: idx });
       }
     } else {
-      constrainRows.push({ label: full, full, span });
+      constrainRows.push({ label: full, full, span, tupleIndex: idx });
     }
   }
   isRows.sort((a, b) => a.label.localeCompare(b.label));
@@ -1371,6 +1372,7 @@ export function renderTimeline(
       // tupleIndex is -1 for synthetic "+N more" rows.
       const key = f.tupleIndex >= 0 ? spanKey(store.tupleSource[f.tupleIndex]) : undefined;
       if (key !== undefined) label.setAttribute("data-source-span", key);
+      if (f.tupleIndex >= 0) label.setAttribute("data-tl-tuple", String(f.tupleIndex));
       svg.appendChild(label);
     }
   }
@@ -1398,6 +1400,7 @@ export function renderTimeline(
         r.textContent = row.label;
         const rowKey = spanKey(row.span);
         if (rowKey !== undefined) r.setAttribute("data-source-span", rowKey);
+        r.setAttribute("data-tl-tuple", String(row.tupleIndex));
         sidebarEl.appendChild(r);
       }
     }

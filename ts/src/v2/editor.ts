@@ -17,6 +17,12 @@ export interface EditorOptions {
 
 const SAVE_DEBOUNCE_MS = 400;
 
+// One `name value` pair shown as a faint line note (setLineNotes).
+export interface LineNote {
+  name: string;
+  value: string;
+}
+
 export class Editor {
   private readonly ta: HTMLTextAreaElement;
   private readonly wrap: HTMLElement;
@@ -46,6 +52,13 @@ export class Editor {
   // `white-space: pre`, and never soft-wraps (styles/editor.css).
   private chMetrics: { ch: number; padLeft: number } | null = null;
   private chProbe: HTMLSpanElement | null = null;
+
+  // Live-value notes (plans/v2-live-values-in-editor.md): faint `X *17`
+  // pairs drawn just right of a line's text. Same overlay technique as the
+  // highlight — absolutely positioned children of `wrap`, aligned off the
+  // gutter rows, re-laid on scroll/input.
+  private notesEl: HTMLDivElement | null = null;
+  private notes: Map<number, LineNote[]> | null = null;
 
   // Autocomplete state. `acBox`/`acMirror` are created lazily on first show.
   private readonly acEnabled: boolean;
@@ -97,6 +110,7 @@ export class Editor {
     this.scrollHandler = () => {
       this.gutterEl.scrollTop = this.ta.scrollTop;
       this.repositionHighlight();
+      this.repositionNotes();
       if (this.acEnabled) this.hideAutocomplete();
     };
     this.mouseDownHandler = (ev) => {
@@ -190,6 +204,78 @@ export class Editor {
   clearHighlight(): void {
     this.highlighted = null;
     if (this.highlightEl !== null) this.highlightEl.style.display = "none";
+  }
+
+  // Show `notes` (line → pairs) to the right of each line's text. Replaces
+  // any previous notes; an empty map clears.
+  setLineNotes(notes: Map<number, LineNote[]>): void {
+    if (notes.size === 0) { this.clearLineNotes(); return; }
+    if (this.notesEl === null) {
+      this.notesEl = document.createElement("div");
+      this.notesEl.className = "editor-notes";
+      this.notesEl.setAttribute("aria-hidden", "true");
+      this.wrap.appendChild(this.notesEl);
+    }
+    this.notesEl.textContent = "";
+    for (const [line, pairs] of [...notes.entries()].sort((a, b) => a[0] - b[0])) {
+      const row = document.createElement("div");
+      row.className = "editor-note";
+      row.dataset["line"] = String(line);
+      pairs.forEach((p, i) => {
+        if (i > 0) row.appendChild(document.createTextNode("  "));
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = p.name + ": ";
+        const val = document.createElement("span");
+        val.className = "val";
+        val.textContent = p.value;
+        row.appendChild(name);
+        row.appendChild(document.createTextNode(" "));
+        row.appendChild(val);
+      });
+      this.notesEl.appendChild(row);
+    }
+    this.notes = notes;
+    this.chMetrics = this.measureChMetrics();
+    this.repositionNotes();
+  }
+
+  clearLineNotes(): void {
+    this.notes = null;
+    if (this.notesEl !== null) this.notesEl.textContent = "";
+  }
+
+  // Lay each note row just right of its line's text: x from the line's
+  // tab-expanded length and the character metrics, y from the gutter row.
+  // Rows whose line scrolled out of view (or no longer exists) are hidden.
+  private repositionNotes(): void {
+    if (this.notesEl === null || this.notes === null) return;
+    const lines = this.ta.value.split("\n");
+    const tabSize = parseInt(getComputedStyle(this.ta).tabSize, 10) || 2;
+    const m = this.chMetrics ?? (this.chMetrics = this.measureChMetrics());
+    const viewLeft = this.ta.offsetLeft + this.ta.clientLeft;
+    const viewRight = viewLeft + this.ta.clientWidth;
+    for (const rowEl of Array.from(this.notesEl.children) as HTMLElement[]) {
+      const line = Number(rowEl.dataset["line"]);
+      const gutterRow = this.gutterEl.children[line - 1] as HTMLElement | undefined;
+      const text = lines[line - 1];
+      if (gutterRow === undefined || text === undefined) { rowEl.style.display = "none"; continue; }
+      const top = gutterRow.offsetTop - this.ta.scrollTop;
+      const h = gutterRow.offsetHeight;
+      if (top + h <= this.gutterEl.offsetTop || top >= this.gutterEl.offsetTop + this.ta.clientHeight) {
+        rowEl.style.display = "none";
+        continue;
+      }
+      let cols = 0;
+      for (const c of text) cols += c === "\t" ? tabSize - (cols % tabSize) : 1;
+      const x = viewLeft + m.padLeft + (cols + 2) * m.ch - this.ta.scrollLeft;
+      if (x >= viewRight) { rowEl.style.display = "none"; continue; }
+      rowEl.style.display = "block";
+      rowEl.style.left = `${Math.max(x, viewLeft)}px`;
+      rowEl.style.top = `${top}px`;
+      rowEl.style.height = `${h}px`;
+      rowEl.style.maxWidth = `${viewRight - Math.max(x, viewLeft)}px`;
+    }
   }
 
   // Move the caret to `line` (at `col`, or the line's end) and center it in
@@ -301,12 +387,15 @@ export class Editor {
     this.acBox?.remove();
     this.acMirror?.remove();
     this.highlightEl?.remove();
+    this.notesEl?.remove();
     this.chProbe?.remove();
     if (!this.adopted) this.wrap.remove();
   }
 
   private onInput(): void {
     this.rebuildGutter();
+    // Line numbers go stale as soon as the text changes.
+    this.clearLineNotes();
     if (this.opts.autoGrow) this.fitHeight();
     if (this.opts.onChange) this.opts.onChange(this.ta.value);
     this.scheduleSave();

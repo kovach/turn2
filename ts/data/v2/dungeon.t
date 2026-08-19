@@ -1,5 +1,8 @@
 ~setup; ~init; ~main
 
+~foo 3
+foo X, ~bar X
+
 -- max_hp 10.
 setup
   +max-hp 10
@@ -108,7 +111,7 @@ die-option X, ^icon X
 #js-def plus +X +Y -Z { yield [X + Y] }
 #js-def positive +X { if (X > 0) yield [] }
 
-#agg monster-hp -> last
+#agg monster:hp -> last
 #agg spoils -> last
 
 -- init : adventure_screen -o spoils z.
@@ -119,8 +122,9 @@ adventure, +spoils 0, ~fight
 fight F
   fights -> N, monster-size N Size
   +fights 1
-  +monster F Size
-  +monster-hp F -> Size
+  +monster F M
+  +monster:size M Size
+  +monster:hp M -> Size
   ~round
 
 -- qui * stage fight_init -o stage fight * choice.
@@ -136,29 +140,29 @@ round-choice.is do/fight, ~try-fight
 
 -- fight/hit : try_fight * $fight_in_progress * monster_hp MHP * $weapon_damage D
 --           * subtract MHP D (some MHP') -o monster_hp MHP'.
-try-fight, fight F, monster F Size
-  monster-hp F -> MHP, weapon-damage -> D
+try-fight, fight.monster F
+  monster:hp F -> MHP, weapon-damage -> D
   subtract MHP D MHP', positive MHP'
-  +monster-hp F -> MHP'
+  +monster:hp F -> MHP'
   ~monster-strikes
 
 -- win : try_fight * fight_in_progress * monster_hp MHP * $weapon_damage D
 --     * subtract MHP D none -o win_screen.
-try-fight, fight F
-  monster-hp F -> MHP, weapon-damage -> D
+try-fight, fight.monster.monster:hp MHP, ~hi MHP
+  weapon-damage -> D
   subtract D MHP _
   ~win
 
 -- fight/miss : try_fight * $fight_in_progress * $monster Size * health HP
 --            * subtract HP Size (some HP') -o health HP'.
-monster-strikes, fight F, monster F Size
+monster-strikes, fight.monster.monster:size Size
   hp -> HP, subtract HP Size HP', positive HP'
   +hp HP'
   ~round-continue
 
 -- fight/die : try_fight * fight_in_progress * monster Size * health HP
 --           * subtract HP Size none -o die_screen.
-monster-strikes, fight F, monster F Size
+monster-strikes, fight.monster.monster:size Size
   hp -> HP, subtract Size HP _
   +hp 0
   ~die
@@ -168,7 +172,7 @@ fight, (round, (round-continue)); ~round
 
 -- win : win_screen * monster Size * drop_amount Size Drop -o drop Drop.
 -- collect_spoils : drop X * spoils Y * plus X Y Z -o spoils Z * go_home_or_continue.
-win, fight F, monster F Size
+win, fight.monster.monster:size Size
   drop-amount Size Drop
   spoils -> S, plus Drop S S'
   +spoils S'
@@ -195,3 +199,53 @@ win-choice.is go-home
 die, ?X, !die-option X, ~die-choice X
 
 (main, (adventure, (die-choice.is do/restart))); ~init; ~main
+
+
+
+= V1 (*chain)
+  = V2 (*mom r1 1 V1 l)
+  = V3 (*mom r1 1 V1 r)
+  = V4 (*chain V2 V3)
+  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
+  = V6 (*mom r1 3 V5 r)
+  = V7 (*id r5 2 (*chain (*mom r1 3 V5 l) V6 V6) :X)
+  ^ is V7 do/adventure
+
+= V1 (*chain)
+  = V2 (*mom r1 1 V1 l)
+  = V3 (*mom r1 1 V1 r)
+  = V4 (*chain V2 V3)
+  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
+  = V6 (*mom r1 3 V5 r)
+  = V7 (*mom r1 3 V5 l)
+  = V8 (*id r5 2 (*chain V7 V6 V6) :X)
+  = V9 (*mom r5 2 (*chain V7 V6 V7 V6) l)
+  = V10 (*chain V7 V6 V6 V8 V9 top (*mom r5 3 (*chain V7 V6 V6 V8 V9 top) l) top)
+  = V11 (*mom r5 4 V10 l)
+  = V12 (*mom r5 4 V10 r)
+  = V13 (*chain V11 V12 V8 bot top V11 V12)
+  = V14 (*mom r18 3 V13 l)
+  = V15 (*mom r18 3 V13 r)
+  = V16 (*mom r23 2 (*chain V14 V15 V14 V15) l)
+  = V17 (*chain V14 V15 V15 V16 top)
+  = V18 (*mom r23 3 V17 l)
+  = V19 (*mom r23 3 V17 r)
+  = V20 (*id r23 3 (*chain V14 V15 V16 top) :_)
+  = V21 (*mom r24 4 (*chain V18 V19 V20 V18 V19 0 4) l)
+  = V22 (*chain V18 V19 V20 V18 V19 0 4 V21 top)
+  = V23 (*mom r24 5 V22 l)
+  = V24 (*id r24 5 V22 :M)
+  = V25 (*mom r24 6 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top) l)
+  = V26 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top V25 top (*mom r24 7 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top V25 top) l) top)
+  = V27 (*mom r24 8 V26 r)
+  = V28 (*id r25 2 (*chain (*mom r24 8 V26 l) V27 V27) :X)
+  ^ is V28 do/fight
+
+= V1 (*chain)
+  = V2 (*mom r1 1 V1 l)
+  = V3 (*mom r1 1 V1 r)
+  = V4 (*chain V2 V3)
+  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
+  = V6 (*mom r1 3 V5 r)
+  = V7 (*id r7 2 (*chain (*mom r1 3 V5 l) V6 V6) :X)
+  ^ is V7 do/adventure

@@ -18,8 +18,10 @@
 // the caret into that atom.
 
 import type { Rule, RuleAtom } from "./types.js";
-import { spanKey, type Span } from "./term.js";
-import type { Editor } from "./editor.js";
+import { spanKey, type Span, type Term } from "./term.js";
+import type { Editor, LineNote } from "./editor.js";
+import type { Store } from "./store.js";
+import { renderTermShallow, tupleBindings } from "./print.js";
 
 export interface SourceLink {
   // Re-arm after a run: rules rebuild positiveSpans, and (since the outputs
@@ -55,6 +57,84 @@ export function collectPositiveSpans(rules: Rule[]): Map<number, Span[]> {
   return out;
 }
 
+// First-occurrence position of each variable per rule, keyed by rule name
+// (plans/v2-live-values-in-editor.md). Variables carry no spans, so a
+// variable is attributed to the span of the first atom mentioning it, walking
+// the pre-expand body in source order (subs, `!(...)` sub-atoms, weights,
+// `[ ... ]` bodies and their output pattern). That is the binding site for
+// match variables and the emit line for fresh ids. `col` orders several
+// variables on one line left to right.
+export function collectVarLines(rules: Rule[]): Map<string, Map<string, { line: number; col: number }>> {
+  const out = new Map<string, Map<string, { line: number; col: number }>>();
+  function note(into: Map<string, { line: number; col: number }>, t: Term, span: Span): void {
+    switch (t.tag) {
+      case "Variable":
+        if (t.name !== "_" && !into.has(t.name)) into.set(t.name, { line: span.line, col: span.startCol ?? 0 });
+        return;
+      case "Atom": case "Id":
+        for (const x of t.atom.terms) note(into, x, span);
+        return;
+      default:
+        return;
+    }
+  }
+  function walk(into: Map<string, { line: number; col: number }>, body: RuleAtom[]): void {
+    for (const a of body) {
+      switch (a.tag) {
+        case "Atom":
+          if (a.subAtoms) {
+            for (const sub of a.subAtoms) for (const t of sub.atom.terms) note(into, t, a.span);
+          } else {
+            for (const t of a.atom.terms) note(into, t, a.span);
+          }
+          if (a.weight) note(into, a.weight, a.span);
+          break;
+        case "Sub": walk(into, a.body); break;
+        case "AggComp": walk(into, a.body); note(into, a.reduce.out, a.span); break;
+        case "Exception": for (const t of a.left.terms) note(into, t, a.span); walk(into, a.right); break;
+        case "Equal": note(into, a.lhs, a.span); note(into, a.rhs, a.span); break;
+        default: break;
+      }
+    }
+  }
+  for (const r of rules) {
+    const into = new Map<string, { line: number; col: number }>();
+    walk(into, r.body);
+    out.set(r.name, into);
+  }
+  return out;
+}
+
+// Bindings of the clicked tuple, grouped by the source line where each
+// variable is first bound (ordered by column within a line). Pure; exported
+// for tests. `undefined` when the tuple carries no decodable id slot or its
+// rule has no source body (rules synthesized for exceptions).
+export function lineNotesFor(
+  store: Store,
+  expandedRules: readonly Rule[],
+  varLines: Map<string, Map<string, { line: number; col: number }>>,
+  tupleIndex: number,
+): Map<number, LineNote[]> | undefined {
+  const decoded = tupleBindings(store, expandedRules, tupleIndex);
+  if (decoded === undefined) return undefined;
+  const positions = varLines.get(decoded.ruleName);
+  if (positions === undefined) return undefined;
+  const byLine = new Map<number, { col: number; note: LineNote }[]>();
+  for (const b of decoded.bindings) {
+    const pos = positions.get(b.name);
+    if (pos === undefined) continue;
+    const bucket = byLine.get(pos.line) ?? [];
+    bucket.push({ col: pos.col, note: { name: b.name, value: renderTermShallow(store, b.term) } });
+    byLine.set(pos.line, bucket);
+  }
+  const out = new Map<number, LineNote[]>();
+  for (const [line, items] of byLine) {
+    items.sort((x, y) => x.col - y.col);
+    out.set(line, items.map((x) => x.note));
+  }
+  return out;
+}
+
 function parseKey(key: string): { line: number; startCol: number; endCol: number } | null {
   const m = /^(\d+):(\d+)-(\d+)$/.exec(key);
   if (m === null) return null;
@@ -67,8 +147,15 @@ function removeClassAll(roots: HTMLElement[], cls: string): void {
   }
 }
 
-export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): SourceLink {
+export interface SourceLinkOpts {
+  // Current store + expanded rules, read at click time so the notes reflect
+  // the latest run. When absent, clicks only move the caret.
+  getRun?: () => { store: Store; rules: readonly Rule[] } | null;
+}
+
+export function attachSourceLink(editor: Editor, outputs: HTMLElement[], opts: SourceLinkOpts = {}): SourceLink {
   let positiveSpans = new Map<number, Span[]>();
+  let varLines = new Map<string, Map<string, { line: number; col: number }>>();
   let caret: { line: number; col: number } | null = null;
   // Ctrl-. cycle state: how many presses have happened while `state`
   // (the active span key, or "<line>:*" for the whole-line fallback) held.
@@ -220,6 +307,16 @@ export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): Source
       // Ctrl-. cycle) target exactly the clicked atom.
       editor.focusLine(span.line, span.startCol);
       setCaretLine(span.line);
+      // Live values: annotate the rule with the bindings of the clicked
+      // tuple. A tuple without decodable bindings clears any earlier notes.
+      const tupleEl = (e.target as Element).closest("[data-tl-tuple]");
+      const run = opts.getRun?.() ?? null;
+      const idx = tupleEl === null ? NaN : Number(tupleEl.getAttribute("data-tl-tuple"));
+      const notes = run !== null && Number.isInteger(idx) && idx >= 0
+        ? lineNotesFor(run.store, run.rules, varLines, idx)
+        : undefined;
+      if (notes !== undefined) editor.setLineNotes(notes);
+      else editor.clearLineNotes();
     };
     root.addEventListener("mouseover", over);
     root.addEventListener("mouseout", out);
@@ -250,6 +347,8 @@ export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): Source
   return {
     update(rules: Rule[]): void {
       positiveSpans = collectPositiveSpans(rules);
+      varLines = collectVarLines(rules);
+      editor.clearLineNotes();
       resetCycle();
       applyCaretHighlight();
     },
@@ -265,6 +364,7 @@ export function attachSourceLink(editor: Editor, outputs: HTMLElement[]): Source
       ta.removeEventListener("keydown", keyHandler);
       ta.removeEventListener("dblclick", dblclickHandler);
       editor.clearHighlight();
+      editor.clearLineNotes();
     },
   };
 }

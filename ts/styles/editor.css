@@ -87,3 +87,22 @@
   top: 0;
   left: 0;
 }
+
+/* Live-value notes (plans/v2-live-values-in-editor.md): faint `X *17` pairs
+ * drawn just right of a line's text after clicking a tuple in an output.
+ * Owned by the Editor class (setLineNotes/clearLineNotes). */
+.editor-notes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.editor-note {
+  position: absolute;
+  display: none;
+  box-sizing: border-box;
+  padding-left: 2px;
+  font-family: monospace;
+  font-size: var(--editor-font-size, 14px);
+  line-height: var(--editor-line-height, 1.6);
+  color: var(--editor-note-fg, var(--editor-gutter-fg, rgba(0,0,0,0.35)));
+  opacity: 0.85;
+  white-space: pre;
+  overflow: hidden;
+}
+.editor-note .val { opacity: 0.7; }

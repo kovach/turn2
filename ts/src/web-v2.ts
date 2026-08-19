@@ -11,7 +11,7 @@ import { Editor } from "./v2/editor.js";
 import { attachSourceLink } from "./v2/source-link.js";
 import type { Atom, Term } from "./v2/term.js";
 import { tokenOf, type Store } from "./v2/store.js";
-import type { ComponentOptions } from "./v2/types.js";
+import type { ComponentOptions, Rule } from "./v2/types.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
@@ -150,6 +150,9 @@ const injectedStyles = new Set<string>();
 // Last fixpoint store; used by `handleClick` to compress option intents
 // into source-form text. `null` until the first `run()` completes.
 let lastStore: Store | null = null;
+// Expanded rules of the last run — needed to decode per-tuple bindings for
+// the editor's live-value notes (plans/v2-live-values-in-editor.md).
+let lastRules: Rule[] = [];
 
 // Per-render lookup of click intents for option-list `<span class="opt">`
 // nodes. Cleared at the start of each `run()`; entries' lifetime matches
@@ -459,6 +462,7 @@ async function run(): Promise<void> {
   }
   const { store, status, iterations } = result;
   lastStore = store;
+  lastRules = result.rules ?? [];
 
   renderDbPane(store);
   link.update(parsed.rules);
@@ -580,7 +584,9 @@ document.addEventListener("selectionchange", () => {
 // line-highlight overlay. saveBackend "none" — this file owns the run/save
 // lifecycle via its own input listener.
 const editor = new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true });
-const link = attachSourceLink(editor, [dbEl, timelineInlineEl]);
+const link = attachSourceLink(editor, [dbEl, timelineInlineEl], {
+  getRun: () => (lastStore === null ? null : { store: lastStore, rules: lastRules }),
+});
 
 hideInternalEl.addEventListener("change", () => {
   void run();

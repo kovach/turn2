@@ -147,7 +147,7 @@ The v2 store: interval-bearing hashconsed tuples, head indexing, and the moment-
 The top-level evaluation driver. It expands a program, runs an inner loop firing all rules to quiescence (semi-naive), then at quiescence collects blocked do-agg/choose rows; it closes the earliest tier of aggregates (re-entering the inner loop) or, if the earliest tier is all choices, halts with `active-choices` (or `empty-fringe-error`). Gas exhaustion is caught and surfaced as a `gas` status.
 
 **Key terms:**
-- `runFixpoint` — public entry; expands the program, compiles `#js`/`#js-def` bodies (`compileJsDefs`/`compileJsRels`), runs the loop, returns a `FixpointResult` (`{ store, iterations, status }`); catches `GasError` → `gas`
+- `runFixpoint` — public entry; expands the program, compiles `#js`/`#js-def` bodies (`compileJsDefs`/`compileJsRels`), runs the loop, returns a `FixpointResult` (`{ store, iterations, status, rules }` — `rules` are the expanded rules the loop ran, used by `print.ts:tupleBindings`); catches `GasError` → `gas`
 - `resolveExceptionProvenance` — post-fixpoint `tupleSource` fixup on every return path (including `gas`): an exception default rule re-emits a matched `_<p>_prime<k>` tuple with identical args and endpoints (only head + trailing id slot differ) but its Emit's static span is the exception's line; this pass re-attributes each tuple of a `Program.provLinks` head to the span of its structurally matching prime tuple, following links transitively for chained exceptions, keeping the tuple's own span when no match exists (emits that escaped renaming: weighted or off-arity). So `tupleSource` is not always the firing Emit's span (plans/v2-exception-default-provenance.md)
 - inner loop / outer loop — fire all rules to quiescence, then close the earliest aggregate tier or surface blocked choices
 - delta-safe skip — skips rules with empty deltas via `deltaSafeSkip`/`deltaHead`/`prevHeads`
@@ -213,6 +213,7 @@ The surface-syntax printer for hashconsed v2 terms, producing text that `parse` 
 - `tokensEq` — token-level term equality via hashcons tokens
 - `compressRefs` — share-aware DAG dump: each `Ref` body emitted once as `= V<i> (…)`
 - `renderDebugDump` — flat hashcons + db dump (preferred ad-hoc debugging tool)
+- `tupleBindings` — per-tuple binding environment decoded with no evaluator support (plans/v2-live-values-in-editor.md): zips the stored tuple's trailing `(*id rule lexPos (*chain …))` slot against the expanded rule's `Emit` template with the same `(head, rule, lexPos)`, keeping chain positions whose template term is a user `Variable` (names not `_`-prefixed). Returns `{ ruleName, bindings: [{name, term}] }` in first-occurrence order, or `undefined` for tuples without a decodable id slot; values are stored terms (render with `renderTermShallow` for `*id`)
 
 # print-ir.ts
 
@@ -228,7 +229,7 @@ A DOM-free, Store-free debug renderer for the raw (un-hashconsed) IR — `Term` 
 UI glue that renders a store into a DOM host as either a syntax-highlighted tuple listing (grouped by head symbol or ordered temporally) or a horizontal timeline. Tuples are rendered as HTML spans with source-line data attributes and aligned interval columns; the timeline path delegates to `timeline.ts`.
 
 **Key terms:**
-- `renderTuples` — tuple-listing renderer (grouped by head or temporally ordered) into HTML spans with source-line attributes
+- `renderTuples` — tuple-listing renderer (grouped by head or temporally ordered) into HTML spans with source-line attributes; each row also carries `data-tl-tuple` (its store index, the same attribute the timeline stamps) so `source-link.ts` can decode live values for a clicked row
 - `renderTimelineH` — horizontal timeline view (delegates to `timeline.ts`; `momentStyle` spine|edges variant, defaulting to edges)
 - `timelineCollapseKey` / `resolveCollapsed` — collapse identity for an episode (`atomFingerprint`: token-free, so it survives edits and appended `is` rows) and its resolution against a store into `CollapsedInterval`s
 - `temporalOrder` — orders tuples by longest-path depth via `lessThan`
@@ -263,6 +264,7 @@ A self-contained code-editor wrapper around a `<textarea>` that adds a line-numb
 - caret mirror — off-screen div replicating textarea metrics to position the completion box at the cursor
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
 - `highlightLine` / `highlightRange` / `clearHighlight` / `focusLine` / `caretLine` / `caretPos` — highlight overlay (full line, or a column range mapped col → px off a hidden monospace probe) and caret helpers used by `source-link.ts`
+- `setLineNotes` / `clearLineNotes` / `LineNote` — live-value notes (plans/v2-live-values-in-editor.md): faint `X *17` name/value pairs drawn just right of each annotated line's text in an `.editor-notes` overlay (per-row `.editor-note`, positioned off the gutter row and the tab-expanded line length × char width; clipped to the text viewport; re-laid on scroll; cleared on input since line numbers go stale)
 
 # source-link.ts
 
@@ -271,6 +273,7 @@ Bidirectional source-atom ↔ output linking shared by the v2 editor page (`web-
 **Key terms:**
 - `attachSourceLink` — binds an `Editor` + output roots; installs delegated hover/click handlers, caret tracking, and the `Ctrl-.` binding
 - `collectPositiveSpans` — emitting-atom spans indexed by line; the caret column picks the containing span
+- `collectVarLines` / `lineNotesFor` — live values (plans/v2-live-values-in-editor.md): per rule name, each variable's first-occurrence `{line, col}` (walked over the pre-expand body: subs, `!(...)` sub-atoms, weights, `[...]` bodies); on click, the target's `data-tl-tuple` is decoded with `print.ts:tupleBindings` (store + expanded rules come from `opts.getRun`) and grouped per line into `LineNote`s for `Editor.setLineNotes` — a tuple with no decodable bindings clears the notes; `update()` also clears them
 - `SourceLink` — handle: `update(rules)` after each run, `setCaretLine`, `destroy`
 - `collectPositiveLines` — source lines with at least one emitting atom (assert `~`/`+`/`^`, ask `?`, constrain `!`); only these get forward highlights
 - `source-highlight` / `hover-highlight` / `cycle-focus` — CSS classes applied to matched output elements (hosts style them)

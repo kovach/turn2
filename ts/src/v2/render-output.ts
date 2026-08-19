@@ -43,7 +43,7 @@ function renderEndpoint(store: Store, term: Term): string {
   return renderTermShallow(store, term);
 }
 
-function renderTupleRow(store: Store, i: number): { atom: string; interval: string; span: Span | undefined } {
+function renderTupleRow(store: Store, i: number): { atom: string; interval: string; span: Span | undefined; index: number } {
   const t = store.tuples[i]!;
   const head = t.atom.terms[0];
   const headStr = head !== undefined && head.tag === "Symbol"
@@ -52,12 +52,12 @@ function renderTupleRow(store: Store, i: number): { atom: string; interval: stri
   const args = t.atom.terms.slice(1, -1).map((x) => renderTermDb(store, x)).join(" ");
   const atomStr = args === "" ? headStr : `${headStr} ${args}`;
   const intervalStr = `[${renderEndpoint(store, t.l)}, ${renderEndpoint(store, t.r)}]`;
-  return { atom: atomStr, interval: intervalStr, span: store.tupleSource[i] };
+  return { atom: atomStr, interval: intervalStr, span: store.tupleSource[i], index: i };
 }
 
 function emitRows(
   lines: string[],
-  rendered: { atom: string; interval: string; span: Span | undefined }[],
+  rendered: { atom: string; interval: string; span: Span | undefined; index: number }[],
 ): void {
   let maxAtomLen = 0;
   for (const r of rendered) {
@@ -69,7 +69,9 @@ function emitRows(
     const plainLen = r.atom.replace(/<[^>]+>/g, "").length;
     const gap = " ".repeat(Math.max(2, pad - plainLen + 2));
     const key = spanKey(r.span);
-    const attr = key !== undefined ? ` data-source-span="${key}"` : "";
+    // `data-tl-tuple` (same attribute the timeline stamps) lets the source
+    // link recover the tuple for live-value notes.
+    const attr = (key !== undefined ? ` data-source-span="${key}"` : "") + ` data-tl-tuple="${r.index}"`;
     lines.push(`  <span class="row"${attr}>${r.atom}${gap}<span class="interval">${escapeHtml(r.interval)}</span></span>`);
   }
 }

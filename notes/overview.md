@@ -1,3 +1,46 @@
+# live values in editor
+plan: plans/v2-live-values-in-editor.md
+
+- after clicking a tuple in the timeline/database and jumping to rule, visualize the *bound values* that were active when that particular tuple was asserted
+- they should appear as faint var/value pairs to the side of each line where the value is bound
+- terms should render as their `*x` id only
+
+# 26/08/19
+# aggregates, concluded
+plan: plans/v2-aggregates-concluded.md
+status: not adequate?
+
+- this change will supercede #agg, #reactive, and the bracket notation
+- the main idea:
+  - running the main fixpoint loop produces a set of non-monotone obstructions that need to be resolved (aggregate observations and choices) (just like now). we'll call these *stuck moments*
+  - we take the earliest stuck moment(s) and resolve them (just like now)
+- the difference is how we calculate the stuck moments:
+  - when a rule observes an aggregate like `it:at X -> L` it emits a `do-agg` tuple (like today) anchored at the parent interval as if it were asserted with `^`
+  - for all aggregate relations we maintain a set of breakpoint moments (like for `#reactive` today)
+    when a rule emits a tuple `it:at X Here` to be aggregated with left-endpoint m, we take the lub of m with each previous breakpoint
+  - to calculate the stuck moments:
+    for each `do-agg Rel @ M1, M2`:
+      for each `Rel` breakpoint `M` ≤ `M2` and maximal with that property, that has no associated `agg-result`:
+        yield `M` as stuck moment`
+  - after getting all stuck moments, we evaluate the minimal ones, asserting `agg-result` tuples, and yield back to the fixpoint
+  - an `agg-result` tuple is associated with a particular breakpoint/do-agg pair, not just one or the other.
+    - for instance, a `do-agg` asserted at (bot, top) may yield many observations, one per breakpoint
+  - we *discard* the rest; the next time we calculate stuck moments they may no longer be stuck (check this!)
+
+```
+#agg at * -> last
+#agg :count * -> sum
+~game
+  ~f; ~g
+f, ~move a x
+f, ~move b x
+g, ~move a y
+move I T, +at I T
+at I -> T, ^:count T -> 1
+```
+
+# 26/08/14
+
 # extending icon
 plan: plans/v2-icon-layout.md
 

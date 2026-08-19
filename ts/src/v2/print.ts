@@ -23,6 +23,7 @@
 // the id body.
 
 import type { Atom, Term } from "./term.js";
+import type { Rule } from "./types.js";
 import { expandTerm, refTagOf } from "./hashcons.js";
 import { tokenOf, type Store } from "./store.js";
 
@@ -318,4 +319,84 @@ export function renderDebugDump(
     hashConsStore: sortedIds.map((id) => refLines.get(id)!).join("\n"),
     db: dbLines.join("\n"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Per-tuple binding environment (plans/v2-live-values-in-editor.md).
+//
+// Every rule-emitted tuple ends in a universal id slot
+// `(*id <ruleName> <lexPos> (*chain t1 … tn) …)` (wrapEmit in expand.ts),
+// and the chain holds the value of every user variable bound before the emit
+// — `noteVar` pushes each one at first occurrence and marks it essential, so
+// chain pruning never drops it. The names are static: the expanded rule's
+// Emit with the same `(head, ruleName, lexPos)` carries the unsubstituted
+// template whose `*chain` lists the Variables in the same order. Zipping the
+// two recovers the environment without any evaluator support.
+//
+// Returns `undefined` for tuples that carry no such slot (seeds, aggregate
+// results, constraint-query rows) or whose rule/template cannot be found.
+// Compiler-minted names (`_l_k`, `_r_k`, `_xl_k`, `_dot<n>`, fresh-id
+// templates for wildcards, …) are dropped; what remains is exactly the
+// source-level variables, in first-occurrence order. Values are the stored
+// (hashconsed) terms — render them with `renderTermShallow` for the `*id`
+// form.
+
+export interface TupleBinding {
+  name: string;
+  term: Term;
+}
+
+export interface TupleBindingsResult {
+  ruleName: string;
+  bindings: TupleBinding[];
+}
+
+// One-level view of a compound: a `Ref`'s stored body (subterms stay Refs),
+// or a literal's own atom. Never `expandTerm` here — the id slot's chain is
+// the exponential DAG the id-opacity invariant guards against.
+function shallowAtom(store: Store, t: Term): Atom | null {
+  if (t.tag === "Ref") return store.hash.refToAtom.get(t.id) ?? null;
+  if (t.tag === "Id" || t.tag === "Atom") return t.atom;
+  return null;
+}
+
+function idSlotParts(store: Store, t: Term): { head: string; ruleName: string; lexPos: string; chain: readonly Term[] } | null {
+  const id = shallowAtom(store, t);
+  if (id === null) return null;
+  const [head, rule, pos, chainT] = id.terms;
+  if (head?.tag !== "Symbol" || !head.name.startsWith("*")) return null;
+  if (rule?.tag !== "Symbol" || pos?.tag !== "Symbol" || chainT === undefined) return null;
+  const chain = shallowAtom(store, chainT);
+  if (chain === null) return null;
+  const ch = chain.terms[0];
+  if (ch?.tag !== "Symbol" || ch.name !== "*chain") return null;
+  return { head: head.name, ruleName: rule.name, lexPos: pos.name, chain: chain.terms.slice(1) };
+}
+
+export function tupleBindings(
+  store: Store,
+  expandedRules: readonly Rule[],
+  tupleIndex: number,
+): TupleBindingsResult | undefined {
+  const tuple = store.tuples[tupleIndex];
+  if (tuple === undefined || tuple.atom.terms.length === 0) return undefined;
+  const stored = idSlotParts(store, tuple.atom.terms[tuple.atom.terms.length - 1]!);
+  if (stored === null) return undefined;
+  for (const rule of expandedRules) {
+    if (rule.name !== stored.ruleName) continue;
+    for (const a of rule.body) {
+      if (a.tag !== "Emit") continue;
+      const last = a.atom.terms[a.atom.terms.length - 1];
+      if (last === undefined) continue;
+      const tmpl = idSlotParts(store, last);
+      if (tmpl === null || tmpl.head !== stored.head || tmpl.lexPos !== stored.lexPos) continue;
+      if (tmpl.chain.length !== stored.chain.length) return undefined;
+      const bindings: TupleBinding[] = [];
+      tmpl.chain.forEach((v, i) => {
+        if (v.tag === "Variable" && !v.name.startsWith("_")) bindings.push({ name: v.name, term: stored.chain[i]! });
+      });
+      return { ruleName: stored.ruleName, bindings };
+    }
+  }
+  return undefined;
 }
