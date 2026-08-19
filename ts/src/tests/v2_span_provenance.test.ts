@@ -88,7 +88,7 @@ function sliceSpan(lines: string[], s: Span): string {
     "  ( ~step here ); ( ~look )",
     "step L, +at me -> L",
     "look, at me -> L, ^print L, = Z L",
-    "who, ?pick a b",
+    "who, ?Pick",
     "guard G, !at G -> 1",
     "~ctx2",
     "ctx2, ^p2 a",

@@ -19,7 +19,8 @@ import {
   tokenOf,
   type Store,
 } from "./store.js";
-import type { BlockedChoose, Rule, RuleAtom } from "./types.js";
+import type { Actor, BlockedChoose, ComponentOptions, Rule, RuleAtom } from "./types.js";
+import { isActor } from "./types.js";
 import { collectBlockedDoAggCs, SYM_AGG_EMPTY, type BlockedDoAggC } from "./comp-aggregate.js";
 
 const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
@@ -102,13 +103,94 @@ export function collectBlockedChooses(store: Store): BlockedChoose[] {
     if (chooseId === undefined || wrappedTerm === undefined) continue;
     const wrappedAtom = unwrapAtom(wrappedTerm, store);
     if (wrappedAtom === null) continue;
+    // Actor column (plans/v2-choice-actors.md): stored layout is
+    // `_choose chooseId (atom) actor emitId`. Default `you` for rows that
+    // predate the column (hand-built stores).
+    const actorTerm = t.atom.terms[3];
+    const actor: Actor =
+      actorTerm !== undefined && actorTerm.tag === "Symbol" && isActor(actorTerm.name)
+        ? actorTerm.name
+        : "you";
     const active: Term[] = [];
     collectActiveTerms(wrappedAtom, store, resolved, active);
     if (active.length > 0) {
-      out.push({ rowIndex: idx, chooseId, wrappedAtom, activeTerms: active, l: t.l, r: t.r });
+      out.push({ rowIndex: idx, chooseId, wrappedAtom, actor, activeTerms: active, l: t.l, r: t.r });
     }
   }
   return out;
+}
+
+// One committed rng binding (plans/v2-choice-actors.md).
+export interface RngCommit {
+  activeTerm: Term;
+  value: Term;
+}
+
+// mulberry32: a small deterministic PRNG over a 32-bit seed. Used when the
+// user program seeds the rng via `+ rng-seed <n>` (plans/v2-choice-actors.md).
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Program-provided rng seed: the user relation `rng-seed` with one numeric
+// argument (`+ rng-seed 42`, asserted once at startup — i.e. established
+// before the first rng choice; the fixpoint loop latches the stream at its
+// first roll and later seed tuples have no effect). Returns a mulberry32
+// stream for the seed, or null when no `rng-seed` tuple exists. Duplicate
+// assertions of the same value are fine (tuples dedup by value anyway);
+// distinct values or a non-numeric argument are errors.
+export function programSeededRandom(store: Store): (() => number) | null {
+  let seed: number | null = null;
+  for (const idx of candidatesByHead(store, "rng-seed")) {
+    const t = store.tuples[idx]!;
+    const arg = t.atom.terms[1];
+    const n = arg !== undefined && arg.tag === "Symbol" ? Number(arg.name) : NaN;
+    if (!Number.isFinite(n)) {
+      throw new Error("rng-seed: argument must be a number");
+    }
+    if (seed !== null && seed !== n) {
+      throw new Error(`rng-seed: asserted with multiple values (${seed} and ${n})`);
+    }
+    seed = n;
+  }
+  return seed === null ? null : mulberry32(seed);
+}
+
+// Auto-resolve one all-`rng` choice component: pick one of its option tuples
+// uniformly at random (options are deduped joint assignments — the
+// distribution is uniform over joint assignments, not per-column marginals)
+// and commit every active term at once by asserting `is <term> <value>` rows
+// at `(bot, top)` — the same span the UI's appended `^ is X V` rows get,
+// which is what lets nested `is C M` blocks match under any anchor. Each row
+// carries a `(*rng <activeTerm>)` trailing id so arity-saturated user
+// matches (`is C M` ⇒ stored width 4) see it. Returns the commits made, or
+// null when the component has no options (the caller falls back to
+// surfacing it as an active choice).
+export function resolveRngChoice(
+  store: Store,
+  comp: ComponentOptions,
+  random: () => number,
+): RngCommit[] | null {
+  if (comp.options.length === 0) return null;
+  const pick = Math.min(comp.options.length - 1, Math.floor(random() * comp.options.length));
+  const row = comp.options[pick]!;
+  const isSym: Term = { tag: "Symbol", name: "is" };
+  const idHead: Term = { tag: "Symbol", name: "*rng" };
+  const commits: RngCommit[] = [];
+  for (let i = 0; i < comp.activeTerms.length; i++) {
+    const activeTerm = comp.activeTerms[i]!;
+    const value = row[i]!;
+    const commitId: Term = { tag: "Id", atom: { terms: [idHead, activeTerm] } };
+    addTuple(store, { terms: [isSym, activeTerm, value, commitId] }, store.bot, store.top);
+    commits.push({ activeTerm, value });
+  }
+  return commits;
 }
 
 function collectActiveTerms(atom: Atom, store: Store, resolved: Set<number>, out: Term[]): void {

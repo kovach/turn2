@@ -81,6 +81,10 @@ export type RuleAtom =
       // anchor decomposition pass turns these into `Equal` atoms.
       lLit?: Term;
       rLit?: Term;
+      // Set iff `marker === "ask"`: the actor responsible for resolving the
+      // choice (`?[rng] C` sugar; absent = "you"). See
+      // plans/v2-choice-actors.md.
+      actor?: Actor;
       span: Span;
     }
   // Parenthesised sub-rule. `sequence` is true when the closer was `);`.
@@ -360,8 +364,27 @@ export type FixpointStatus =
     }
   | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term };
 
+// The finite actor set (plans/v2-choice-actors.md): who resolves a choice.
+// `you` = the human (default); `rng` = uniform random, auto-resolved by the
+// scheduler. Totally ordered: `you > rng` (choices resolve highest-first).
+export type Actor = "you" | "rng";
+
+export const ACTOR_PRIORITY: Record<Actor, number> = { rng: 0, you: 1 };
+
+export function isActor(name: string): name is Actor {
+  return name === "you" || name === "rng";
+}
+
+export function maxActor(a: Actor, b: Actor): Actor {
+  return ACTOR_PRIORITY[a] >= ACTOR_PRIORITY[b] ? a : b;
+}
+
 export interface ComponentOptions {
   activeTerms: Term[];
+  // Per-active-term actor, parallel to `activeTerms` (each active term has
+  // exactly one owning ask atom — enforced statically — and inherits its
+  // actor). The component's controlling actor is the max over this array.
+  actors: Actor[];
   options: Term[][];
   // Choice component moment: the lub of all the constrain rows' left
   // endpoints. The display uses it to restrict `icon`/`at` rows.
@@ -374,6 +397,7 @@ export interface BlockedChoose {
   rowIndex: number;                 // index into store.tuples
   chooseId: Term;                   // hashconsed
   wrappedAtom: Atom;                // the inner atom (terms[2].atom)
+  actor: Actor;                     // the ask atom's actor (terms[3])
   activeTerms: Term[];              // unresolved active *id terms
   l: Term;
   r: Term;

@@ -1,3 +1,38 @@
+# term-render-component, info-log
+plan: TODO
+
+this change has two parts: slight refactor of the `info` panel; changing how term ids render
+
+## term rendering
+- we render terms in various parts of the editor as `*x`, where x is a natural number, its id in the hash-cons store
+- this change will introduce a clickable element to render a term-id.
+  - we will use it everywhere we currently display terms; so it will be parametrized so that it matches the current appearance of the various spots
+  - clicking it will emit info about that term to the `info` panel; the info will include every tuple that refers to the term *directly*
+    - this check does *not* recurse into terms to check indirect reference
+      -`foo *3` refers to term 3; `foo (s *3)` does not
+## refactor info panel
+- turn it into a log: a place where we dump various kinds of info
+- instead of rendering exactly the current choice set, we will emit those choices as a list of clickable log-lines
+- any changes are append only
+- we assume various components might be appended
+  - the info log currently displays active choices.
+    - after this change, we will refactor that into a component and append that component when a choice is to be made.
+    - the component, once resolved, will still visually be there, but it will collapse and no longer accept input
+  - after clicking a term `t`, we append an "all tuples that refer to `t`" component
+
+# choice-actor syntax
+plan: plans/v2-choice-actors.md
+
+- instead of `?X`, we may write `?[<actor-specifier] X`
+- for now, there is a finite set of actor ids
+- the default actor is called `you`; the sugar `?X` is equivalent to `?[you]X`
+- we will add a new actor called `rng`; basically, it indicates that the selection be made uniformly at random
+- this change adds a handler branch to the code handling choices that interfaces with the scheduler
+  - first: note that a choice component may include variables assigned to different actors
+  - we assume actors are totally ordered, and in particular `you > rng`
+  - choices resolved by priority, with highest actor first
+  - when `rng` is the highest priority actor within a group, we choose one of its choice variables uniformly at random, then choose its value uniformly at random, and commit the choice
+
 # live values in editor
 plan: plans/v2-live-values-in-editor.md
 

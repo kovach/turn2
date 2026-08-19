@@ -17,7 +17,8 @@
 // no constrain rows is a programmer error (an unconstrained `?`).
 
 import type { Atom, Term } from "./term.js";
-import type { BlockedChoose, ComponentOptions } from "./types.js";
+import type { Actor, BlockedChoose, ComponentOptions } from "./types.js";
+import { maxActor } from "./types.js";
 import { refTagOf } from "./hashcons.js";
 import {
   candidatesByHead,
@@ -50,6 +51,11 @@ interface ChoiceContext {
   // (bind via `sub` like active terms) but never projected into the
   // emitted option tuples.
   existSet: Set<number>;
+  // tokenOf(activeTerm) -> actor (plans/v2-choice-actors.md). Each active
+  // term has exactly one owning ask atom (enforced statically), so one
+  // entry per token; `maxActor` is a defensive fallback for hand-built
+  // stores where two rows disagree.
+  actorByTok: Map<number, Actor>;
 }
 
 function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceContext {
@@ -93,15 +99,18 @@ function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceCont
 
   const activeSet = new Set<number>();
   const termByTok = new Map<number, Term>();
+  const actorByTok = new Map<number, Actor>();
   for (const c of blocked) {
     for (const a of c.activeTerms) {
       const tok = tokenOf(store, a);
       if (resolved.has(tok)) continue;
       activeSet.add(tok);
       termByTok.set(tok, a);
+      const prev = actorByTok.get(tok);
+      actorByTok.set(tok, prev === undefined ? c.actor : maxActor(prev, c.actor));
     }
   }
-  return { resolved, activeSet, termByTok, boundValues, existSet: new Set() };
+  return { resolved, activeSet, termByTok, boundValues, existSet: new Set(), actorByTok };
 }
 
 // True if `t` is a fresh-id template — a Ref/Atom/Id whose head Symbol
@@ -385,10 +394,12 @@ function runComponent(
   activeSet: Set<number>,
   existSet: Set<number>,
   termByTok: Map<number, Term>,
+  actorByTok: Map<number, Actor>,
   schema: Map<string, string>,
 ): ComponentOptions {
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
+  const actors = activeKeys.map((k) => actorByTok.get(k) ?? "you");
 
   // The choice component moment — every row in `comp` is evaluated against
   // this single moment rather than its own stored interval.
@@ -465,7 +476,7 @@ function runComponent(
   }
 
   go(0, new Map());
-  return { activeTerms, options, moment: M };
+  return { activeTerms, actors, options, moment: M };
 }
 
 function unionSets(a: Set<number>, b: Set<number>): Set<number> {
@@ -570,7 +581,7 @@ export function computeComponents(
   seedChoices: BlockedChoose[],
 ): ComputeComponentsResult {
   const ctx = gatherChoiceContext(store, blocked);
-  const { activeSet, termByTok, boundValues, existSet } = ctx;
+  const { activeSet, termByTok, boundValues, existSet, actorByTok } = ctx;
   if (activeSet.size === 0) return { kind: "ok", components: [], surfaced: [] };
 
   const allRows = gatherConstrainRows(store, activeSet, boundValues, existSet);
@@ -629,6 +640,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, schema));
+  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, actorByTok, schema));
   return { kind: "ok", components: out, surfaced };
 }

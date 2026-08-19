@@ -190,7 +190,9 @@ runFails(
 runFails(`${RANGE}\n\n+ range 1 2 3`, /can only be used as a plain match atom/, "fact emit");
 runFails(`${RANGE}\n\n~ range 1 2 3`, /can only be used as a plain match atom/, "episode emit");
 runFails(`${RANGE}\n\n^ range 1 2`, /can only be used as a plain match atom/, "anchor emit (off-arity too)");
-runFails(`${RANGE}\n\n? range 1 2 3`, /can only be used as a plain match atom/, "ask");
+// An ask atom rejects any non-variable term at parse time (vars-only shape,
+// plans/v2-choice-actors.md), so a js-relation ask never reaches expand.
+runFails(`${RANGE}\n\n? range 1 2 3`, /'\?' accepts only variables/, "ask");
 runFails(
   `${RANGE}\n\n+ go\n\ngo, range 1 2 X -> 1, ^out X`,
   /can only be used as a plain match atom/,

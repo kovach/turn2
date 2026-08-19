@@ -963,8 +963,8 @@ function isJsHead(t: Term): boolean {
 
 function jsNotAllowed(state: DecState): never {
   throw new Error(
-    `rule '${state.ruleName}': '@js(...)' is only allowed in '+'/'~'/'^'/'?' atoms ` +
-    `(not in matches, '=', '!(...)', or aggregate patterns)`,
+    `rule '${state.ruleName}': '@js(...)' is only allowed in '+'/'~'/'^' atoms ` +
+    `(not in matches, '?', '=', '!(...)', or aggregate patterns)`,
   );
 }
 
@@ -1757,6 +1757,21 @@ function decomposeEmit(
     // existentials (`*var` templates) rather than fresh-id'd via Equal.
     rowAtom = buildConstrainRowAtom(a, state, k);
   } else {
+    // Static ask check (plans/v2-choice-actors.md): an ask atom introduces
+    // choices — it never re-asks or inspects existing values. Vars-only
+    // shape is enforced by the parser; here reject asking a variable that an
+    // earlier match, emit, `=`, or previous ask already bound. `state.seen`
+    // is exactly the bound-so-far set in SSA order.
+    if (a.marker === "ask") {
+      for (const t of a.atom.terms) {
+        if (t.tag === "Variable" && state.seen.has(t.name)) {
+          throw new Error(
+            `rule '${state.ruleName}': variable '${t.name}' is already bound at '?' ` +
+            `(line ${a.span.line}); '?' accepts only fresh variables`,
+          );
+        }
+      }
+    }
     // Build the atom to emit. Variables in the user atom that aren't yet
     // bound get pre-bound via Equals to fresh-id templates; Wildcards are
     // substituted inline.
@@ -1771,7 +1786,7 @@ function decomposeEmit(
     const userAtom: Atom = { terms: weight !== undefined ? [...userAtomTerms, weight] : userAtomTerms };
 
     if (a.marker === "ask") {
-      // (_choose chooseId (userAtom))
+      // (_choose chooseId (userAtom) actor)
       const chooseTpl = freshChooseTemplate(state, k);
       const cidName = `_cid_${k}`;
       const chooseVar: Term = { tag: "Variable", name: cidName };
@@ -1780,7 +1795,8 @@ function decomposeEmit(
       // Note: chooseVar is synthetic; we don't add it to chain (it's not a
       // user var, and downstream chain templates don't need it).
       const wrapped: Term = { tag: "Atom", atom: userAtom };
-      rowAtom = { terms: [SYM_CHOOSE_ROW, chooseVar, wrapped] };
+      const actorSym: Term = { tag: "Symbol", name: a.actor ?? "you" };
+      rowAtom = { terms: [SYM_CHOOSE_ROW, chooseVar, wrapped, actorSym] };
     } else {
       rowAtom = userAtom;
     }

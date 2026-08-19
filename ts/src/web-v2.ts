@@ -407,14 +407,14 @@ function setDbView(v: "database" | "timeline"): void {
 dbViewDatabaseEl.addEventListener("click", () => setDbView("database"));
 dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
 
-function handleClick(intent: ClickIntent): void {
+// Reify `activeTerms[i] := values[i]` bindings into source: `= V… (…)`
+// shared-binding lines plus one `^ is <term> <value>` row each, appended at
+// the end of the textarea. Shared by user clicks (handleClick) and rng-roll
+// persistence (plans/v2-choice-actors.md).
+function appendIsRows(activeTerms: Term[], values: Term[]): void {
   if (lastStore === null) return;
-  const N = intent.activeTerms.length;
-  if (N !== intent.optionTuple.length) {
-    console.warn("handleClick: activeTerms / optionTuple length mismatch");
-    return;
-  }
-  const roots = [...intent.activeTerms, ...intent.optionTuple];
+  const N = activeTerms.length;
+  const roots = [...activeTerms, ...values];
   const { bindings, results } = compressRefs(roots, lastStore);
   const isLines: string[] = [];
   for (let i = 0; i < N; i++) isLines.push(`^ is ${results[i]} ${results[i + N]}`);
@@ -431,6 +431,15 @@ function handleClick(intent: ClickIntent): void {
   // Restore the caret to where it was; the insert was at the end, so the
   // original offsets are unaffected.
   sourceEl.setSelectionRange(prevStart, prevEnd);
+}
+
+function handleClick(intent: ClickIntent): void {
+  if (lastStore === null) return;
+  if (intent.activeTerms.length !== intent.optionTuple.length) {
+    console.warn("handleClick: activeTerms / optionTuple length mismatch");
+    return;
+  }
+  appendIsRows(intent.activeTerms, intent.optionTuple);
 }
 
 async function run(): Promise<void> {
@@ -464,6 +473,21 @@ async function run(): Promise<void> {
   lastStore = store;
   lastRules = result.rules ?? [];
 
+  // Persist rng rolls (plans/v2-choice-actors.md): every `rng` choice the
+  // scheduler committed this run is appended as `^ is` rows — same shape as
+  // a user click — so the roll happens exactly once and survives re-runs.
+  // Gated on the source being unchanged since the run started, so a roll
+  // from a transient mid-typing program is discarded rather than persisted.
+  // The append fires the input listener, which re-runs; the appended rows
+  // then resolve the terms before the scheduler sees them, so the loop
+  // terminates.
+  if (result.rngCommits.length > 0 && sourceEl.value === userSource) {
+    appendIsRows(
+      result.rngCommits.map((c) => c.activeTerm),
+      result.rngCommits.map((c) => c.value),
+    );
+  }
+
   renderDbPane(store);
   link.update(parsed.rules);
 
@@ -492,14 +516,33 @@ async function run(): Promise<void> {
   // Info panel: list components/options + status detail.
   const infoLines: string[] = [];
   if (status.kind === "active-choices") {
+    // One-at-a-time choice UI (plans/v2-choice-actors.md): one row per
+    // active term. `you` terms list their distinct candidate values (column
+    // dedup over the option tuples), each committing a single length-1
+    // binding; committing narrows the remaining terms' options on the
+    // re-run. rng terms render inert — they resolve automatically once the
+    // `you` terms are committed.
     for (let i = 0; i < status.components.length; i++) {
       const comp = status.components[i]!;
-      infoLines.push(`<b>component ${i + 1}</b> active: ${comp.activeTerms.map((t) => escapeHtml(renderTermShallow(store, t))).join(", ")} @ ${escapeHtml(renderTermShallow(store, comp.moment))}`);
-      for (const opt of comp.options) {
-        const rendered = opt.map((t) => renderTermShallow(store, t)).join(" ");
-        const id = `c${clickIdCounter++}`;
-        clickIntents.set(id, { activeTerms: comp.activeTerms, optionTuple: opt });
-        infoLines.push(`  <span class="opt" data-click-id="${id}">${escapeHtml(rendered)}</span>`);
+      infoLines.push(`<b>component ${i + 1}</b> @ ${escapeHtml(renderTermShallow(store, comp.moment))}`);
+      for (let j = 0; j < comp.activeTerms.length; j++) {
+        const termLabel = escapeHtml(renderTermShallow(store, comp.activeTerms[j]!));
+        if (comp.actors[j] === "rng") {
+          infoLines.push(`  ${termLabel} <i>(rng)</i>`);
+          continue;
+        }
+        const seenVals = new Set<number>();
+        const parts: string[] = [];
+        for (const opt of comp.options) {
+          const v = opt[j]!;
+          const tok = tokenOf(store, v);
+          if (seenVals.has(tok)) continue;
+          seenVals.add(tok);
+          const id = `c${clickIdCounter++}`;
+          clickIntents.set(id, { activeTerms: [comp.activeTerms[j]!], optionTuple: [v] });
+          parts.push(`<span class="opt" data-click-id="${id}">${escapeHtml(renderTermShallow(store, v))}</span>`);
+        }
+        infoLines.push(`  ${termLabel}: ${parts.join(" ")}`);
       }
     }
   } else if (status.kind === "empty-fringe-error") {

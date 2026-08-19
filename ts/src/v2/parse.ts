@@ -5,7 +5,8 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
-import type { JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { Actor, JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import { isActor } from "./types.js";
 import { aggregators } from "./aggregators.js";
 
 export interface ParseError {
@@ -333,6 +334,17 @@ export function tokenize(input: string): Token[] | ParseError {
       let depth = 0;
       while (pos < raw.length) {
         const c = raw[pos]!;
+        // Choice-actor group `?[actor]` (plans/v2-choice-actors.md): a `[`
+        // immediately following a leading `?` marker is part of the atom
+        // text, not a bracket aggregation. Consume through the `]`.
+        if (depth === 0 && c === "[" && pos === start + 1 && raw[start] === "?") {
+          const close = raw.indexOf("]", pos + 1);
+          if (close < 0) {
+            return { line: lineno, message: "unterminated '[' after '?' (actor group must close on the same line)" };
+          }
+          pos = close + 1;
+          continue;
+        }
         if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}" || c === "[" || c === "]")) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
@@ -1423,6 +1435,23 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
   if (marker === "constrain") {
     return parseConstrainBody(text, line, startCol, endCol);
   }
+  // Choice-actor prefix `[actor]` on an ask atom (plans/v2-choice-actors.md):
+  // `?[rng] C` — the tokenizer only glues a `[...]` group into the atom text
+  // when it immediately follows the `?` marker, so a leading `[` here is
+  // always the actor group.
+  let actor: Actor | undefined;
+  if (marker === "ask" && text.startsWith("[")) {
+    const close = text.indexOf("]");
+    if (close < 0) {
+      return { line, message: "unterminated '[' after '?'" };
+    }
+    const name = text.slice(1, close).trim();
+    if (!isActor(name)) {
+      return { line, message: `unknown actor '${name}' (expected you|rng)` };
+    }
+    actor = name;
+    text = text.slice(close + 1).trim();
+  }
   // Optional trailing `-> term` weight. Top-level arrow only (depth 0).
   const arrow = findTopArrow(text);
   let head: string;
@@ -1452,12 +1481,34 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
   if (headTerm !== undefined && headTerm.tag === "Symbol" && headTerm.name.startsWith("*")) {
     return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
   }
+  // Ask-shape validation (plans/v2-choice-actors.md): `?[actor] V1 .. Vn`
+  // accepts only one or more distinct variables — no symbols, no compounds,
+  // no bare `_`, no duplicates, no weight.
+  if (marker === "ask") {
+    if (weight !== undefined) {
+      return { line, message: "'?' atom cannot carry a '-> weight'" };
+    }
+    if (atom.terms.length === 0) {
+      return { line, message: "'?' requires at least one variable" };
+    }
+    const seenAsk = new Set<string>();
+    for (const t of atom.terms) {
+      if (t.tag !== "Variable") {
+        return { line, message: "'?' accepts only variables (one or more)" };
+      }
+      if (seenAsk.has(t.name)) {
+        return { line, message: `duplicate variable '${t.name}' in '?'` };
+      }
+      seenAsk.add(t.name);
+    }
+  }
   // A default-marker (`match`) atom that carries a trailing `-> weight`
   // is an aggregate, not a match.
   let outMarker: Marker = marker;
   if (marker === "match" && weight !== undefined) outMarker = "aggregate";
   const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line, startCol, endCol } };
   if (weight !== undefined) out.weight = weight;
+  if (actor !== undefined) out.actor = actor;
   return out;
 }
 

@@ -94,6 +94,8 @@ setup
   +main-option do/adventure
   +fight-option do/fight
   +fight-option do/flee
+  +fight-roll player
+  +fight-roll monster
   +win-option go-home
   +win-option continue
   +die-option do/quit
@@ -135,8 +137,12 @@ round, ?X, !fight-option X, ~round-choice X
 round-choice.is do/flee, ~flee
 
 -- do_fight : choice * $fight_in_progress -o try_fight.
--- the player strikes first; if the monster survives it strikes back.
 round-choice.is do/fight, ~try-fight
+
+-- manually encoding the randomness implied by the `fight_auto` stage
+-- round-choice.is do/fight, ?[rand]C, !fight-roll C, ~attacker C
+-- round-choice.is do/fight, attacker.is player, ~player-hit
+-- round-choice.is do/fight, attacker.is monster, ~monster-hit
 
 -- fight/hit : try_fight * $fight_in_progress * monster_hp MHP * $weapon_damage D
 --           * subtract MHP D (some MHP') -o monster_hp MHP'.
@@ -144,7 +150,6 @@ try-fight, fight.monster F
   monster:hp F -> MHP, weapon-damage -> D
   subtract MHP D MHP', positive MHP'
   +monster:hp F -> MHP'
-  ~monster-strikes
 
 -- win : try_fight * fight_in_progress * monster_hp MHP * $weapon_damage D
 --     * subtract MHP D none -o win_screen.
@@ -199,53 +204,3 @@ win-choice.is go-home
 die, ?X, !die-option X, ~die-choice X
 
 (main, (adventure, (die-choice.is do/restart))); ~init; ~main
-
-
-
-= V1 (*chain)
-  = V2 (*mom r1 1 V1 l)
-  = V3 (*mom r1 1 V1 r)
-  = V4 (*chain V2 V3)
-  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
-  = V6 (*mom r1 3 V5 r)
-  = V7 (*id r5 2 (*chain (*mom r1 3 V5 l) V6 V6) :X)
-  ^ is V7 do/adventure
-
-= V1 (*chain)
-  = V2 (*mom r1 1 V1 l)
-  = V3 (*mom r1 1 V1 r)
-  = V4 (*chain V2 V3)
-  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
-  = V6 (*mom r1 3 V5 r)
-  = V7 (*mom r1 3 V5 l)
-  = V8 (*id r5 2 (*chain V7 V6 V6) :X)
-  = V9 (*mom r5 2 (*chain V7 V6 V7 V6) l)
-  = V10 (*chain V7 V6 V6 V8 V9 top (*mom r5 3 (*chain V7 V6 V6 V8 V9 top) l) top)
-  = V11 (*mom r5 4 V10 l)
-  = V12 (*mom r5 4 V10 r)
-  = V13 (*chain V11 V12 V8 bot top V11 V12)
-  = V14 (*mom r18 3 V13 l)
-  = V15 (*mom r18 3 V13 r)
-  = V16 (*mom r23 2 (*chain V14 V15 V14 V15) l)
-  = V17 (*chain V14 V15 V15 V16 top)
-  = V18 (*mom r23 3 V17 l)
-  = V19 (*mom r23 3 V17 r)
-  = V20 (*id r23 3 (*chain V14 V15 V16 top) :_)
-  = V21 (*mom r24 4 (*chain V18 V19 V20 V18 V19 0 4) l)
-  = V22 (*chain V18 V19 V20 V18 V19 0 4 V21 top)
-  = V23 (*mom r24 5 V22 l)
-  = V24 (*id r24 5 V22 :M)
-  = V25 (*mom r24 6 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top) l)
-  = V26 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top V25 top (*mom r24 7 (*chain V18 V19 V20 V18 V19 0 4 V21 top V24 V23 top V25 top) l) top)
-  = V27 (*mom r24 8 V26 r)
-  = V28 (*id r25 2 (*chain (*mom r24 8 V26 l) V27 V27) :X)
-  ^ is V28 do/fight
-
-= V1 (*chain)
-  = V2 (*mom r1 1 V1 l)
-  = V3 (*mom r1 1 V1 r)
-  = V4 (*chain V2 V3)
-  = V5 (*chain V2 V3 (*mom r1 2 V4 l) (*mom r1 2 V4 r))
-  = V6 (*mom r1 3 V5 r)
-  = V7 (*id r7 2 (*chain (*mom r1 3 V5 l) V6 V6) :X)
-  ^ is V7 do/adventure

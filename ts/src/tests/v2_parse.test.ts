@@ -421,10 +421,13 @@ assertAlpha(
   "~foo T1, bar T1 T2, ~baz T2\n",
   "dot — glued mixed-marker chain ~foo.bar.~baz",
 );
+// Ask atoms are excluded here: `?` accepts only fresh variables
+// (plans/v2-choice-actors.md), so a symbol-headed `? baz X` no longer
+// parses and dotting into an ask is meaningless.
 assertAlpha(
-  "^foo . ! bar . ? baz X\n",
-  "^foo T1, ! bar T1 T2, ? baz T2 X\n",
-  "dot — anchor/constrain/ask markers preserved",
+  "^foo . ! bar . baz X\n",
+  "^foo T1, ! bar T1 T2, baz T2 X\n",
+  "dot — anchor/constrain markers preserved",
 );
 assertAlpha(
   "turn .(~ actor A) .(+ index I)\n",

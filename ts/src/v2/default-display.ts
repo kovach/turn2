@@ -61,6 +61,7 @@ const CSS = `
 .dd-group-label { color: var(--fg-mute2); }
 .dd-chip { padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-2); font-family: monospace; color: var(--syn-var); }
 .dd-chip.matchable { background: var(--bg-3); border-color: var(--syn-head); color: var(--syn-head); cursor: pointer; }
+.dd-chip.rng { opacity: 0.6; font-style: italic; }
 .dd-icons { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; min-width: 200px; font-size: 16px; }
 .dd-icon { padding: 6px 10px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg-2); font-family: monospace; font-size: 16px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
 .dd-icon-children { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 6px; }
@@ -313,6 +314,9 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
   // candidates(T, C_sel): set of slot indices i such that some option row
   // has tokensEq(row[i], T). Returns the set as an array of (slotIdx, var).
+  // Slots labeled `rng` are never offered (plans/v2-choice-actors.md): a
+  // click can only bind a `you` slot; rng slots resolve automatically once
+  // the `you` terms are committed.
   function candidatesFor(
     T: Term,
     comp: ComponentOptions,
@@ -321,6 +325,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     const hits = new Set<number>();
     for (const row of comp.options) {
       for (let i = 0; i < row.length; i++) {
+        if (comp.actors[i] === "rng") continue;
         if (api.tokensEq(row[i]!, T, store)) hits.add(i);
       }
     }
@@ -332,6 +337,9 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
   // unambiguous, for multi-arity ones we pass a length-1 intent (just that
   // slot), which handleClick accepts.
   function commitSlot(comp: ComponentOptions, slotIdx: number, T: Term, store: Store): ClickIntent | null {
+    // Defense in depth: an rng-labeled slot is never user-committable
+    // (candidatesFor already filters them out).
+    if (comp.actors[slotIdx] === "rng") return null;
     for (const row of comp.options) {
       if (slotIdx >= row.length) continue;
       if (!api.tokensEq(row[slotIdx]!, T, store)) continue;
@@ -529,6 +537,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       matchableSlots = new Set();
       for (const row of sel.options) {
         for (let i = 0; i < row.length; i++) {
+          if (sel.actors[i] === "rng") continue;
           if (tokenOf(store, row[i]!) === state.pending) matchableSlots.add(i);
         }
       }
@@ -551,6 +560,10 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       for (let j = 0; j < comp.activeTerms.length; j++) {
         const chip = document.createElement("span");
         chip.className = "dd-chip";
+        if (comp.actors[j] === "rng") {
+          chip.classList.add("rng");
+          chip.title = "resolved automatically (rng)";
+        }
         chip.textContent = api.renderTerm(store, comp.activeTerms[j]!);
         if (i === state.selectedIdx && matchableSlots !== null && matchableSlots.has(j)) {
           chip.classList.add("matchable");
@@ -581,11 +594,18 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         });
       } else if (isSingleton) {
         // Selected group with exactly one option row: click commits the
-        // whole row, binding every active term in this component at once.
+        // row's `you` slots at once. rng slots are left to the scheduler
+        // (with one option it lands on the same values, but the binding
+        // stays attributed to rng — plans/v2-choice-actors.md).
         row.addEventListener("click", () => {
+          const youIdx: number[] = [];
+          for (let k = 0; k < comp.activeTerms.length; k++) {
+            if (comp.actors[k] !== "rng") youIdx.push(k);
+          }
+          if (youIdx.length === 0) return;
           api.commit({
-            activeTerms: comp.activeTerms,
-            optionTuple: comp.options[0]!,
+            activeTerms: youIdx.map((k) => comp.activeTerms[k]!),
+            optionTuple: youIdx.map((k) => comp.options[0]![k]!),
           });
         });
       }

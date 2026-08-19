@@ -3,7 +3,6 @@
 - `notes/overview.md` has a log of all plans that were used to create the project
 - when told to read a section like `# some task or problem`, it refers to the top of notes/overview.md.
   - if it contains a line like `plan: TODO`, write an implementation plan at a new file under `plans/` and replace TODO with its filename
-  - if the change adds files, include a note in the plan to update `ts/src/v2/overview.md`
   - at the end of each plan, note your model name and version
   - when told to `check-in`, read the top-most section of notes/overview.md and follow these instructions
 - work should only be done on the "v2" implementation

@@ -4,7 +4,8 @@
 // re-enter the inner loop. If the earliest tier is all choices, halt with
 // `active-choices`.
 
-import type { FixpointStatus, Program, ProvLink, Rule } from "./types.js";
+import type { Actor, ComponentOptions, FixpointStatus, Program, ProvLink, Rule } from "./types.js";
+import { maxActor } from "./types.js";
 import type { Span } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
@@ -17,7 +18,10 @@ import {
   collectReactiveFinalizations,
   computeAggStrata,
   finalizeReactive,
+  programSeededRandom,
+  resolveRngChoice,
   selectEarliestTier,
+  type RngCommit,
 } from "./scheduler.js";
 import { computeComponents } from "./constraint-query.js";
 import { closeDoAggC } from "./comp-aggregate.js";
@@ -31,13 +35,17 @@ export interface FixpointResult {
   // absent on the inner `runLoop` results). Needed to decode per-tuple
   // bindings from the id slot (`tupleBindings` in print.ts).
   rules?: Rule[];
+  // Every `rng` choice binding committed during this run, in commit order
+  // (plans/v2-choice-actors.md). The harness persists these as `^ is` rows
+  // so a roll happens exactly once. Empty when nothing was rolled.
+  rngCommits: RngCommit[];
 }
 
 export function runFixpoint(
   program: Program,
   gas = 200,
   tupleGas = 5000,
-  options?: { stats?: boolean },
+  options?: { stats?: boolean; random?: () => number },
 ): FixpointResult {
   // Expand aggregation-synonym macros first, so exception rewriting sees the
   // relation reads their bodies perform and `computeAggStrata` below never
@@ -58,9 +66,10 @@ export function runFixpoint(
   store.stats.enabled = options?.stats === true;
   attachRules(store.stats, expanded.rules.map((r) => r.name));
   let totalIters = 0;
+  const rngCommits: RngCommit[] = [];
 
   try {
-    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, strata);
+    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, strata, options?.random, rngCommits);
     resolveExceptionProvenance(store, program.provLinks);
     return { ...result, rules: expanded.rules };
   } catch (e) {
@@ -68,7 +77,7 @@ export function runFixpoint(
       // Partial (gas-limited) stores feed the views too — fix up their
       // provenance as well.
       resolveExceptionProvenance(store, program.provLinks);
-      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rules: expanded.rules };
+      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rules: expanded.rules, rngCommits };
     }
     throw e;
   }
@@ -150,13 +159,19 @@ function findPrimeTuple(store: Store, prime: string, idx: number): number | unde
   return undefined;
 }
 
-function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, strata: Map<string, number>): FixpointResult {
+function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, strata: Map<string, number>, explicitRandom: (() => number) | undefined, rngCommits: RngCommit[]): FixpointResult {
   let totalIters = startIters;
+  // The random stream is latched at the first rng roll: an explicitly
+  // passed options.random wins (harness control); else a program-provided
+  // seed (`+ rng-seed n`, read from the store — asserted rules have run to
+  // quiescence by then); else Math.random. `rng-seed` tuples appearing
+  // after the latch have no effect ("seed once, at startup").
+  let random: (() => number) | null = explicitRandom ?? null;
   while (true) {
     const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs, jsRelFuncs);
     totalIters += innerIters;
     if (totalIters >= gas) {
-      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length } };
+      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rngCommits };
     }
 
     const blocked = [
@@ -164,7 +179,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       ...collectReactiveFinalizations(store, expanded.reactive, expanded.schema),
     ];
     if (blocked.length === 0) {
-      return { store, iterations: totalIters, status: { kind: "done" } };
+      return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
     }
     const tier = selectEarliestTier(store, blocked);
     const aggsInTier = tier.flatMap((b) => b.kind === "agg" ? [b.row] : []);
@@ -207,7 +222,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
         // empty aggregate at an early moment stalled the whole program —
         // the outer loop only works the earliest tier, so every later
         // aggregate went unclosed and the run reported `done`.
-        return { store, iterations: totalIters, status: { kind: "done" } };
+        return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
       }
       continue;
     }
@@ -223,12 +238,43 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
         store,
         iterations: totalIters,
         status: { kind: "empty-fringe-error", choice: cc.choice, activeTerm: cc.activeTerm },
+        rngCommits,
       };
+    }
+    // rng auto-resolution (plans/v2-choice-actors.md): a component whose
+    // controlling (highest) actor is `rng` is resolved by the scheduler —
+    // one option tuple picked uniformly at random, all its active terms
+    // committed jointly — and the loop re-enters instead of halting. Mixed
+    // components (controlling actor `you`) surface untouched: the user's
+    // one-at-a-time commits resolve the `you` terms first, and the
+    // recomputed all-rng remainder rolls on a later round (highest actor
+    // first). If nothing committed (all rng components had zero options),
+    // fall through and surface everything rather than looping forever.
+    const controlling = (c: ComponentOptions): Actor => c.actors.reduce(maxActor, "rng");
+    const rngComps = cc.components.filter((c) => controlling(c) === "rng");
+    if (rngComps.length > 0) {
+      if (random === null) random = programSeededRandom(store) ?? Math.random;
+      let committed = false;
+      for (const comp of rngComps) {
+        const got = resolveRngChoice(store, comp, random);
+        if (got !== null) {
+          rngCommits.push(...got);
+          committed = true;
+        }
+      }
+      if (committed) {
+        // Semi-naive: the `is` rows emitted here are the next inner-loop
+        // pass's delta, mirroring the agg-result path above.
+        store.iteration++;
+        swapHeads(store);
+        continue;
+      }
     }
     return {
       store,
       iterations: totalIters,
       status: { kind: "active-choices", choices: cc.surfaced, components: cc.components },
+      rngCommits,
     };
   }
 }

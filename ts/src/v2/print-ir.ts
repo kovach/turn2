@@ -50,7 +50,11 @@ export function renderRuleAtom(atom: RuleAtom): string {
           .join(", ");
         return `Atom[constrain] !(${subs})`;
       }
-      return `Atom[${atom.marker}] ${renderAtomRaw(atom.atom)}${w}`;
+      // Ask atoms show their actor annotation (plans/v2-choice-actors.md).
+      const marker = atom.marker === "ask" && atom.actor !== undefined
+        ? `ask[${atom.actor}]`
+        : atom.marker;
+      return `Atom[${marker}] ${renderAtomRaw(atom.atom)}${w}`;
     }
     case "AggComp": {
       const items = atom.body.map(renderRuleAtom).join(", ");
