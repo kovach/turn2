@@ -295,7 +295,10 @@ turn
   console.log("PASS: multi-variable rng component resolves as one joint roll");
 }
 
-// 9) Zero-option rng component surfaces active-choices instead of looping.
+// 9) Zero-option rng component resolves dead (v2_dead_choice.test.ts):
+//    the run completes without ever consulting the random stream
+//    (throwingRandom proves the rng path never touches the empty
+//    component) and without committing anything.
 {
   const src = `
 + turn
@@ -305,11 +308,9 @@ turn
   ! cell C
 `;
   const r = runFixpoint(ok(src), 200, 5000, { random: throwingRandom });
-  assert.equal(r.status.kind, "active-choices", `status: ${r.status.kind}`);
-  if (r.status.kind !== "active-choices") throw new Error("unreachable");
-  assert.equal(r.status.components[0]!.options.length, 0);
+  assert.equal(r.status.kind, "done", `status: ${r.status.kind}`);
   assert.equal(r.rngCommits.length, 0);
-  console.log("PASS: zero-option rng component surfaces instead of looping");
+  console.log("PASS: zero-option rng component dies without a roll");
 }
 
 // 10) Program-provided seed: `+ rng-seed <n>` makes rolls deterministic —

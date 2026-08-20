@@ -123,12 +123,10 @@ turn
 `;
   const { status } = runFixpoint(ok(src));
   // No candidates -> last produces no agg results -> component has 0
-  // options. Still active-choices (the choice is reached, options just
-  // come back empty).
-  assert.equal(status.kind, "active-choices");
-  if (status.kind !== "active-choices") throw new Error("unreachable");
-  assert.equal(status.components[0]!.options.length, 0, "expected 0 options");
-  console.log("PASS: last on empty contribution set yields no options");
+  // options -> the choice resolves dead and the run completes
+  // (v2_dead_choice.test.ts).
+  assert.equal(status.kind, "done", `status: ${status.kind}`);
+  console.log("PASS: last on empty contribution set resolves the choice dead");
 }
 
 // 4b) Negation-as-default inside a choice: a plain constraint grounds the

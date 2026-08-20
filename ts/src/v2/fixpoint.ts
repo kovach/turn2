@@ -15,6 +15,7 @@ import {
   closeDoAgg,
   collectAllBlocked,
   collectBlockedChooses,
+  markDeadChoice,
   collectReactiveFinalizations,
   computeAggStrata,
   finalizeReactive,
@@ -232,7 +233,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     // blocked for the next round.
     const choices = collectBlockedChooses(store);
     const seedChoices = tier.flatMap((b) => b.kind === "choose" ? [b.row] : []);
-    const cc = computeComponents(store, choices, expanded.schema, seedChoices);
+    const cc = computeComponents(store, choices, expanded.schema, seedChoices, jsRelFuncs);
     if (cc.kind === "empty-fringe-error") {
       return {
         store,
@@ -241,6 +242,30 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
         rngCommits,
       };
     }
+    // Dead-choice resolution: a surfaced component with zero option
+    // tuples can never gain any — temporal monotonicity: the component
+    // is evaluated at its moment M, and no fact emitted after this
+    // quiescence point can have an interval containing M. Such a
+    // component is complete: mark every active term dead (`_dead-choice`
+    // rows, read back by collectBlockedChooses / gatherChoiceContext as
+    // resolutions) and re-enter the loop instead of blocking forever.
+    // The owning asks' continuations simply never fire — the Ceptre
+    // "transition not applicable" case. Applies to `you` and `rng`
+    // components alike (this supersedes surfacing for empty rng
+    // components, which previously fell through to active-choices).
+    const emptyComps = cc.components.filter((c) => c.options.length === 0);
+    if (emptyComps.length > 0) {
+      for (const comp of emptyComps) {
+        for (const t of comp.activeTerms) markDeadChoice(store, t);
+      }
+      // Semi-naive bookkeeping, mirroring the commit paths (the marker
+      // rows trigger no rules, but keep every tuple in a proper
+      // iteration bucket).
+      store.iteration++;
+      swapHeads(store);
+      continue;
+    }
+
     // rng auto-resolution (plans/v2-choice-actors.md): a component whose
     // controlling (highest) actor is `rng` is resolved by the scheduler —
     // one option tuple picked uniformly at random, all its active terms

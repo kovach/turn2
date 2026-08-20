@@ -1,5 +1,27 @@
+# dead choices
+(follow-up to the section below; no separate plan file — implemented directly 26/08/20)
+
+- an earliest-tier choice component with zero option tuples is *complete*: it resolves to
+  nothing and no longer blocks the scheduler
+- assumption: temporal monotonicity — the component is evaluated at its quiescent moment M,
+  and no later emission's interval can contain M, so an empty component can never gain options
+- mechanism: mark each active term with a reserved `_dead-choice <term>` row at (bot, top);
+  collectBlockedChooses and gatherChoiceContext treat it as a resolution with no value, so the
+  ask stops blocking and its `.is` continuations never fire (Ceptre "transition not applicable")
+- applies to `you` and `rng` alike (supersedes the old zero-option-rng surface-and-wait guard);
+  an unconstrained `?` is still an empty-fringe error
+- this behavior was originally designed in plans/reify-choice-options.md (abandoned, v1);
+  re-derived here for v2 after the dungeon port stalled on an unaffordable `buy` choice
+
+# js-def relations inside !(...)
+plan: plans/v2-js-rel-in-constrain.md
+
+- allow a `#js-def` relation as a sub-atom of a `!(...)` constrain block
+- expand tags such subs `*c-js` (no `-> weight`, arity checked eagerly); constraint-query enumerates the generator during the component's backtracking join instead of reading the store
+- clause selection is dynamic (ground-under-substitution modes, earliest fitting clause); js subs are scheduled after all store-backed subs, component-wide
+
 # term-render-component, info-log
-plan: TODO
+plan: plans/v2-term-render-component.md
 
 this change has two parts: slight refactor of the `info` panel; changing how term ids render
 

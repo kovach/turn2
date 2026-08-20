@@ -390,10 +390,12 @@ a, ~c
 // the collapse key must not depend on them: an episode that still derives the
 // same way must keep its key, or the timeline would silently expand.
 {
+  // `+ cell c1` sits inside the game chain (before the ask) so the
+  // component genuinely has an option — a zero-option component would now
+  // resolve dead instead of surfacing (v2_dead_choice.test.ts).
   const choiceSrc = `
-+ cell c1
-
 ~game
+  + cell c1
   ? C
   ! cell C
   ~pick C

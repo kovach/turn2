@@ -820,6 +820,7 @@ const SYM_CHAIN: Term = { tag: "Symbol", name: "*chain" };
 const SYM_CONJ: Term = { tag: "Symbol", name: "*conj" };
 const SYM_C_PLAIN: Term = { tag: "Symbol", name: "*c-plain" };
 const SYM_C_AGG: Term = { tag: "Symbol", name: "*c-agg" };
+const SYM_C_JS: Term = { tag: "Symbol", name: "*c-js" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
 const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
@@ -1139,30 +1140,25 @@ function decomposeBody(
   return { XL, XR };
 }
 
-// Handle an `Atom` whose head (or, for `!(...)`, a sub-atom's head) names a
-// `#js-def` relation (plans/v2-js-relations.md). Returns true when the atom
-// was consumed (a `JsIterate` was pushed); false to continue the normal
-// marker dispatch. Non-match uses throw: a js relation's match sites never
-// read the store, so an emitted/ask/constrain row under the name would be
-// silently invisible to every match — the exact bug this rejects. The check
-// is deliberately arity-blind (unlike exceptions, where arity is part of
-// predicate identity): an off-arity emit is almost certainly the same
-// conceptual relation, misused.
+// Handle an `Atom` whose head names a `#js-def` relation
+// (plans/v2-js-relations.md). Returns true when the atom was consumed (a
+// `JsIterate` was pushed); false to continue the normal marker dispatch.
+// Non-match uses throw: a js relation's match sites never read the store, so
+// an emitted/ask row under the name would be silently invisible to every
+// match — the exact bug this rejects. The check is deliberately arity-blind
+// (unlike exceptions, where arity is part of predicate identity): an
+// off-arity emit is almost certainly the same conceptual relation, misused.
+// Exception: a `!(...)` sub-atom naming a js relation is legitimate — it is
+// tagged `*c-js` in buildConstrainRowAtom and enumerated by constraint-query
+// (plans/v2-js-rel-in-constrain.md).
 function decomposeJsRel(
   a: Extract<RuleAtom, { tag: "Atom" }>,
   state: DecState,
 ): boolean {
-  if (a.subAtoms !== undefined) {
-    for (const s of a.subAtoms) {
-      const h = s.atom.terms[0];
-      if (h !== undefined && h.tag === "Symbol" && state.jsRels.has(h.name)) {
-        throw new Error(
-          `rule '${state.ruleName}': js relation '${h.name}' cannot appear inside a '!(...)' constrain block`,
-        );
-      }
-    }
-    return false;
-  }
+  // `!(...)` sub-atoms may name js relations; they are validated and
+  // tagged `*c-js` in buildConstrainRowAtom, then enumerated by the
+  // constraint-query evaluator (plans/v2-js-rel-in-constrain.md).
+  if (a.subAtoms !== undefined) return false;
   const h = a.atom.terms[0];
   if (h === undefined || h.tag !== "Symbol" || !state.jsRels.has(h.name)) return false;
   if (a.marker !== "match" || a.weight !== undefined) {
@@ -1676,8 +1672,32 @@ function buildConstrainRowAtom(
 
   const subTerms: Term[] = [SYM_CONJ];
   for (const sub of subAtoms) {
+    // A sub-atom naming a `#js-def` relation is tagged `*c-js` so the
+    // constraint-query evaluator enumerates its generator instead of
+    // reading the store (plans/v2-js-rel-in-constrain.md). No `-> weight`
+    // (there are no store rows to aggregate), arity checked eagerly.
+    const h = sub.atom.terms[0];
+    const jsClauses =
+      h !== undefined && h.tag === "Symbol" ? state.jsRels.get(h.name) : undefined;
+    if (jsClauses !== undefined) {
+      if (sub.kind === "agg") {
+        throw new Error(
+          `rule '${state.ruleName}': js relation '${(h as { name: string }).name}' cannot take ` +
+          `'-> weight' inside a '!(...)' constrain block (nothing to aggregate)`,
+        );
+      }
+      const arity = jsClauses[0]!.params.length;
+      const given = sub.atom.terms.length - 1;
+      if (given !== arity) {
+        throw new Error(
+          `rule '${state.ruleName}': js relation '${(h as { name: string }).name}' takes ` +
+          `${arity} argument(s), given ${given} (inside '!(...)')`,
+        );
+      }
+    }
     const inner: Atom = { terms: sub.atom.terms.map(rewrite) };
-    const wrapHead = sub.kind === "agg" ? SYM_C_AGG : SYM_C_PLAIN;
+    const wrapHead =
+      jsClauses !== undefined ? SYM_C_JS : sub.kind === "agg" ? SYM_C_AGG : SYM_C_PLAIN;
     subTerms.push({ tag: "Id", atom: { terms: [wrapHead, { tag: "Atom", atom: inner }] } });
   }
   const conj: Term = { tag: "Id", atom: { terms: subTerms } };

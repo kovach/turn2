@@ -84,10 +84,23 @@ export function collectBlockedDoAggs(store: Store): BlockedDoAgg[] {
   return out;
 }
 
-// Scan store for choose rows whose wrapped atom contains at least one
-// non-Symbol term lacking a matching `is <activeTerm> _` row.
-export function collectBlockedChooses(store: Store): BlockedChoose[] {
-  // Gather resolved active-term tokens from `is` rows.
+// Dead-choice marker head: `_dead-choice <activeTerm>`, emitted by the
+// fixpoint loop when an earliest-tier choice component has zero option
+// tuples. Under the temporal-monotonicity assumption (a component's
+// options are fixed once its moment is quiescent) such a component can
+// never gain options, so its active terms are complete: they count as
+// resolved everywhere — the owning choose rows stop blocking and their
+// continuations simply never fire (no `is` row ever appears).
+export const SYM_DEAD_CHOICE: Term = { tag: "Symbol", name: "_dead-choice" };
+
+// Mark one active term dead. `(bot, top)` span, mirroring `is` commit
+// rows: dead-ness is a resolution, visible for the rest of the run.
+export function markDeadChoice(store: Store, activeTerm: Term): void {
+  addTuple(store, { terms: [SYM_DEAD_CHOICE, activeTerm] }, store.bot, store.top);
+}
+
+// Resolved active-term tokens: `is` commits plus `_dead-choice` markers.
+export function resolvedChoiceTokens(store: Store): Set<number> {
   const resolved = new Set<number>();
   for (const idx of candidatesByHead(store, "is")) {
     const t = store.tuples[idx]!;
@@ -95,6 +108,20 @@ export function collectBlockedChooses(store: Store): BlockedChoose[] {
     if (T === undefined) continue;
     resolved.add(tokenOf(store, T));
   }
+  for (const idx of candidatesByHead(store, "_dead-choice")) {
+    const t = store.tuples[idx]!;
+    const T = t.atom.terms[1];
+    if (T === undefined) continue;
+    resolved.add(tokenOf(store, T));
+  }
+  return resolved;
+}
+
+// Scan store for choose rows whose wrapped atom contains at least one
+// non-Symbol term lacking a matching `is <activeTerm> _` row (or a
+// `_dead-choice` marker).
+export function collectBlockedChooses(store: Store): BlockedChoose[] {
+  const resolved = resolvedChoiceTokens(store);
   const out: BlockedChoose[] = [];
   for (const idx of candidatesByHead(store, "_choose")) {
     const t = store.tuples[idx]!;

@@ -1,8 +1,5 @@
 ~setup; ~init; ~main
 
-~foo 3
-foo X, ~bar X
-
 -- max_hp 10.
 setup
   +max-hp 10
@@ -72,13 +69,16 @@ shop-item X, ^icon X
 shop, ?X, !shop-option X, ~shop-choice X
 
 -- partial subtract
+#js-def ge +X +Y { if (X >= Y) yield [] }
+#js-def le +X +Y { if (X <= Y) yield [] }
 #js-def subtract +X +Y -R { if (X >= Y) yield [X-Y] }
 
 -- buy : treasure T * cost W C * damage_of W D * weapon_damage _ 
 --     * subtract T C (some T’) -o treasure T’ * weapon_damage D.
 shop-choice.is buy
-  ?X, !shop-item X, is X W,
-  treasure -> T, cost W C, damage-of W D, subtract T C T'
+  treasure -> T
+  ?X, !(shop-item X, cost X XC, le XC T), is X W,
+  cost W C, damage-of W D, subtract T C T'
   +treasure T', +weapon-damage D,
 
 -- leave : shop_screen -o main_screen.
@@ -137,37 +137,38 @@ round, ?X, !fight-option X, ~round-choice X
 round-choice.is do/flee, ~flee
 
 -- do_fight : choice * $fight_in_progress -o try_fight.
-round-choice.is do/fight, ~try-fight
+-- round-choice.is do/fight, ~try-fight
 
 -- manually encoding the randomness implied by the `fight_auto` stage
--- round-choice.is do/fight, ?[rand]C, !fight-roll C, ~attacker C
--- round-choice.is do/fight, attacker.is player, ~player-hit
--- round-choice.is do/fight, attacker.is monster, ~monster-hit
+round-choice.is do/fight, ?[rng]C, !fight-roll C, ~attacker C
+round-choice.is do/fight, attacker.is player, ~player-hit
+round-choice.is do/fight, attacker.is monster, ~monster-hit
 
 -- fight/hit : try_fight * $fight_in_progress * monster_hp MHP * $weapon_damage D
 --           * subtract MHP D (some MHP') -o monster_hp MHP'.
-try-fight, fight.monster F
+player-hit, fight.monster F
   monster:hp F -> MHP, weapon-damage -> D
   subtract MHP D MHP', positive MHP'
   +monster:hp F -> MHP'
+  ~round-continue
 
 -- win : try_fight * fight_in_progress * monster_hp MHP * $weapon_damage D
 --     * subtract MHP D none -o win_screen.
-try-fight, fight.monster.monster:hp MHP, ~hi MHP
+player-hit H, fight.monster.monster:hp -> MHP
   weapon-damage -> D
   subtract D MHP _
   ~win
 
 -- fight/miss : try_fight * $fight_in_progress * $monster Size * health HP
 --            * subtract HP Size (some HP') -o health HP'.
-monster-strikes, fight.monster.monster:size Size
+monster-hit, fight.monster.monster:size Size, ~what
   hp -> HP, subtract HP Size HP', positive HP'
   +hp HP'
   ~round-continue
 
 -- fight/die : try_fight * fight_in_progress * monster Size * health HP
 --           * subtract HP Size none -o die_screen.
-monster-strikes, fight.monster.monster:size Size
+monster-hit, fight.monster.monster:size Size
   hp -> HP, subtract Size HP _
   +hp 0
   ~die

@@ -11,7 +11,10 @@
 //   5. For each component, lift the constrain rows into a conjunctive query
 //      over store.byHead, replacing active and existential subterms with
 //      substitution slots; collect the joint bindings of active terms as
-//      deduped option tuples.
+//      deduped option tuples. `*c-js` sub-atoms (js relations inside
+//      `!(...)`, plans/v2-js-rel-in-constrain.md) join the query by
+//      enumerating their generator clauses instead of reading the store,
+//      scheduled after all store-backed subs.
 //
 // Empty-fringe check: any component containing at least one active term but
 // no constrain rows is a programmer error (an unconstrained `?`).
@@ -30,6 +33,8 @@ import {
   type Store,
 } from "./store.js";
 import { aggregateOver } from "./scheduler.js";
+import { JS_REL_YIELD_CAP, type CompiledJsRel } from "./js-rel.js";
+import { decodeTerm, encodeTerm } from "./js-values.js";
 
 export type { ComponentOptions };
 
@@ -76,6 +81,18 @@ function gatherChoiceContext(store: Store, blocked: BlockedChoose[]): ChoiceCont
     // another _constrain row still references the same id template, so
     // the substitution must be available across all rows.
     if (isFreshIdTemplate(T, store)) rawBound.set(k, V);
+  }
+
+  // Dead choices (`_dead-choice` markers, emitted by the fixpoint loop
+  // for zero-option components) count as resolved with no value: the
+  // term never re-enters the active set or a component, and gets no
+  // substitution entry — a constrain pattern still mentioning it can
+  // never match, so entangled survivors correctly die on a later round.
+  for (const idx of candidatesByHead(store, "_dead-choice")) {
+    const t = store.tuples[idx]!;
+    const T = t.atom.terms[1];
+    if (T === undefined) continue;
+    resolved.add(tokenOf(store, T));
   }
 
   // Transitive closure: if rawBound[k] = v and tokenOf(v) is itself a
@@ -206,8 +223,10 @@ interface ConstrainSub {
   // unification against the sub-atom. "agg": fold candidates via the
   // relation's schema aggregator. The choice component moment `M`
   // (see `choiceComponentMoment`) gates which candidates are visible
-  // in either case.
-  kind: "plain" | "agg";
+  // in either case. "js": a `#js-def` relation — enumerated by calling
+  // its generator (plans/v2-js-rel-in-constrain.md); timeless, so `M`
+  // does not gate it.
+  kind: "plain" | "agg" | "js";
   // The sub-atom's regular Atom (head + key positions; for `agg`, last
   // position is the weight slot, matching `_do-agg`'s layout).
   atom: Atom;
@@ -252,9 +271,9 @@ function gatherConstrainRows(
       if (swAtom === null) continue;
       const swHead = swAtom.terms[0];
       if (swHead === undefined || swHead.tag !== "Symbol") continue;
-      const kind: "plain" | "agg" =
+      const kind: "plain" | "agg" | "js" =
         swHead.name === "*c-agg" ? "agg" :
-        swHead.name === "*c-plain" ? "plain" : "plain";
+        swHead.name === "*c-js" ? "js" : "plain";
       const innerTerm = swAtom.terms[1];
       if (innerTerm === undefined) continue;
       const rawInner = unwrapAtom(innerTerm, store);
@@ -396,6 +415,7 @@ function runComponent(
   termByTok: Map<number, Term>,
   actorByTok: Map<number, Actor>,
   schema: Map<string, string>,
+  jsRels: Map<string, CompiledJsRel[]>,
 ): ComponentOptions {
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
@@ -429,30 +449,36 @@ function runComponent(
   // surface in the emitted options.
   const slotSet = unionSets(activeSet, existSet);
 
-  function go(rowIdx: number, sub: Map<number, Term>): void {
-    if (rowIdx === comp.rows.length) {
+  // The component is semantically one conjunction — rows only package
+  // sub-atoms for connectivity and the moment lub — so the subs are
+  // flattened into one list, with js subs moved to the end
+  // (plans/v2-js-rel-in-constrain.md): a js relation's clause selection
+  // depends on what's already bound, so running store-backed subs first
+  // maximizes the modes available and makes behavior independent of the
+  // store-discovery order of the rows. Store subs keep their row/sub
+  // order; js subs keep their relative order.
+  const orderedSubs: ConstrainSub[] = [];
+  const jsSubs: ConstrainSub[] = [];
+  for (const row of comp.rows) {
+    for (const s of row.subs) (s.kind === "js" ? jsSubs : orderedSubs).push(s);
+  }
+  orderedSubs.push(...jsSubs);
+
+  function go(i: number, sub: Map<number, Term>): void {
+    if (i === orderedSubs.length) {
       emit(sub);
       return;
     }
-    const row = comp.rows[rowIdx]!;
-    goRow(row, 0, sub, (sub2) => go(rowIdx + 1, sub2));
-  }
-
-  function goRow(
-    row: ConstrainRow,
-    ai: number,
-    sub: Map<number, Term>,
-    after: (sub: Map<number, Term>) => void,
-  ): void {
-    if (ai === row.subs.length) {
-      after(sub);
-      return;
-    }
-    const s = row.subs[ai]!;
+    const s = orderedSubs[i]!;
     const headTerm = s.atom.terms[0];
     if (headTerm === undefined || headTerm.tag !== "Symbol") return;
+    const after = (sub2: Map<number, Term>): void => go(i + 1, sub2);
     if (s.kind === "agg") {
-      runAggSub(s, sub, store, slotSet, schema, M, (sub2) => goRow(row, ai + 1, sub2, after));
+      runAggSub(s, sub, store, slotSet, schema, M, after);
+      return;
+    }
+    if (s.kind === "js") {
+      runJsSub(s, headTerm.name, sub, store, slotSet, jsRels, after);
       return;
     }
     const arity = s.atom.terms.length;
@@ -465,13 +491,13 @@ function runComponent(
       if (!intervalContains(store, cand.l, cand.r, M, M)) continue;
       const trial = new Map(sub);
       let ok = true;
-      for (let i = 0; i < arity; i++) {
-        if (!matchTerm(s.atom.terms[i]!, cand.atom.terms[i]!, trial, store, slotSet)) {
+      for (let i2 = 0; i2 < arity; i2++) {
+        if (!matchTerm(s.atom.terms[i2]!, cand.atom.terms[i2]!, trial, store, slotSet)) {
           ok = false;
           break;
         }
       }
-      if (ok) goRow(row, ai + 1, trial, after);
+      if (ok) go(i + 1, trial);
     }
   }
 
@@ -531,6 +557,107 @@ function runAggSub(
   }
 }
 
+// Evaluate one js-relation sub-atom (plans/v2-js-rel-in-constrain.md).
+// Mirrors eval.ts:evalJsIterate, adapted to the constraint-query
+// substitution model. Clause selection is dynamic — no static
+// resolveJsModes pass applies here, since boundness depends on the join
+// order over runtime-discovered rows: a call position is `+` iff its
+// pattern term is ground under the current `sub` (no active or
+// existential slots remain), and the earliest declared clause whose
+// mode vector is ≤ the call's wins (`- < +` pointwise, as in
+// js-rel.ts). `+` args are decoded to JS values for the generator; each
+// yielded row's values are interned and matched against the
+// `-`-position patterns as a backtracking choice point (a bound `-`
+// position filters). Js relations are timeless — the component moment
+// `M` does not gate them.
+function runJsSub(
+  s: ConstrainSub,
+  name: string,
+  sub: Map<number, Term>,
+  store: Store,
+  slotSet: Set<number>,
+  jsRels: Map<string, CompiledJsRel[]>,
+  after: (sub: Map<number, Term>) => void,
+): void {
+  const clauses = jsRels.get(name);
+  if (clauses === undefined || clauses.length === 0) {
+    throw new Error(`internal: js relation '${name}' in constrain row has no compiled clauses`);
+  }
+  const args = s.atom.terms.slice(1).map((t) => substResolved(t, sub, store));
+  const call = args.map((t) => (containsSlot(t, store, slotSet) ? "-" : "+"));
+  const idx = clauses.findIndex((c) => c.modes.every((m, i) => m === "-" || call[i] === "+"));
+  if (idx < 0) {
+    throw new Error(
+      `!(...): no '#js-def ${name}' clause matches modes (${call.join(" ")}) ` +
+      `(a '+' parameter requires the argument to be determined by the component's other constraints)`,
+    );
+  }
+  const clause = clauses[idx]!;
+  const bound: unknown[] = [];
+  const outIdx: number[] = [];
+  for (let i = 0; i < clause.modes.length; i++) {
+    if (clause.modes[i] === "+") {
+      bound.push(decodeTerm(args[i]!, store.hash));
+    } else {
+      outIdx.push(i);
+    }
+  }
+  let it: Iterator<unknown>;
+  try {
+    it = clause.gen(...bound)[Symbol.iterator]();
+  } catch (e) {
+    throw new Error(`#js-def ${name} threw: ${(e as Error).message}`);
+  }
+  let yields = 0;
+  for (;;) {
+    let res: IteratorResult<unknown>;
+    try {
+      res = it.next();
+    } catch (e) {
+      throw new Error(`#js-def ${name} threw: ${(e as Error).message}`);
+    }
+    if (res.done === true) return;
+    if (++yields > JS_REL_YIELD_CAP) {
+      throw new Error(`#js-def ${name}: yield limit exceeded (possible infinite generator)`);
+    }
+    const row = res.value;
+    if (!Array.isArray(row) || row.length !== outIdx.length) {
+      throw new Error(
+        `#js-def ${name}: yield must be an array of ${outIdx.length} value(s) (the '-' arguments)`,
+      );
+    }
+    const trial = new Map(sub);
+    let ok = true;
+    for (let j = 0; j < outIdx.length; j++) {
+      const val = intern(store, encodeTerm(row[j]));
+      if (!matchTerm(args[outIdx[j]!]!, val, trial, store, slotSet)) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) after(trial);
+  }
+}
+
+// True if `t` still contains an unbound slot (an active-term or
+// existential token from `slotSet`). Walked like
+// collectActiveAndExistTokens: token check at each node, recursing
+// through Atoms and Refs with regular-Atom bodies; Id-tagged terms are
+// opaque apart from their own token.
+function containsSlot(t: Term, store: Store, slotSet: Set<number>): boolean {
+  if (slotSet.has(tokenOf(store, t))) return true;
+  if (t.tag === "Ref") {
+    if (refTagOf(store.hash, t.id) === "Id") return false;
+    const body = store.hash.refToAtom.get(t.id);
+    if (body === undefined) return false;
+    return body.terms.some((x) => containsSlot(x, store, slotSet));
+  }
+  if (t.tag === "Atom") {
+    return t.atom.terms.some((x) => containsSlot(x, store, slotSet));
+  }
+  return false;
+}
+
 // Match pattern term against value term, threading substitutions for active
 // (and existential) tokens via `sub`. Active-token slots act as variables;
 // other tokens must match by hashcons-token equality. Recursion goes through
@@ -579,6 +706,9 @@ export function computeComponents(
   // entangled non-seed chooses; other blocked chooses stay blocked and
   // re-surface on a subsequent fixpoint round.
   seedChoices: BlockedChoose[],
+  // Compiled `#js-def` clauses, for `*c-js` sub-atoms
+  // (plans/v2-js-rel-in-constrain.md).
+  jsRels: Map<string, CompiledJsRel[]> = new Map(),
 ): ComputeComponentsResult {
   const ctx = gatherChoiceContext(store, blocked);
   const { activeSet, termByTok, boundValues, existSet, actorByTok } = ctx;
@@ -640,6 +770,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, actorByTok, schema));
+  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, actorByTok, schema, jsRels));
   return { kind: "ok", components: out, surfaced };
 }

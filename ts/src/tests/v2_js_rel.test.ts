@@ -198,7 +198,14 @@ runFails(
   /can only be used as a plain match atom/,
   "weighted match",
 );
-runFails(`${RANGE}\n\n+ go\n\ngo, !(range 0 2 X), ^out`, /'!\(\.\.\.\)' constrain block/, "inside !(...)");
+// A js relation inside `!(...)` is now allowed
+// (plans/v2-js-rel-in-constrain.md) — behavior is covered by
+// v2_js_rel_constrain.test.ts; here just check expand accepts it.
+{
+  const { status } = runFixpoint(ok(`${RANGE}\n\n+ go\n\ngo, !(range 0 2 X), ^out`));
+  assert.equal(status.kind, "done");
+  console.log("PASS: js relation accepted inside !(...)");
+}
 runFails(
   `${RANGE}\n\n+ go\n\ngo, [range 0 2 X | count X], ^out`,
   /'\[ \.\.\. \]' aggregate query/,
