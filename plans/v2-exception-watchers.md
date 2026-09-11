@@ -1,5 +1,11 @@
 # exception watchers (amendment to [[v2-exceptions]])
 
+> **Amended 26/09/11 by [[v2-exception-tuple-keyed-flags]]** (`plans/v2-exception-tuple-keyed-flags.md`):
+> the flag `p_exn` is keyed by the intercepted tuple (LHS terms, wildcards
+> freshened), not by transported context; the exception rule re-joins the
+> ctx tuple to recover context vars, and the default rule reads its own
+> tuple's flag.
+
 Amends the desugaring in `plans/v2-exceptions.md`. Steps 1–3 and 5–7
 are unchanged; step 4 (in-place recognition) is replaced by a context
 broadcast plus a detached **watcher rule**.

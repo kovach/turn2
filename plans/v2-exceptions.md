@@ -1,5 +1,11 @@
 # exceptions
 
+> **Amended 26/09/11 by [[v2-exception-tuple-keyed-flags]]** (`plans/v2-exception-tuple-keyed-flags.md`):
+> the flag `p_exn` is keyed by the intercepted tuple (LHS terms, wildcards
+> freshened), not by transported context; the exception rule re-joins the
+> ctx tuple to recover context vars, and the default rule reads its own
+> tuple's flag.
+
 > **Amended 26/07/13 by [[v2-exception-watchers]]** (`plans/v2-exception-watchers.md`):
 > step 4's in-place `match p', anchor p_exn -> 1` is replaced by a plain
 > `anchor p_ctx U..` broadcast plus a generated watcher rule, so exceptions

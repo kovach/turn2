@@ -1,3 +1,11 @@
+# exception flags keyed by the intercepted tuple
+plan: plans/v2-exception-tuple-keyed-flags.md
+(implemented 26/09/11)
+
+- bug: the exception flag `_<p>_exn<k>` was keyed only by transported context vars, so two `p'` tuples in one interval shared a flag and an exception on one suppressed the other (could cause unintended loops); with a context var in the RHS the default rule's wildcard-keyed flag read never produced its zero row, so un-intercepted tuples vanished
+- root cause: the original spec's step-1 payload `V = (vars(e) ∩ vars(prefix(R))) \ vars(t̄)` and the note "the payload only transports bindings, it doesn't gate"
+- fix: the flag is keyed by the LHS terms (wildcards freshened to `_t<i>`); the `_exn` rule re-joins the ctx tuple for context vars; the default rule reads `_<p>_exn<k> W̄ -> 0` for its own tuple
+
 # dead choices
 (follow-up to the section below; no separate plan file — implemented directly 26/08/20)
 

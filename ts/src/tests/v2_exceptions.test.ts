@@ -1,7 +1,8 @@
 // Tests for the exceptions transform (plans/v2-exceptions.md, amended by
-// plans/v2-exception-watchers.md): `{p t1..tn => e}` desugars, before
-// expansion, into a p→p' rename plus watcher/exception/default rules gated
-// by a bool flag relation. The host rule only broadcasts its context
+// plans/v2-exception-watchers.md and plans/v2-exception-tuple-keyed-flags.md):
+// `{p t1..tn => e}` desugars, before expansion, into a p→p' rename plus
+// watcher/exception/default rules gated by a bool flag relation keyed by
+// the intercepted tuple. The host rule only broadcasts its context
 // (`anchor p_ctx U..`) — it never matches p', so exceptions don't gate
 // `;` progression and their LHS vars are local.
 //
@@ -97,7 +98,7 @@ phase2, ^p b
 }
 
 // 2) Context-variable transport (m>0): `e` references a var bound earlier
-// in R; the var reaches `e` via the flag payload.
+// in R; the var reaches `e` via the ctx payload, re-joined by the exn rule.
 {
   const tuples = run(`
 +bind c1 y1
@@ -134,10 +135,11 @@ ctx, ^p a
 
 // 4) V-scoping (intra-rule, different predicates) — structural. Watcher
 // shape: R broadcasts `anchor p_ctx U..`; the watcher joins ctx with p'
-// and sets the flag. Prefix-bound LHS vars (X) ride the ctx payload;
-// e2's context var (Y) rides both ctx and flag. (The original plan's
-// cross-exception V-scoping — e2 reading exc1's X — is retired by
-// plans/v2-exception-watchers.md: LHS vars are exception-local now.)
+// and sets the flag, keyed by the tuple. Prefix-bound LHS vars (X) and
+// e2's context var (Y) ride the ctx payload; the exn rule re-joins ctx to
+// recover Y. (The original plan's cross-exception V-scoping — e2 reading
+// exc1's X — is retired by plans/v2-exception-watchers.md: LHS vars are
+// exception-local now.)
 {
   const prog = ok(`
 #def r
@@ -164,31 +166,33 @@ ctx, ^p a
   assert.deepEqual(render("r_watch1"), [
     "Atom[match] _p_ctx1 ?X",
     "Atom[match] _p_prime1 ?X",
-    "Atom[anchor] _p_exn1 -> 1",
+    "Atom[anchor] _p_exn1 ?X -> 1",
   ]);
   assert.deepEqual(render("r_exn1"), [
     "Atom[match] _p_prime1 ?X",
-    "Atom[aggregate] _p_exn1 -> 1",
+    "Atom[aggregate] _p_exn1 ?X -> 1",
+    "Atom[match] _p_ctx1 ?X",
     "Atom[anchor] e1 ?X",
   ]);
   assert.deepEqual(render("r_default1"), [
     "Atom[match] _p_prime1 ?_w1",
-    "Atom[aggregate] _p_exn1 -> 0",
+    "Atom[aggregate] _p_exn1 ?_w1 -> 0",
     "Atom[anchor] p ?_w1",
   ]);
   assert.deepEqual(render("r_watch2"), [
     "Atom[match] _q_ctx1 ?Y",
     "Atom[match] _q_prime1 ?Z",
-    "Atom[anchor] _q_exn1 ?Y -> 1",
+    "Atom[anchor] _q_exn1 ?Z -> 1",
   ]);
   assert.deepEqual(render("r_exn2"), [
     "Atom[match] _q_prime1 ?Z",
-    "Atom[aggregate] _q_exn1 ?Y -> 1",
+    "Atom[aggregate] _q_exn1 ?Z -> 1",
+    "Atom[match] _q_ctx1 ?Y",
     "Atom[anchor] e2 ?Y ?Z",
   ]);
   assert.deepEqual(render("r_default2"), [
     "Atom[match] _q_prime1 ?_w1",
-    "Atom[aggregate] _q_exn1 _ -> 0",
+    "Atom[aggregate] _q_exn1 ?_w1 -> 0",
     "Atom[anchor] q ?_w1",
   ]);
   assert.equal(out.schema.get("_p_exn1"), "bool");
@@ -197,7 +201,7 @@ ctx, ^p a
 }
 
 // 4b) V-scoping end-to-end: Y (a genuine prefix var) is transported to
-// e2 via ctx payload and flag; prefix-bound X filters exc1's LHS.
+// e2 via the ctx payload; prefix-bound X filters exc1's LHS.
 {
   const tuples = run(`
 +is1 s1 xv
@@ -243,19 +247,20 @@ ctx, ^q zv
     "Atom[match] is2 ?_Y ?Y",
     "Atom[anchor] _move_ctx2 ?Y",
   ], `r body:\n${render("r").join("\n")}`);
+  // The LHS wildcard is freshened to `_t1` so the flag key is the whole tuple.
   assert.deepEqual(render("r_watch1"), [
     "Atom[match] _move_ctx1 ?X",
-    "Atom[match] _move_prime1 ?X _",
-    "Atom[anchor] _move_exn1 -> 1",
+    "Atom[match] _move_prime1 ?X ?_t1",
+    "Atom[anchor] _move_exn1 ?X ?_t1 -> 1",
   ]);
   assert.deepEqual(render("r_default1"), [
     "Atom[match] _move_prime1 ?_w1 ?_w2",
-    "Atom[aggregate] _move_exn1 -> 0",
+    "Atom[aggregate] _move_exn1 ?_w1 ?_w2 -> 0",
     "Atom[anchor] _move_prime2 ?_w1 ?_w2", // rewritten by exc2's step 3
   ], `r_default1:\n${render("r_default1").join("\n")}`);
   assert.deepEqual(render("r_default2"), [
     "Atom[match] _move_prime2 ?_w1 ?_w2",
-    "Atom[aggregate] _move_exn2 -> 0",
+    "Atom[aggregate] _move_exn2 ?_w1 ?_w2 -> 0",
     "Atom[anchor] move ?_w1 ?_w2",
   ]);
   console.log("PASS: same-predicate structural (worked example 2)");
@@ -399,7 +404,9 @@ ctx, ~p x y
 // are selected by containment, scheduler.ts aggregateOver). Seeding `tag`
 // *inside* ctx narrows R's anchor to [tag_m, ctx_r], the flag no longer
 // contains the p' interval, and the move leaks through the default. `tag`
-// is seeded before ctx so the flag spans the whole context.
+// is seeded before ctx so the flag spans the whole context. (Within that
+// containment, interception is per tuple by value: the flag is keyed by
+// the intercepted tuple — test 18.)
 {
   const tuples = run(`
 +tag c1 misfits
@@ -520,10 +527,8 @@ play A, ~move A
 
 // 17) Prefix-bound LHS var still filters: X bound by `first X` rides the
 // ctx payload and re-unifies in the watcher, so the flag is only set when
-// a *matching* tuple exists. (Interception itself stays temporal — two
-// tuples sharing one moment share one flag, per the containment note on
-// test 9 — so the sharp test is the flag NOT being set: without Vt
-// transport the watcher's X would bind c and intercept.)
+// a *matching* tuple exists. (Without Vt transport the watcher's X would
+// bind c and intercept.)
 {
   const t1 = run(`
 +first a
@@ -554,6 +559,115 @@ ctx, ^move a b
   assert(hasHead(t2, "nope"), `missing 'nope': ${t2.join(" | ")}`);
   assert(!t2.includes("move a b"), `'move a b' should be intercepted: ${t2.join(" | ")}`);
   console.log("PASS: prefix-bound LHS var filters");
+}
+
+// 18) Same-moment discrimination (plans/v2-exception-tuple-keyed-flags.md):
+// two p' tuples in one moment; only the one matching the exception's
+// prefix-bound X is intercepted. The flag is keyed by the tuple, so the
+// default rule reads the flag for *its own* tuple.
+{
+  const t1 = run(`
+~setup
+  ^bird x
+  ^bird y
+  ^peng y
+
+bird X, ^flies X
+
+peng X, { flies X => }
+`);
+  assert(t1.includes("flies x"), `'flies x' must survive: ${t1.join(" | ")}`);
+  assert(!t1.includes("flies y"), `'flies y' should be suppressed: ${t1.join(" | ")}`);
+  assert(hasHead(t1, "_flies_exn1 y"), `flag for y not raised: ${t1.join(" | ")}`);
+  assert(!hasHead(t1, "_flies_exn1 x"), `flag for x must not be raised: ${t1.join(" | ")}`);
+
+  // Non-empty RHS variant.
+  const t2 = run(`
+~setup
+  ^bird x
+  ^bird y
+  ^peng y
+
+bird X, ^flies X
+
+peng X, { flies X => ^swims X }
+`);
+  assert(t2.includes("flies x"), `'flies x' must survive: ${t2.join(" | ")}`);
+  assert(!t2.includes("flies y"), `'flies y' should be intercepted: ${t2.join(" | ")}`);
+  assert(t2.includes("swims y"), `missing 'swims y': ${t2.join(" | ")}`);
+  assert(!t2.includes("swims x"), `'swims x' must not fire: ${t2.join(" | ")}`);
+  console.log("PASS: same-moment discrimination");
+}
+
+// 18b) Compound / constant LHS: the flag is keyed by the LHS *terms*, so a
+// constructor pattern or a constant discriminates within one moment.
+{
+  const t1 = run(`
+~setup
+  ^flies z
+  ^flies (s z)
+
+setup, { flies (s X) => }
+`);
+  assert(t1.includes("flies z"), `'flies z' must survive: ${t1.join(" | ")}`);
+  assert(!t1.includes("flies (s z)"), `'flies (s z)' should be suppressed: ${t1.join(" | ")}`);
+
+  const t2 = run(`
+~setup
+  ^flies x
+  ^flies y
+
+setup, { flies x => }
+`);
+  assert(t2.includes("flies y"), `'flies y' must survive: ${t2.join(" | ")}`);
+  assert(!t2.includes("flies x"), `'flies x' should be suppressed: ${t2.join(" | ")}`);
+  console.log("PASS: compound / constant LHS");
+}
+
+// 18c) Wildcard LHS: the wildcard is freshened into the flag key, so each
+// matching tuple gets its own flag and non-matching ones survive.
+{
+  const tuples = run(`
++first a
+  ~ctx
+
+ctx
+  ^move a b
+  ^move a c
+  ^move d e
+
+#def r
+  ctx
+  first X
+  {move X _ => ^nope}
+`);
+  assert(tuples.includes("move d e"), `'move d e' must survive: ${tuples.join(" | ")}`);
+  assert(!tuples.includes("move a b"), `'move a b' should be intercepted: ${tuples.join(" | ")}`);
+  assert(!tuples.includes("move a c"), `'move a c' should be intercepted: ${tuples.join(" | ")}`);
+  assert.equal(tuples.filter((t) => t === "nope" || t.startsWith("nope ")).length, 2,
+    `expected two 'nope's: ${tuples.join(" | ")}`);
+  console.log("PASS: wildcard LHS keyed per tuple");
+}
+
+// 19) Default fires with transport (m>0 regression): with a context var
+// in the RHS, the old wildcard-keyed default read had a free key column
+// and never produced its zero row, so an un-intercepted `p y` vanished.
+{
+  const tuples = run(`
+~setup; ~later
+
+setup
+  ^ctx a
+  ^p x
+
+later, ^p y
+
+setup, ctx C, {p X => ^e C X}
+`);
+  assert(tuples.includes("e a x"), `missing 'e a x': ${tuples.join(" | ")}`);
+  assert(tuples.includes("p y"), `default never fired: missing 'p y': ${tuples.join(" | ")}`);
+  assert(!tuples.includes("p x"), `'p x' should be intercepted: ${tuples.join(" | ")}`);
+  console.log("PASS: default fires with transport (m>0)");
 }
 
 // ---------------------------------------------------------------------

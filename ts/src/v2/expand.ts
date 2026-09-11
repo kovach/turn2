@@ -335,7 +335,7 @@ function mintFresh(base: string, used: Set<string>): string {
 }
 
 // ----- Exceptions pass (plans/v2-exceptions.md, amended by
-// plans/v2-exception-watchers.md) -----
+// plans/v2-exception-watchers.md and plans/v2-exception-tuple-keyed-flags.md) -----
 //
 // Source-to-source elimination of `{p t1..tn => e}` Exception atoms, run
 // before any other expansion. Maintains a working set `S` of exception-free
@@ -352,6 +352,15 @@ function mintFresh(base: string, used: Set<string>): string {
 // produced. Exception LHS variables are therefore local to the exception,
 // except that prefix-bound ones travel through the ctx payload and re-unify
 // in the watcher (preserving their filter meaning).
+//
+// The flag `p_exn` is keyed by the intercepted tuple itself (the LHS terms
+// with wildcards freshened), never by transported context: the default rule
+// reads the flag for *its own* tuple, so two `p'` tuples sharing one moment
+// are intercepted independently, and the read always has every key column
+// bound (a free key column with no contributions yields no zero row, so a
+// wildcard-keyed default read silently never fires — the tuple-keyed-flags
+// plan). Context vars needed by the RHS are recovered in the exception rule
+// by re-joining the ctx tuple.
 
 type AtomRA = Extract<RuleAtom, { tag: "Atom" }>;
 type ExceptionRA = Extract<RuleAtom, { tag: "Exception" }>;
@@ -383,18 +392,22 @@ export function applyExceptions(program: Program): Program {
       }
       const tTerms = exc.left.terms.slice(1);
 
-      // 1. Flag payload Ve = (vars(e) ∩ vars(prefix(R))) \ vars(t1..tn) and
-      // ctx payload U = (vars(t1..tn) ∪ vars(e)) ∩ vars(prefix(R)), both in
-      // prefix first-seen order. Prefix-bound t-vars (Vt) ride the ctx
-      // payload so the watcher re-unifies them with the tuple.
+      // 1. Flag key t° = t1..tn with each wildcard replaced by a fresh
+      // `_t<i>` variable (one running counter, pre-order), so the watcher
+      // can bind and re-emit the whole tuple. Ctx payload
+      // U = (vars(t1..tn) ∪ vars(e)) ∩ vars(prefix(R)) in prefix first-seen
+      // order: prefix-bound t-vars (Vt) ride it so the watcher re-unifies
+      // them with the tuple; prefix vars used by `e` ride it so the
+      // exception rule can recover them.
       const prefixVars: string[] = [];
       collectPrefixVars(R.body, exc, new Set<string>(), prefixVars);
       const eVars = new Set<string>();
       collectBodyVars(exc.right, eVars);
       const tVars = new Set<string>();
       for (const t of tTerms) collectVarNames(t, tVars);
-      const V = prefixVars.filter((n) => eVars.has(n) && !tVars.has(n));
       const U = prefixVars.filter((n) => eVars.has(n) || tVars.has(n));
+      let wildN = 0;
+      const tFresh: Term[] = tTerms.map((t) => freshenWildcards(t, () => `_t${++wildN}`));
 
       // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>` / `_<p>_ctx<k>`.
       let k = 1;
@@ -446,44 +459,48 @@ export function applyExceptions(program: Program): Program {
       usedRuleNames.add(exnRuleName);
       usedRuleNames.add(defaultRuleName);
 
-      // 5. Watcher rule: match p_ctx U.., match p' t.., anchor p_exn V.. -> 1.
+      // 5. Watcher rule: match p_ctx U.., match p' t°.., anchor p_exn t°.. -> 1.
       // The two matches intersect, so the flag covers ctx ∩ tuple — the same
-      // interval the old inline recognition emitted it over.
+      // interval the old inline recognition emitted it over — and is keyed
+      // by the matched tuple.
       S.push({
         name: watchRuleName,
         span,
         body: [
           { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
-          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
-          { tag: "Atom", marker: "anchor", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
+          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
+          { tag: "Atom", marker: "anchor", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
         ],
       });
 
-      // 6. Exception rule: match p' t.., aggregate p_exn V.. -> 1, e.
-      // An empty RHS means bare suppression — the flag still gates the
-      // default rule, but there is no exception case to run.
+      // 6. Exception rule: match p' t°.., aggregate p_exn t°.. -> 1,
+      // match p_ctx U.., e. The flag read has every key bound by the match;
+      // the ctx re-join binds the prefix vars `e` needs and re-checks Vt
+      // against the tuple. An empty RHS means bare suppression — the flag
+      // still gates the default rule, but there is no exception case to run.
       if (exc.right.length > 0) {
         S.push({
           name: exnRuleName,
           span,
           body: [
-            { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tTerms] }, span },
-            { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...vars(V)] }, weight: sym("1"), span },
+            { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
+            { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
+            { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
             ...exc.right,
           ],
         });
       }
 
-      // 7. Default rule: match p' W.., aggregate p_exn _.._ -> 0,
-      // anchor p W..  (fresh W1..Wn, m wildcards).
+      // 7. Default rule: match p' W.., aggregate p_exn W.. -> 0, anchor p W..
+      // (fresh W1..Wn). W is bound by the match, so the zero row is produced
+      // exactly when this tuple was not intercepted.
       const W: Term[] = tTerms.map((_, i) => ({ tag: "Variable", name: `_w${i + 1}` }));
-      const flagWilds: Term[] = V.map(() => ({ tag: "Wildcard" }));
       const defaultRule: Rule = {
         name: defaultRuleName,
         span,
         body: [
           { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...W] }, span },
-          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...flagWilds] }, weight: sym("0"), span },
+          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...W] }, weight: sym("0"), span },
           { tag: "Atom", marker: "anchor", atom: { terms: [sym(p), ...W] }, span },
         ],
       };
@@ -606,6 +623,18 @@ function collectBodyVars(body: RuleAtom[], out: Set<string>): void {
     collectAtomVarsOrdered(a, out, dummy);
   };
   for (const a of body) push(a);
+}
+
+// Copy `t` with every wildcard (a `Wildcard` term or a `_` Variable)
+// replaced by a fresh Variable named by `next()`, pre-order.
+function freshenWildcards(t: Term, next: () => string): Term {
+  if (t.tag === "Wildcard" || (t.tag === "Variable" && t.name === "_")) {
+    return { tag: "Variable", name: next() };
+  }
+  if (t.tag === "Atom" || t.tag === "Id") {
+    return { ...t, atom: { ...t.atom, terms: t.atom.terms.map((x) => freshenWildcards(x, next)) } };
+  }
+  return t;
 }
 
 function collectVarNames(t: Term, out: Set<string>): void {
