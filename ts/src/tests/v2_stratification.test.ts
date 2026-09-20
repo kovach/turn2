@@ -77,7 +77,10 @@ c X Y, ^q -> 1
   console.log("PASS: all-`=` chain through a plain relation raises the consumer's stratum");
 }
 
-// Runtime: that chain folds q ONCE at the final value (no ambiguous same-left).
+// Runtime: that chain folds q ONCE at the final value (no ambiguous same-left
+// rows), and a reader at the same moment sees only that value. Everything
+// here lands at `bot`; the reactive handler folds `q` only in a round where
+// `p` has settled there (plans/v2-moment-walk.md §3.1).
 {
   const { store, status } = runFixpoint(ok(`
 #reactive p * * -> bool
@@ -91,6 +94,8 @@ p X Y -> 1, ^c X Y
 
 c X Y, ^q -> 1
 
+q -> N, ^total N
+
 ^e a b
 ^e b c
 ^e c a
@@ -100,6 +105,8 @@ c X Y, ^q -> 1
   assert.equal(q.length, 1, `expected one _aggval q (no same-left intermediates): ${q.join(" | ")}`);
   const nine = "(s ".repeat(9) + "z" + ")".repeat(9);
   assert.equal(q[0], `_aggval q ${nine}`, `q should be 9 (closure has 9 pairs): ${q[0]}`);
+  const totals = store.tuples.filter((t) => rt(store, t.atom.terms[0]!) === "total").map((t) => ra(store, t.atom));
+  assert.deepEqual(totals, [`total ${nine}`], `reader sees only the settled value: ${totals.join(" | ")}`);
   console.log("PASS: through-plain `=` consumer folds once at the final value");
 }
 
@@ -120,7 +127,10 @@ b -> Y, go, +a -> 3
 }
 
 // Runtime: a bounded `<` ping-pong terminates cleanly (it is NOT a stuck
-// same-moment recursion) with the expected forward-in-time values.
+// same-moment recursion) with the expected forward-in-time values. Reads
+// sample at their anchor's start (plans/v2-moment-walk.md), so each step
+// reads from an anchor placed after the previous write: `^a-set` is emitted
+// at the anchor left behind by `+a`, i.e. from `a`'s moment onward.
 {
   const { store, status } = runFixpoint(ok(`
 #reactive a -> last
@@ -128,15 +138,19 @@ b -> Y, go, +a -> 3
 
 ^go
 
-go, +a -> 1
+go, +a -> 1, ^a-set
 
-a -> 1, go, +b -> 2
+a-set, a -> 1, +b -> 2, ^b-set
 
-b -> 2, go, +a -> 3
+b-set, b -> 2, +a -> 3, ^a-set2
+
+a-set2, a -> N, +final N
 `));
   assert.equal(status.kind, "done", `bounded <-cycle should terminate, got ${status.kind}`);
   assert.ok(aggvalRows(store, "a").includes("_aggval a 3"), `a should reach 3: ${aggvalRows(store, "a").join(" | ")}`);
   assert.ok(aggvalRows(store, "b").includes("_aggval b 2"), `b should reach 2: ${aggvalRows(store, "b").join(" | ")}`);
+  const finals = store.tuples.filter((t) => rt(store, t.atom.terms[0]!) === "final").map((t) => ra(store, t.atom));
+  assert.deepEqual(finals, ["final 3"], `the last read sees 3: ${finals.join(" | ")}`);
   console.log("PASS: bounded `<` ping-pong terminates with forward-in-time values");
 }
 

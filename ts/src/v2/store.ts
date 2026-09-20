@@ -54,11 +54,20 @@ export interface Store {
   ltPos: Map<number, Set<number>>;
   ltNeg: Map<number, Set<number>>;
   // Eager-strategy state. Populated only when ORDER_STRATEGY === "eager".
-  // `gt[a]` is the full forward closure { b | a < b }; `orderBwd[b]` is
-  // the set of immediate predecessors of `b` (not closure), used to
-  // back-walk ancestors of the insertion point.
+  // `gt[a]` is the full forward closure { b | a < b }.
   gt: Map<number, Set<number>>;
+  // Immediate predecessors of each moment over asserted edges (not the
+  // closure): `orderBwd[b] = { a | addOrder(a, b) }`. Maintained under both
+  // strategies. The eager branch back-walks ancestors with it; the moment
+  // walk (moment-walk.ts) computes its frontier from it. Bot/top edges are
+  // implicit and never recorded — `bot` is a predecessor of everything.
   orderBwd: Map<number, Set<number>>;
+  // Moments the moment walk has resolved (plans/v2-moment-walk.md): the
+  // non-monotone part has run to completion at each of them. Kept as a
+  // down-set of the moment order — a moment is marked only once everything
+  // strictly below it is marked. In-memory only: every run starts from a
+  // fresh store.
+  resolved: Set<number>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
   // Hard cap on inserted tuples. When exceeded, `addTuple` throws GasError;
@@ -123,6 +132,7 @@ export function createStore(): Store {
     ltNeg: new Map(),
     gt: new Map(),
     orderBwd: new Map(),
+    resolved: new Set(),
     tupleSet: new Set(),
     tupleGas: 0,
     iteration: 1,
@@ -223,6 +233,9 @@ export function addOrder(store: Store, lt: Term, gt: Term): void {
       store.orderFwd.set(ltTok, succs);
     }
     succs.add(gtTok);
+    let preds = store.orderBwd.get(gtTok);
+    if (preds === undefined) { preds = new Set(); store.orderBwd.set(gtTok, preds); }
+    preds.add(ltTok);
     return;
   }
   // Eager: maintain `gt` as full forward closure.

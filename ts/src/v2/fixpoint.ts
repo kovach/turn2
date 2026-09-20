@@ -1,8 +1,10 @@
-// Outer loop. The inner loop runs all rules to quiescence (no agg knowledge).
-// At quiescence we collect blocked do-agg / choose rows from the store; if
-// any aggs are in the earliest tier, close them (emit agg-result rows) and
-// re-enter the inner loop. If the earliest tier is all choices, halt with
-// `active-choices`.
+// Outer loop. The inner loop runs all rules to quiescence (the monotone
+// part; no agg or choice knowledge). At quiescence the moment walk
+// (moment-walk.ts, plans/v2-moment-walk.md) runs the non-monotone part —
+// the handlers in scheduler.ts — at the minimal unresolved moments: if any
+// handler adds tuples we re-enter the inner loop; otherwise unblocked
+// frontier moments are marked resolved and the walk advances; when every
+// frontier moment is blocked on a choice, the choices there surface.
 
 import type { Actor, ComponentOptions, FixpointStatus, Program, ProvLink, Rule } from "./types.js";
 import { maxActor } from "./types.js";
@@ -12,20 +14,18 @@ import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
 import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
 import { applyExceptions, expand, expandMacros } from "./expand.js";
 import {
-  closeDoAgg,
-  collectAllBlocked,
+  choiceHandler,
   collectBlockedChooses,
-  markDeadChoice,
-  collectReactiveFinalizations,
   computeAggStrata,
-  finalizeReactive,
+  demandAggHandler,
+  markDeadChoice,
   programSeededRandom,
+  reactiveHandler,
   resolveRngChoice,
-  selectEarliestTier,
   type RngCommit,
 } from "./scheduler.js";
+import { markResolved, runWalkRound, type MomentHandler } from "./moment-walk.js";
 import { computeComponents } from "./constraint-query.js";
-import { closeDoAggC } from "./comp-aggregate.js";
 import { attachRules } from "./stats.js";
 
 export interface FixpointResult {
@@ -59,9 +59,16 @@ export function runFixpoint(
   const jsFuncs = compileJsDefs(expanded.jsDefs);
   const jsRelFuncs = compileJsRels(expanded.jsRels);
   // Aggregate dependency strata: computed from the pre-expand rules (markers
-  // still present) so the outer loop can order same-moment reactive
-  // finalizations by dependency. See plans/v2-reactive-aggregates.md.
+  // still present) so the reactive handler can order same-moment folds by
+  // dependency. See plans/v2-reactive-aggregates.md (analysis) and
+  // plans/v2-moment-walk.md (where it is applied).
   const strata = computeAggStrata(program.rules, program.reactive);
+  // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).
+  const handlers: MomentHandler[] = [
+    reactiveHandler(expanded.reactive, expanded.schema, strata),
+    demandAggHandler(expanded.schema),
+    choiceHandler(),
+  ];
   const store = createStore();
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
@@ -70,7 +77,7 @@ export function runFixpoint(
   const rngCommits: RngCommit[] = [];
 
   try {
-    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, strata, options?.random, rngCommits);
+    const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, handlers, options?.random, rngCommits);
     resolveExceptionProvenance(store, program.provLinks);
     return { ...result, rules: expanded.rules };
   } catch (e) {
@@ -160,7 +167,7 @@ function findPrimeTuple(store: Store, prime: string, idx: number): number | unde
   return undefined;
 }
 
-function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, strata: Map<string, number>, explicitRandom: (() => number) | undefined, rngCommits: RngCommit[]): FixpointResult {
+function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, handlers: readonly MomentHandler[], explicitRandom: (() => number) | undefined, rngCommits: RngCommit[]): FixpointResult {
   let totalIters = startIters;
   // The random stream is latched at the first rng roll: an explicitly
   // passed options.random wins (harness control); else a program-provided
@@ -175,64 +182,43 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rngCommits };
     }
 
-    const blocked = [
-      ...collectAllBlocked(store),
-      ...collectReactiveFinalizations(store, expanded.reactive, expanded.schema),
-    ];
-    if (blocked.length === 0) {
+    // The moment walk (plans/v2-moment-walk.md). Each round runs every
+    // handler at the frontier (minimal unresolved moments) and at any
+    // resolved moment a handler demanded. Rounds that add tuples hand back
+    // to the inner loop; rounds that add nothing resolve their unblocked
+    // frontier moments and continue without re-running the rules (nothing
+    // changed). Only when every frontier moment is blocked do the choices
+    // there surface.
+    let round = runWalkRound(store, handlers);
+    while (!round.progress && !round.exhausted) {
+      const toMark = round.frontier.filter((tok) => !round.blocked.has(tok));
+      if (toMark.length === 0) break;
+      markResolved(store, toMark);
+      round = runWalkRound(store, handlers);
+    }
+    if (round.exhausted) {
       return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
     }
-    const tier = selectEarliestTier(store, blocked);
-    const aggsInTier = tier.flatMap((b) => b.kind === "agg" ? [b.row] : []);
-    const aggCsInTier = tier.flatMap((b) => b.kind === "aggc" ? [b.row] : []);
-    // Single-moment stratification: within the earliest moment, finalize only
-    // the lowest aggregate-dependency stratum present, so a consumer aggregate
-    // (e.g. `count p`) is not folded until the relation it reads (`p`) has
-    // settled at this moment. Higher strata reappear in later outer iterations.
-    // See plans/v2-reactive-aggregates.md.
-    const reactiveAll = tier.flatMap((b) => b.kind === "reactive" ? [b.row] : []);
-    const stratumOf = (r: typeof reactiveAll[number]): number =>
-      r.foo.tag === "Symbol" ? (strata.get(r.foo.name) ?? 0) : 0;
-    const minStratum = reactiveAll.reduce((m, r) => Math.min(m, stratumOf(r)), Infinity);
-    const reactiveInTier = reactiveAll.filter((r) => stratumOf(r) === minStratum);
-    if (aggsInTier.length > 0 || aggCsInTier.length > 0 || reactiveInTier.length > 0) {
-      let progressed = false;
-      for (const a of aggsInTier) {
-        if (closeDoAgg(store, a, expanded.schema)) progressed = true;
-      }
-      for (const c of aggCsInTier) {
-        if (closeDoAggC(store, c)) progressed = true;
-      }
-      // Reactive: materialize this tier's breakpoints (earliest first, so
-      // non-monotone aggregation is stratified by moment).
-      for (const r of reactiveInTier) {
-        if (finalizeReactive(store, r, expanded.schema)) progressed = true;
-      }
-      // Semi-naive: agg-result / _aggval rows emitted here should be the
-      // next inner-loop pass's delta. Mirrors v1's iteration++ after
+    if (round.progress) {
+      // Semi-naive: agg-result / _aggval rows emitted by the handlers are
+      // the next inner-loop pass's delta. Mirrors v1's iteration++ after
       // closeAggregates.
-      if (progressed) {
-        store.iteration++;
-        swapHeads(store);
-      }
-      if (!progressed) {
-        // Safety net against an infinite outer loop. Aggregates no longer
-        // reach here: an empty one closes with the `*agg-empty` sentinel
-        // (see SYM_AGG_EMPTY in comp-aggregate.ts), which resolves its
-        // producer so the blocked set strictly shrinks. Before that, an
-        // empty aggregate at an early moment stalled the whole program —
-        // the outer loop only works the earliest tier, so every later
-        // aggregate went unclosed and the run reported `done`.
-        return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
-      }
+      store.iteration++;
+      swapHeads(store);
       continue;
     }
-    // Earliest tier is all choices. Surface only components reachable from
-    // the earliest-tier seed; later-tier chooses entangled via shared
-    // constrain rows are pulled in by `computeComponents`, the rest stay
-    // blocked for the next round.
+    // Every frontier moment (and every late demanded one) is blocked on a
+    // choice. Surface only components reachable from the chooses at those
+    // moments; chooses elsewhere entangled via shared constrain rows are
+    // pulled in by `computeComponents`, the rest stay blocked for later.
+    if (round.blocked.size === 0) {
+      // A round with nothing to run is `exhausted`; one with no progress and
+      // no block resolves its frontier above. Only a handler that reports
+      // neither for a demanded moment could land here.
+      throw new Error("internal: moment walk stalled with no progress, no block, and moments pending");
+    }
     const choices = collectBlockedChooses(store);
-    const seedChoices = tier.flatMap((b) => b.kind === "choose" ? [b.row] : []);
+    const seedChoices = choices.filter((c) => round.blocked.has(tokenOf(store, c.l)));
     const cc = computeComponents(store, choices, expanded.schema, seedChoices, jsRelFuncs);
     if (cc.kind === "empty-fringe-error") {
       return {

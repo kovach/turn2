@@ -1,12 +1,19 @@
-// Tests for reactive aggregates (eager breakpoint materialization).
-// See plans/v2-reactive-aggregates.md.
+// Tests for reactive aggregates under the moment walk
+// (plans/v2-moment-walk.md; the `#reactive` declaration is from
+// plans/v2-reactive-aggregates.md).
+//
+// A `#reactive` relation's value is materialized at every moment the walk
+// resolves, as a point row `_aggval head key... value` at `[m, m]`. A read
+// `head k -> V` samples the value at the running anchor's *left endpoint*
+// and cannot fire before that moment is resolved.
 //
 // Two layers:
 //   - store-level: build moments directly (incl. incomparable ones the surface
-//     syntax can't easily produce) and drive the scheduler's breakpoint
-//     finalization, asserting the core "value appears at the join (lub)" claim.
-//   - integration: parse + runFixpoint, exercising the `#reactive` declaration,
-//     the `_aggval` materialization, and the `foo -> X` consumer lowering.
+//     syntax can't easily produce) and drive the walk with the reactive
+//     handler alone, asserting the core "value at the join (lub)" claim.
+//   - integration: parse + runFixpoint, exercising the `#reactive`
+//     declaration, the per-moment materialization, sampling at an anchor's
+//     start, same-moment recursion and stratification, and blocking.
 
 import assert from "node:assert/strict";
 import { parse } from "../v2/parse.js";
@@ -19,11 +26,14 @@ import {
   tokenOf,
   type Store,
 } from "../v2/store.js";
+import { reactiveHandler } from "../v2/scheduler.js";
 import {
-  collectReactiveFinalizations,
-  finalizeReactive,
-  selectEarliestTier,
-} from "../v2/scheduler.js";
+  frontier,
+  markResolved,
+  runWalkRound,
+  unresolvedMoments,
+  type MomentHandler,
+} from "../v2/moment-walk.js";
 import { expandTerm } from "../v2/hashcons.js";
 import type { Atom, Term } from "../v2/term.js";
 
@@ -53,25 +63,23 @@ function ok(src: string) {
   return p;
 }
 
-// Drive the reactive scheduler to quiescence directly on a store (mirrors the
-// outer loop's reactive handling: finalize the earliest tier of breakpoints,
-// repeat). Returns once no breakpoints remain.
-function driveReactive(store: Store, reactive: Set<string>, schema: Map<string, string>) {
-  for (let guard = 0; guard < 200; guard++) {
-    const pending = collectReactiveFinalizations(store, reactive, schema);
-    if (pending.length === 0) return;
-    const tier = selectEarliestTier(store, pending);
-    let progressed = false;
-    for (const b of tier) {
-      if (b.kind === "reactive" && finalizeReactive(store, b.row, schema)) progressed = true;
-    }
-    if (!progressed) return;
+// Drive the walk to exhaustion on a store with no rules (mirrors the outer
+// loop's walk without the inner loop: rounds that progress are simply
+// re-run; rounds that don't resolve their frontier).
+function driveWalk(store: Store, handlers: MomentHandler[]): void {
+  for (let guard = 0; guard < 500; guard++) {
+    const round = runWalkRound(store, handlers);
+    if (round.exhausted) return;
+    if (round.progress) continue;
+    const toMark = round.frontier.filter((t) => !round.blocked.has(t));
+    if (toMark.length === 0) throw new Error("driveWalk: frontier blocked");
+    markResolved(store, toMark);
   }
-  throw new Error("driveReactive did not converge");
+  throw new Error("driveWalk did not converge");
 }
 
-// Find the `_aggval` row(s) for a given value, returning their left-endpoint
-// moment tokens. Layout: [_aggval, head, key..., value, id].
+// Left-endpoint tokens of the `_aggval` row(s) for a given relation + value.
+// Layout: [_aggval, head, key..., value, id].
 function aggvalLefts(store: Store, head: string, value: string): number[] {
   const out: number[] = [];
   for (const t of store.tuples) {
@@ -84,6 +92,42 @@ function aggvalLefts(store: Store, head: string, value: string): number[] {
     out.push(tokenOf(store, t.l));
   }
   return out;
+}
+
+// ===== 0) Frontier: diamond, then a cycle =====================================
+{
+  const s = createStore();
+  const a = intern(s, sym("a")), b = intern(s, sym("b")), j = intern(s, sym("j"));
+  addOrder(s, a, j);
+  addOrder(s, b, j);
+  const step = (): string[] => {
+    const F = frontier(s, unresolvedMoments(s));
+    markResolved(s, F);
+    return F.map((tok) => rt(s, s.momentTerms.get(tok)!)).sort();
+  };
+  assert.deepEqual(step(), ["bot"]);
+  assert.deepEqual(step(), ["a", "b"]);
+  assert.deepEqual(step(), ["j"]);
+  assert.deepEqual(step(), []);
+  console.log("PASS: frontier walks a diamond bot → {a, b} → j");
+}
+{
+  // `x < y < x`: the edge test excludes both forever; the strict-order
+  // fallback resolves the cycle as a unit.
+  const s = createStore();
+  const x = intern(s, sym("x")), y = intern(s, sym("y")), z = intern(s, sym("z"));
+  addOrder(s, x, y);
+  addOrder(s, y, x);
+  addOrder(s, y, z);
+  const step = (): string[] => {
+    const F = frontier(s, unresolvedMoments(s));
+    markResolved(s, F);
+    return F.map((tok) => rt(s, s.momentTerms.get(tok)!)).sort();
+  };
+  assert.deepEqual(step(), ["bot"]);
+  assert.deepEqual(step(), ["x", "y"]);
+  assert.deepEqual(step(), ["z"]);
+  console.log("PASS: frontier falls back to strict minimality on an order cycle");
 }
 
 // ===== 1) Core: the value appears at the JOIN of two incomparable inputs =====
@@ -103,133 +147,127 @@ function aggvalLefts(store: Store, head: string, value: string): number[] {
   addTuple(s, { terms: [intern(s, sym("dmg")), intern(s, num(4)), intern(s, sym("id2"))] }, m2, s.top);
 
   const schema = new Map([["dmg", "sum"]]);
-  const reactive = new Set(["dmg"]);
-  driveReactive(s, reactive, schema);
+  driveWalk(s, [reactiveHandler(new Set(["dmg"]), schema, new Map())]);
 
   const all = tuples(s);
   // The decisive assertion: sum=7 is materialized exactly at the join `j`.
   const sevens = aggvalLefts(s, "dmg", "7");
-  assert.equal(sevens.length, 1, `expected one _aggval dmg 7, got ${sevens.length}: ${all.join(" | ")}`);
-  assert.equal(sevens[0], tokenOf(s, j), `_aggval dmg 7 should be anchored at the join j`);
-  // 7 occurs at neither input moment alone.
-  assert.ok(!sevens.includes(tokenOf(s, m1)), "7 must not be at m1");
-  assert.ok(!sevens.includes(tokenOf(s, m2)), "7 must not be at m2");
-  // The single-contributor values still materialize at their own moments.
-  assert.equal(aggvalLefts(s, "dmg", "3").length, 1, `expected _aggval dmg 3: ${all.join(" | ")}`);
-  assert.equal(aggvalLefts(s, "dmg", "4").length, 1, `expected _aggval dmg 4: ${all.join(" | ")}`);
+  assert.deepEqual(sevens, [tokenOf(s, j)], `_aggval dmg 7 should be at j only: ${all.join(" | ")}`);
+  // Each single-contributor value at its own moment only; zero at bot.
+  assert.deepEqual(aggvalLefts(s, "dmg", "3"), [tokenOf(s, m1)], `dmg 3 at m1 only: ${all.join(" | ")}`);
+  assert.deepEqual(aggvalLefts(s, "dmg", "4"), [tokenOf(s, m2)], `dmg 4 at m2 only: ${all.join(" | ")}`);
+  assert.deepEqual(aggvalLefts(s, "dmg", "0"), [tokenOf(s, s.bot)], `dmg 0 at bot: ${all.join(" | ")}`);
+  // Every moment got resolved.
+  assert.deepEqual(unresolvedMoments(s), []);
   console.log("PASS: sum materializes at the join of two incomparable inputs");
 }
 
-// ===== 2) Comparable (sequential) inputs collapse: cumulative sum =====
-// Two sequential top-level facts are moment-comparable (m1 < m2), so the join
-// collapses to m2 and we get the cumulative steps 3 then 7 — and crucially NO
-// spurious `dmg 4` step (4 alone is never current once 3 precedes it).
+// ===== 2) Comparable (sequential) inputs: cumulative sum, no spurious 4 =====
 {
-  const { store } = runFixpoint(ok(`
+  const { store, status } = runFixpoint(ok(`
 #reactive dmg -> sum
 
 + dmg -> 3
   + dmg -> 4
 `));
+  assert.equal(status.kind, "done");
   const all = tuples(store);
-  assert.equal(aggvalLefts(store, "dmg", "3").length, 1, `expected _aggval dmg 3: ${all.join(" | ")}`);
-  assert.equal(aggvalLefts(store, "dmg", "7").length, 1, `expected _aggval dmg 7: ${all.join(" | ")}`);
+  assert.equal(aggvalLefts(store, "dmg", "0").length, 1, `zero at bot: ${all.join(" | ")}`);
+  assert.equal(aggvalLefts(store, "dmg", "3").length, 1, `expected _aggval dmg 3 once: ${all.join(" | ")}`);
+  assert.equal(aggvalLefts(store, "dmg", "7").length, 1, `expected _aggval dmg 7 once: ${all.join(" | ")}`);
   assert.equal(aggvalLefts(store, "dmg", "4").length, 0, `comparable collapse: no _aggval dmg 4: ${all.join(" | ")}`);
-  console.log("PASS: sequential inputs give cumulative sum (comparable collapse)");
+  console.log("PASS: sequential inputs give cumulative sum, one row per moment");
 }
 
-// ===== 3) Consumer reaction: literal value filters; threshold fires =====
-// `dmg -> 7` matches only the breakpoint where the running sum is 7.
+// ===== 3) Reads sample at the anchor's START =================================
+// `b` starts after the first contribution and before the second; `c` after
+// both. A literal filters, a variable binds — both at the anchor start.
 {
-  const { store } = runFixpoint(ok(`
+  const { store, status } = runFixpoint(ok(`
+#reactive dmg -> sum
+
+~a
+  + dmg -> 3
+  ~b
+    + dmg -> 4
+    ~c
+
+c, dmg -> 7, + lethal x
+
+c, dmg -> 99, + impossible x
+
+b, dmg -> N, + seen-b N
+
+c, dmg -> N, + seen-c N
+`));
+  assert.equal(status.kind, "done");
+  const all = tuples(store);
+  assert.ok(all.includes("lethal x"), `expected 'lethal' (dmg is 7 at c's start): ${all.join(" | ")}`);
+  assert.ok(!all.includes("impossible x"), `'impossible' must not fire: ${all.join(" | ")}`);
+  assert.deepEqual(all.filter((t) => t.startsWith("seen-b ")), ["seen-b 3"], `b samples 3: ${all.join(" | ")}`);
+  assert.deepEqual(all.filter((t) => t.startsWith("seen-c ")), ["seen-c 7"], `c samples 7: ${all.join(" | ")}`);
+  console.log("PASS: reactive reads sample the value at the anchor's left endpoint");
+}
+
+// ===== 3b) A rule-initial read samples at bot ================================
+{
+  const { store, status } = runFixpoint(ok(`
 #reactive dmg -> sum
 
 + dmg -> 3
-  + dmg -> 4
 
-dmg -> 7
-  + lethal x
+dmg -> N, + at-start N
 `));
+  assert.equal(status.kind, "done");
   const all = tuples(store);
-  assert.ok(all.includes("lethal x"), `expected 'lethal' (dmg reached 7): ${all.join(" | ")}`);
-  console.log("PASS: reactive consumer reaction fires at the threshold breakpoint");
+  assert.deepEqual(all.filter((t) => t.startsWith("at-start ")), ["at-start 0"], `rule-initial read is at bot: ${all.join(" | ")}`);
+  console.log("PASS: a rule-initial reactive read samples at bot (zero, not a subscription)");
 }
 
-// ===== 3b) Consumer reaction does NOT fire for a value never reached =====
+// ===== 4) Group-by key: per-key sum sampled after all contributions =========
 {
-  const { store } = runFixpoint(ok(`
-#reactive dmg -> sum
-
-+ dmg -> 3
-  + dmg -> 4
-
-dmg -> 99
-  + impossible x
-`));
-  const all = tuples(store);
-  assert.ok(!all.includes("impossible x"), `'impossible' must not fire (sum never 99): ${all.join(" | ")}`);
-  console.log("PASS: reactive consumer does not fire for an unreached value");
-}
-
-// ===== 4) Consumer variable binds the value at each breakpoint =====
-{
-  const { store } = runFixpoint(ok(`
-#reactive dmg -> sum
-
-+ dmg -> 3
-  + dmg -> 4
-
-dmg -> N
-  + seen N
-`));
-  const all = tuples(store);
-  assert.ok(all.includes("seen 3"), `expected 'seen 3': ${all.join(" | ")}`);
-  assert.ok(all.includes("seen 7"), `expected 'seen 7': ${all.join(" | ")}`);
-  console.log("PASS: reactive consumer variable binds each breakpoint value");
-}
-
-// ===== 5) Group-by key: reactive sum per key =====
-{
-  const { store } = runFixpoint(ok(`
+  const { store, status } = runFixpoint(ok(`
 #reactive score -> sum
 
-+ score alice -> 10
+~setup
+  + score alice -> 10
   + score alice -> 5
   + score bob -> 20
+  ~report
 
-score X -> N
-  + total X N
+report, score X -> N, + total X N
 `));
-  const all = tuples(store);
-  // alice: cumulative 10 then 15; bob: 20.
-  assert.ok(all.includes("total alice 15"), `expected 'total alice 15': ${all.join(" | ")}`);
-  assert.ok(all.includes("total bob 20"), `expected 'total bob 20': ${all.join(" | ")}`);
+  assert.equal(status.kind, "done");
+  const totals = tuples(store).filter((t) => t.startsWith("total ")).sort();
+  assert.deepEqual(totals, ["total alice 15", "total bob 20"], `got: ${totals.join(" | ")}`);
   console.log("PASS: reactive group-by sum per key");
 }
 
-// ===== 6) Reactive `last`: current value tracks the latest contributor =====
+// ===== 5) Reactive `last`: current value at the read point ===================
 {
-  const { store } = runFixpoint(ok(`
+  const { store, status } = runFixpoint(ok(`
 #reactive pos -> last
 
-+ pos a
-  + pos b
+~setup
+  + pos a
+  ~mid
+    + pos b
+    ~check
 
-pos -> P
-  + where P
+mid, pos -> P, + where-mid P
+
+check, pos -> P, + where P
 `));
+  assert.equal(status.kind, "done");
   const all = tuples(store);
-  // Sequential: last is `a` then `b`. Both breakpoints surface as reads.
-  assert.ok(all.includes("where b"), `expected 'where b' (latest pos): ${all.join(" | ")}`);
-  console.log("PASS: reactive last tracks latest contributor");
+  assert.deepEqual(all.filter((t) => t.startsWith("where-mid ")), ["where-mid a"], `mid sees a: ${all.join(" | ")}`);
+  assert.deepEqual(all.filter((t) => t.startsWith("where ")), ["where b"], `check sees b: ${all.join(" | ")}`);
+  console.log("PASS: reactive last gives the latest contributor at the read point");
 }
 
-// ===== 7) Coexistence: a non-reactive #agg in the same program is unchanged ==
+// ===== 6) Coexistence: a non-reactive #agg in the same program is unchanged ==
 {
-  // No blank line before the legacy `points -> N`: the demand-driven consumer
-  // needs the top-level anchor threaded through the points facts. (The reactive
-  // consumer in earlier tests doesn't — it fires off the `_aggval` delta.)
-  const { store } = runFixpoint(ok(`
+  const { store, status } = runFixpoint(ok(`
 #agg points -> sum
 #reactive dmg -> sum
 
@@ -239,18 +277,17 @@ pos -> P
   points -> N
   + result N
 `));
+  assert.equal(status.kind, "done");
   const all = tuples(store);
   assert.ok(all.includes("result 7"), `legacy #agg still folds to 7: ${all.join(" | ")}`);
   assert.ok(aggvalLefts(store, "dmg", "5").length >= 1, `reactive dmg materialized: ${all.join(" | ")}`);
-  console.log("PASS: #agg and #reactive coexist");
+  console.log("PASS: #agg and #reactive coexist under one scheduler");
 }
 
-// ===== 8) End-to-end join through the surface: count reaches 4 only at a lub
-// `count` of `p` over episodes a;b;c (sequential) with TWO `p`s asserted under
-// `c`. Those two firings produce incomparable moments, so the count only
-// reaches 4 = (s (s (s (s z)))) at their join — a moment neither firing names.
-// The `p -> (s (s (s (s z)))), ~done` rule fires there, proving the join
-// breakpoint materializes end-to-end (and that the run terminates cleanly).
+// ===== 7) End-to-end join through the surface ===============================
+// `count` of `p` over episodes a;b;c;d. Under `c` two rules each assert a
+// `p`, at incomparable moments. `d` is sequenced after `c`, so its start is
+// above both; the count there is 4.
 {
   const { store, status } = runFixpoint(ok(`
 #reactive p -> count
@@ -258,7 +295,7 @@ pos -> P
 ~go
 
 go
-  ~a; ~b; ~c
+  ~a; ~b; ~c; ~d
 
 a, +p -> ()
 
@@ -268,23 +305,22 @@ c, +p -> ()
 
 c, +p -> ()
 
-p -> X, ~hi X
+d, p -> X, ~hi X
 
-p -> (s (s (s (s z)))), ~done d
+d, p -> (s (s (s (s z)))), ~done d
 `));
   assert.equal(status.kind, "done", `expected clean termination, got ${status.kind}`);
   const all = tuples(store);
-  assert.ok(all.includes("done d"), `expected 'done' (count reached 4 at the join): ${all.join(" | ")}`);
-  console.log("PASS: count reaches 4 only at the join of two incomparable inputs (end-to-end)");
+  assert.ok(all.includes("done d"), `expected 'done' (count is 4 at d's start): ${all.join(" | ")}`);
+  assert.deepEqual(all.filter((t) => t.startsWith("hi ")), ["hi (s (s (s (s z))))"], `one hi at d: ${all.join(" | ")}`);
+  console.log("PASS: count is 4 at an episode starting above two incomparable inputs");
 }
 
-// ===== 9) Single-moment recursion: transitive closure with self-loops =======
+// ===== 8) Single-moment recursion: transitive closure with self-loops =======
 // A recursive reactive aggregate whose contributors are derived from reads of
-// its OWN `_aggval`, landing entirely at one moment. The closure of the cycle
-// a→b→c→a is the complete relation — every pair, including the self-loops
-// `p a a`, `p b b`, `p c c` that require two recursion levels. Guards the
-// residual-driven re-finalization: a coarse `(relation, moment)` dedup would
-// stop after the base edges and never derive the self-loops.
+// its OWN `_aggval`, landing entirely at `bot`. Each round at `bot` adds the
+// groups derived in the previous round (rows dedup by id), so the closure of
+// a→b→c→a is complete including the self-loops.
 {
   const { store, status } = runFixpoint(ok(`
 #reactive p * * -> bool
@@ -306,12 +342,11 @@ e A B, p B C -> 1, ^p A C -> 1
   console.log("PASS: single-moment recursive closure includes all self-loops");
 }
 
-// ===== 10) Single-moment consumer stratification ============================
-// Add `count` of the closure pairs (relation `q`) at the SAME moment. The count
-// must be folded ONCE, against the settled `p` — value 9 (the 9 closure pairs)
-// — with no intermediate same-left `_aggval q` (3, 6, ...) that a `last`-read
-// could not disambiguate. Guards the `(moment, stratum)` ordering: `q` depends
-// on `p`, so `q` is held until `p`'s stratum drains at the moment.
+// ===== 9) Same-moment consumer stratification ===============================
+// `count` the closure pairs (relation `q`) at the same moment, and read it.
+// `q` depends on `p` through a `^` edge, so the reactive handler folds `q`
+// only in a round where `p` has settled at `bot`: exactly one `_aggval q`
+// row, value 9, and the reader sees only 9.
 {
   const { store, status } = runFixpoint(ok(`
 #reactive p * * -> bool
@@ -323,26 +358,22 @@ e A B, p B C -> 1, ^p A C -> 1
 
 p X Y -> 1, ^q -> 1
 
+q -> N, ^total N
+
 ^e a b
   ^e b c
   ^e c a
 `));
   assert.equal(status.kind, "done", `expected clean termination, got ${status.kind}`);
-  const qRows = tuples(store).filter((s) => s.startsWith("_aggval q "));
-  // Exactly one materialized value: no ambiguous same-left intermediates.
-  assert.equal(qRows.length, 1, `expected one _aggval q, got ${qRows.length}: ${qRows.join(" | ")}`);
-  // count of 9 pairs = (s^9 z).
+  const all = tuples(store);
+  const qRows = all.filter((s) => s.startsWith("_aggval q "));
   const nine = "(s ".repeat(9) + "z" + ")".repeat(9);
-  assert.equal(qRows[0], `_aggval q ${nine}`, `expected q = 9: ${qRows[0]}`);
+  assert.deepEqual(qRows, [`_aggval q ${nine}`], `expected one _aggval q = 9: ${qRows.join(" | ")}`);
+  assert.deepEqual(all.filter((t) => t.startsWith("total ")), [`total ${nine}`], `reader sees 9 only: ${all.join(" | ")}`);
   console.log("PASS: same-moment consumer count folds once at the final value (9)");
 }
 
-// ===== Per-group breakpoints: a sibling group's move does not re-stamp ======
-// See plans/v2-per-group-breakpoints.md. `at` is `last`-keyed by token. When
-// `it` moves (a breakpoint of the `at it` group), the `at me` group must NOT be
-// re-materialized at that moment — its value is unchanged there. So each token
-// gets exactly one `_aggval at` row per genuine value change, never a sibling
-// re-stamp.
+// ===== 10) Values read at successive checks (per-group `last`) ==============
 {
   const { store, status } = runFixpoint(ok(`
 #reactive at * -> last
@@ -352,21 +383,76 @@ move It To, +at It -> To
 ~turn
   ~move me a;
   ~move it a;
+  ~check;
   ~move me b;
+  ~check;
 
-^turn
+check, at X -> L, ^seen X L
 `));
   assert.equal(status.kind, "done", `expected done, got ${status.kind}`);
-  const atRows = tuples(store).filter((s) => s.startsWith("_aggval at "));
-  // Exactly three genuine values: me->a, it->a, me->b. No re-stamp of
-  // `at me a` when `it` moved, nor of `at it a` when `me` moved again.
-  atRows.sort();
-  assert.deepEqual(
-    atRows,
-    ["_aggval at it a", "_aggval at me a", "_aggval at me b"],
-    `expected one row per genuine value, got: ${atRows.join(" | ")}`,
-  );
-  console.log("PASS: per-group breakpoints — a sibling move does not re-stamp an unchanged group");
+  const seen = tuples(store).filter((s) => s.startsWith("seen ")).sort();
+  // First check: me a, it a. Second: me b, it a (a second tuple — the two
+  // checks are distinct intervals).
+  assert.deepEqual(seen, ["seen it a", "seen it a", "seen me a", "seen me b"], `got: ${seen.join(" | ")}`);
+  console.log("PASS: per-group last read at each check");
+}
+
+// ===== 11) Blocking: a read above a pending choice does not fire ============
+{
+  const src = (actor: string) => `
+#reactive dmg -> sum
+
+~game
+  ~pick;
+  ~after
+
+pick, ^opt x, ^opt y
+
+pick, ?${actor} C, ~choice C, !opt C
+
+after, dmg -> N, +seen N
+`;
+  // `you`: the choice moment blocks everything above it, including the read
+  // at `after`'s start. No `_aggval` row exists at or above the choice.
+  {
+    const { store, status } = runFixpoint(ok(src("")));
+    assert.equal(status.kind, "active-choices", `expected active-choices, got ${status.kind}`);
+    const all = tuples(store);
+    assert.ok(!all.some((t) => t.startsWith("seen ")), `read must not fire before the choice: ${all.join(" | ")}`);
+    // The `after` episode's start is unresolved.
+    const after = store.tuples.find((t) => rt(store, t.atom.terms[0]!) === "after")!;
+    assert.ok(!store.resolved.has(tokenOf(store, after.l)), "after's start must be unresolved");
+  }
+  // `rng`: the scheduler resolves it and the walk continues to `after`.
+  {
+    const { store, status } = runFixpoint(ok(src("[rng]")), 200, 5000, { random: () => 0 });
+    assert.equal(status.kind, "done", `expected done, got ${status.kind}`);
+    const all = tuples(store);
+    assert.deepEqual(all.filter((t) => t.startsWith("seen ")), ["seen 0"], `read fires after the choice: ${all.join(" | ")}`);
+    assert.deepEqual(unresolvedMoments(store), [], "every moment resolved");
+  }
+  console.log("PASS: a reactive read waits for a pending choice below its moment");
+}
+
+// ===== 12) Same-moment chain: reactive read → ^ → #agg read =================
+// The `#agg` request row appears at `bot` only after the reactive read at
+// `bot` fired; the walk keeps running rounds at `bot` until nothing changes,
+// so the request closes before `bot` is marked.
+{
+  const { store, status } = runFixpoint(ok(`
+#agg cnt -> count
+#reactive dmg -> sum
+
+^go
+
+go, dmg -> N, ^stage N
+
+stage N, cnt -> C, ^got N C
+`));
+  assert.equal(status.kind, "done", `expected done, got ${status.kind}`);
+  const all = tuples(store);
+  assert.deepEqual(all.filter((t) => t.startsWith("got ")), ["got 0 z"], `chain resolves at one moment: ${all.join(" | ")}`);
+  console.log("PASS: a same-moment chain of reactive and demand reads resolves");
 }
 
 console.log("ALL v2 reactive aggregate tests passed");

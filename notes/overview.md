@@ -1,3 +1,62 @@
+# further refactoring of reactive/agg
+plan: plans/v2-acc-relations.md
+
+- this feature will eventually supplant reactive/agg/bracket aggregates. for now we'll call it `acc`
+- acc tuples are not asserted by normal rules
+- we have a separate kind of rule that runs at each minimal unresolved moment to compute aggregate relations
+- these rules can refer to ordinary relations and aggregate relations, and each has a single head that asserts an aggregate tuple
+- ordinary rules can match on aggregate relations. the relation is evaluated at the start moment of the anchor. these tuples are created when the minimal unresolved moment is resolved. ordinary rules do not assert aggregate relation atoms, the way `reactive`/`agg` currently do
+- an aggregate relation/predicate is declared with a type.
+- the type of a predicate is a sequence of basic types.
+  each basic type is either a predicate name (e, location, creature, player) or an aggregation type marked by `@`.
+  some aggregation types act on a single base type (@sum assumes its inputs will be numbers; @count produces a number) others are parametrized (@last can act on any base type; it takes on the value of any temporally maximal inputs).
+  aggregate relations can be multivalued for a given key (amongst those used below, @last and @arg-min are multi-valued; each can have zero or more values).
+- rule examples:
+```
+  #acc damage : e @sum
+  hit X A / damage X (@sum A)
+
+  #acc at : e (@last location)
+  move A B / at A B       -- a column is either a key term (constructed from values in scope) or an aggregation (marked by @)
+                          -- for a given key value (of A) the set of B values are reduced by last
+  #acc occupancy : location @count
+  at _ X / occupancy X ()     -- some aggregations don't take an argument: e.g. this reduces the tuples with matching key by count
+  #acc crowded : location -- in the case of no `@` term, the aggregate is boolean
+  occupancy X N, gt N 2 / crowded X
+
+  -- shortest path rules:
+  #acc distance : location location @min
+  edge A B / distance A B 1
+  edge A B, distance B C Length / distance A C (s Length)
+
+  #acc min-path : location location (@arg-min location)
+  edge A B / min-path A B (pair B 1)
+  edge A B, min-path B C (pair _ L) / min-path A C (pair B (s L))
+  -- note that arg-min expects a `pair A B` tuple where `A` is a value of the declared type (location in this case) and `B` is a natural number
+  -- its result is a `pair A B` where `B` is the minimal nat, and `A` is the value(s) associated with B
+```
+- each `acc` relation requires a schema, because multiple rules may assert tuples into it to be aggregated; the means of aggregation must be consistent
+- for now, the typing restrictions in the schema are for documentation only; we don't do runtime or static type checking
+- the full set of aggregation rules are calculated by fixpoint at each unresolved moment
+  the engine assumes the fixpoint is well-defined without trying to verify that
+- the end result is then accessible to ordinary rules (e.g. the final value of `distance x y L` can be queried in a normal match)
+- see plan `2.2` for a note about the algebraic structure of an arbitrary reduction operation
+
+# 26/09/19
+
+# interface for calculating things along the moment order
+plan: plans/v2-moment-walk.md
+(implemented 26/09/13)
+
+- we want to think of a Turn program as having two parts: a monotone part, and a non-monotone part that we stratify according to the temporal order computed by the monotone part
+- in this change, we will modify the scheduler to be agnostic to the content of the non-monotone part: after every monotone fixpoint, we take all the *minimal unresolved* moments and run the non-monotone part, whose effect is to create some new tuples, and mark the resolved moments
+- in the first pass, we'll modify the `reactive` feature to slot into this: instead of calculating breakpoints and so on, we simply recalculate each reactive aggregate at every moment
+- we'll change reads of reactive aggregates to block on the left-endpoint of the anchor endpoint being resolved, and read the value there
+- choices also fit into this; a moment with a pending choice is not `resolved`
+- this is meant to finally resolve an approach to aggregation. once we hash out the details, it should supercede the other in-progress proposals
+
+# 26/09/13
+
 # exception flags keyed by the intercepted tuple
 plan: plans/v2-exception-tuple-keyed-flags.md
 (implemented 26/09/11)
@@ -5,6 +64,8 @@ plan: plans/v2-exception-tuple-keyed-flags.md
 - bug: the exception flag `_<p>_exn<k>` was keyed only by transported context vars, so two `p'` tuples in one interval shared a flag and an exception on one suppressed the other (could cause unintended loops); with a context var in the RHS the default rule's wildcard-keyed flag read never produced its zero row, so un-intercepted tuples vanished
 - root cause: the original spec's step-1 payload `V = (vars(e) ∩ vars(prefix(R))) \ vars(t̄)` and the note "the payload only transports bindings, it doesn't gate"
 - fix: the flag is keyed by the LHS terms (wildcards freshened to `_t<i>`); the `_exn` rule re-joins the ctx tuple for context vars; the default rule reads `_<p>_exn<k> W̄ -> 0` for its own tuple
+
+# 26/09/11
 
 # dead choices
 (follow-up to the section below; no separate plan file — implemented directly 26/08/20)

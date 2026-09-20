@@ -1,8 +1,9 @@
-// v2 scheduler. Reads store contents at outer-loop quiescence to find
-// blocked do-agg / choose rows; selects the earliest tier under the
-// moment-order `prior` relation; closes earliest aggs by emitting
-// `agg-result` rows. Knows nothing about rule continuations — paused work
-// lives entirely in the store.
+// v2 scheduler: the non-monotone part of a program, packaged as moment
+// handlers for the moment walk (moment-walk.ts, plans/v2-moment-walk.md).
+// Reads store contents at outer-loop quiescence to find blocked do-agg /
+// choose rows and to fold reactive aggregates; the walk decides *when* each
+// handler runs (at the minimal unresolved moments). Knows nothing about rule
+// continuations — paused work lives entirely in the store.
 
 import type { Atom, Term } from "./term.js";
 import { hashconsTerm, refTagOf } from "./hashcons.js";
@@ -13,23 +14,21 @@ import {
   candidatesByHead,
   comparable,
   intervalContains,
-  leastUpperBound,
   lessEq,
-  lessThan,
   tokenOf,
   type Store,
 } from "./store.js";
 import type { Actor, BlockedChoose, ComponentOptions, Rule, RuleAtom } from "./types.js";
 import { isActor } from "./types.js";
-import { collectBlockedDoAggCs, SYM_AGG_EMPTY, type BlockedDoAggC } from "./comp-aggregate.js";
+import { closeDoAggC, collectBlockedDoAggCs, SYM_AGG_EMPTY } from "./comp-aggregate.js";
+import type { MomentHandler } from "./moment-walk.js";
 
 const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
 const SYM_AGGVAL_ID: Term = { tag: "Symbol", name: "*aggval-id" };
 const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
-const SYM_TOP: Term = { tag: "Symbol", name: "top" };
 
 // A do-agg row whose matching agg-result row does not yet exist.
-interface BlockedDoAgg {
+export interface BlockedDoAgg {
   rowIndex: number;
   // Universal trailing id slot — also serves as the do-agg ↔ agg-result
   // correlation key (one identifier suffices).
@@ -39,25 +38,6 @@ interface BlockedDoAgg {
   l: Term;
   r: Term;
 }
-
-// A reactive breakpoint pending materialization: relation `foo`'s value, for a
-// single group `key`, at moment `bp` (a join-closure element of *that group's*
-// source-tuple left endpoints — see plans/v2-per-group-breakpoints.md) for which
-// no `_aggval` row at `[bp, top]` yet exists. `l`/`r` mirror the `BlockedDoAgg`
-// shape so `selectEarliestTier` orders it by `bp`.
-export interface ReactiveFinalization {
-  foo: Term;    // head Symbol of the reactive relation
-  key: Term[];  // group key column values (source layout minus head/weight/id)
-  bp: Term;     // breakpoint moment
-  l: Term;      // == bp
-  r: Term;      // == top
-}
-
-type Blocked =
-  | { kind: "agg"; row: BlockedDoAgg }
-  | { kind: "aggc"; row: BlockedDoAggC }
-  | { kind: "choose"; row: BlockedChoose }
-  | { kind: "reactive"; row: ReactiveFinalization };
 
 // Scan store for do-agg rows lacking matching agg-result rows. The id at
 // the trailing slot of each row is the correlation key.
@@ -258,25 +238,57 @@ function expandRef(term: Term, store: Store): Term | null {
   return { tag, atom: a };
 }
 
-// `prior` over intervals: A is prior to B iff A starts strictly before B.
-function isPrior(store: Store, a: { l: Term; r: Term }, b: { l: Term; r: Term }): boolean {
-  return lessThan(store, a.l, b.l);
+// ----- Moment handlers (plans/v2-moment-walk.md) -----
+
+// Demand aggregates: `_do-agg` (schema reads `rel k -> V`) and `_do-aggc`
+// (bracket `[ Q | ... ]`) rows are closed when the walk reaches their left
+// endpoint, with today's fold semantics (containment of the producer's
+// `[l, r]`, `*agg-empty` sentinel) untouched. A row whose moment is already
+// resolved — late work through a same-moment `^` chain — is `demanded` and
+// closed on the next round without waiting for the frontier.
+export function demandAggHandler(schema: Map<string, string>): MomentHandler {
+  return {
+    name: "demand-agg",
+    run(store, m) {
+      const mTok = tokenOf(store, m);
+      let progress = false;
+      for (const a of collectBlockedDoAggs(store)) {
+        if (tokenOf(store, a.l) !== mTok) continue;
+        if (closeDoAgg(store, a, schema)) progress = true;
+      }
+      for (const c of collectBlockedDoAggCs(store)) {
+        if (tokenOf(store, c.l) !== mTok) continue;
+        if (closeDoAggC(store, c)) progress = true;
+      }
+      return { progress, blocked: false };
+    },
+    demanded(store) {
+      const out = new Set<number>();
+      for (const a of collectBlockedDoAggs(store)) out.add(tokenOf(store, a.l));
+      for (const c of collectBlockedDoAggCs(store)) out.add(tokenOf(store, c.l));
+      return out;
+    },
+  };
 }
 
-// Earliest tier: minimal elements of the `prior` partial order — items with
-// no other item strictly prior to them.
-export function selectEarliestTier(store: Store, items: Blocked[]): Blocked[] {
-  return items.filter((item) =>
-    !items.some((other) => other !== item && isPrior(store, other.row, item.row))
-  );
-}
-
-export function collectAllBlocked(store: Store): Blocked[] {
-  const out: Blocked[] = [];
-  for (const a of collectBlockedDoAggs(store)) out.push({ kind: "agg", row: a });
-  for (const c of collectBlockedDoAggCs(store)) out.push({ kind: "aggc", row: c });
-  for (const c of collectBlockedChooses(store)) out.push({ kind: "choose", row: c });
-  return out;
+// Choices: a moment with an unresolved `_choose` row is blocked. Surfacing,
+// dead-choice marking and rng resolution stay in fixpoint.ts — they need
+// the whole blocked set and end the loop. A late choose row at a resolved
+// moment is `demanded` so it surfaces instead of hiding behind the frontier.
+export function choiceHandler(): MomentHandler {
+  return {
+    name: "choice",
+    run(store, m) {
+      const mTok = tokenOf(store, m);
+      const blocked = collectBlockedChooses(store).some((c) => tokenOf(store, c.l) === mTok);
+      return { progress: false, blocked };
+    },
+    demanded(store) {
+      const out = new Set<number>();
+      for (const c of collectBlockedChooses(store)) out.add(tokenOf(store, c.l));
+      return out;
+    },
+  };
 }
 
 // Close one do-agg row by computing its aggregate and emitting agg-result.
@@ -517,162 +529,91 @@ function atomChildren(term: Term, store: Store): readonly Term[] | null {
   return null;
 }
 
-// ----- Reactive aggregates (eager breakpoint materialization) -----
+// ----- Reactive aggregates (recomputed at every moment) -----
 //
-// See plans/v2-reactive-aggregates.md. A `#reactive` relation's value is
-// materialized into `_aggval head key... value` rows at the breakpoints where
-// its step function can change. Breakpoints are the join-closure of its source
-// tuples' left endpoints; the value at each is the ordinary `aggregateOver`
-// fold evaluated at the point `[bp, bp]`. The outer loop finalizes earliest
-// breakpoints first (non-monotone aggregation must be stratified by moment).
-
-// Join-closure of a moment set under pairwise least-upper-bound. Every join
-// exists as a moment by the subdivision-lattice property
-// (notes/moment-insertion.md); a `null` lub means that invariant is broken.
-function joinClosure(store: Store, moments: Term[]): Term[] {
-  const byTok = new Map<number, Term>();
-  for (const m of moments) byTok.set(tokenOf(store, m), m);
-  let frontier = [...byTok.values()];
-  let guard = 0;
-  while (frontier.length > 0) {
-    const next: Term[] = [];
-    const all = [...byTok.values()];
-    for (const a of frontier) {
-      for (const b of all) {
-        if (++guard > 100000) return [...byTok.values()]; // runaway backstop
-        const lub = leastUpperBound(store, [a, b]);
-        if (lub === null) {
-          throw new Error(
-            "v2 reactive: least upper bound of two moments does not exist " +
-            "(moment order is not a lattice — see notes/moment-insertion.md)",
-          );
-        }
-        const tk = tokenOf(store, lub);
-        if (!byTok.has(tk)) { byTok.set(tk, lub); next.push(lub); }
-      }
-    }
-    frontier = next;
-  }
-  return [...byTok.values()];
-}
-
-// Fold a reactive relation's contributors at the point `[bp, bp]` for a single
-// group (the `key` column values bound), returning that group's aggregate
-// result(s) — at most one for `sum`/`count`/`last` (more only if a `last` group
-// has incomparable maximal contributors). Binding the key restricts the fold to
-// one group, so a sibling group's breakpoint never re-stamps this one
-// (plans/v2-per-group-breakpoints.md). Shared by the pending-residual check and
-// `finalizeReactive` so the two never disagree on what a breakpoint's value is.
-function foldGroupAt(
-  store: Store,
-  head: Term,
-  key: Term[],
-  bp: Term,
-  schema: Map<string, string>,
-): AggregateResult[] {
-  if (head.tag !== "Symbol") return [];
-  // Wrapped pattern `[head, key..., _free]`: the key columns are bound to this
-  // group's values and the trailing weight slot is `_free` (folded). With every
-  // key position bound, `aggregateOver` groups by nothing → just this group.
-  const wrappedTerms: Term[] = [head, ...key, SYM_FREE];
-  return aggregateOver(store, { terms: wrappedTerms }, bp, bp, schema);
-}
-
-// The key column values of a reactive source tuple: layout is
-// `[head, key..., weight, id]`, so the keys are positions `1 .. arity-2` where
-// `arity = terms.length - 1` (drop the trailing id; the weight sits at arity-1).
-function groupKeyOf(store: Store, tupleIdx: number): Term[] {
-  const terms = store.tuples[tupleIdx]!.atom.terms;
-  const arity = terms.length - 1;
-  return terms.slice(1, arity - 1);
-}
-
-// Pending reactive breakpoints across all `#reactive` relations. Materialization
-// is **per group** (plans/v2-per-group-breakpoints.md): each group's value is a
-// step function over *its own* contributors, so its breakpoints are the
-// join-closure of that group's source-tuple lefts — not the relation-wide pool.
-// Folding a sibling group at a breakpoint it didn't generate only re-stamps an
-// unchanged value, so we partition the sources by group key first and enumerate
-// each group's breakpoints independently.
+// See plans/v2-moment-walk.md. A `#reactive` relation's value is a function
+// of moments; the reactive handler materializes it at every moment the walk
+// visits as point rows
 //
-// A breakpoint is listed only when its fold has a **residual** — a group/value
-// the `_aggval` rows don't yet materialize. Residual, not mere `(relation, bp)`
-// existence: a recursive aggregate (its own contributors derived from reads of
-// its `_aggval`) lands all at one moment and must re-finalize as new groups
-// appear. A coarse "already touched this breakpoint" skip stops it after the
-// first round — see the single-moment stratification section of
-// plans/v2-reactive-aggregates.md. Re-listing is safe because `emitAggValRow`
-// dedups on a deterministic Id.
-export function collectReactiveFinalizations(
-  store: Store,
-  reactive: Set<string>,
-  schema: Map<string, string>,
-): Blocked[] {
-  if (reactive.size === 0) return [];
-  // Signatures of already-materialized `_aggval` rows: `${leftTok}#${content}`,
-  // content = tokens of `[head, key..., value]` (drop the `_aggval` head sym and
-  // the trailing id). A folded result matching one of these is not residual.
-  const have = new Set<string>();
-  for (const idx of candidatesByHead(store, "_aggval")) {
-    const t = store.tuples[idx]!;
-    const content = t.atom.terms.slice(1, -1).map((x) => tokenOf(store, x)).join("|");
-    have.add(`${tokenOf(store, t.l)}#${content}`);
-  }
-  const out: Blocked[] = [];
-  for (const foo of reactive) {
-    const cands = candidatesByHead(store, foo);
-    if (cands.length === 0) continue;
-    const fooTerm: Term = { tag: "Symbol", name: foo };
-    // Partition source tuples by group key; each group keeps its own lefts.
-    const groups = new Map<string, { key: Term[]; lefts: Term[] }>();
-    for (const idx of cands) {
-      const key = groupKeyOf(store, idx);
-      const sig = key.map((x) => tokenOf(store, x)).join("|");
-      let g = groups.get(sig);
-      if (g === undefined) { g = { key, lefts: [] }; groups.set(sig, g); }
-      g.lefts.push(store.tuples[idx]!.l);
-    }
-    for (const g of groups.values()) {
-      // Breakpoints of THIS group only: the join-closure of its own lefts.
-      for (const bp of joinClosure(store, g.lefts)) {
-        const bpTok = tokenOf(store, bp);
-        let pending = false;
-        for (const res of foldGroupAt(store, fooTerm, g.key, bp, schema)) {
-          // Hashcons before tokenizing: a folded value (e.g. a `count` Peano
-          // numeral) is a raw nested Atom; `emitAggValRow` hashconses the same
-          // terms, so the signatures line up with the materialized `have` set.
-          const content = [...res.filledTerms, res.weight]
-            .map((x) => tokenOf(store, hashconsTerm(x, store.hash)))
-            .join("|");
-          if (!have.has(`${bpTok}#${content}`)) { pending = true; break; }
-        }
-        if (pending) {
-          out.push({ kind: "reactive", row: { foo: fooTerm, key: g.key, bp, l: bp, r: SYM_TOP } });
-        }
-      }
-    }
-  }
-  return out;
-}
-
-// Materialize one reactive group's value at one breakpoint: fold that group at
-// `[bp, bp]` and emit its `_aggval` row. Returns true iff a new row was added.
+//   _aggval head key... value <id>     at [m, m]
 //
-// Soundness relies on earliest-first scheduling: when this group's `bp` is
-// finalized, no already-materialized breakpoint of the same group dominates a
-// not-yet-incorporated contributor (else its stored value would be stale). The
-// outer loop's globally-earliest-first selection guarantees this; see
-// plans/v2-per-group-breakpoints.md.
-export function finalizeReactive(
+// folded by `aggregateOver` over the contributors alive at the point `m`. A
+// reactive read (`decomposeReactiveRead` in expand.ts) matches the row at
+// exactly its anchor's left endpoint, so it samples the value there and is
+// blocked — has no candidate — until the walk resolves that moment. No
+// breakpoints, join-closure or residual detection: every moment gets its
+// rows, and re-folding at a moment is idempotent (deterministic ids).
+//
+// Same-moment ordering keeps the static strata (`computeAggStrata`): within
+// a moment the handler folds the lowest stratum first and returns as soon as
+// a stratum adds rows, so a consumer (`count` of a same-moment transitive
+// closure) is folded only in a round where every lower stratum re-folded
+// with nothing new — i.e. has settled at `m`.
+
+// Fold every group of reactive relation `foo` alive at the point `m` and
+// emit the rows; returns true iff a new row was added. Contributors are
+// bucketed by stored width first (`SchemaDecl` records no arity, and the
+// `*` in `#reactive at * -> last` is not one), so each width is folded with
+// a matching `_free` pattern. A relation with no contributors at all is
+// folded keyless (width 3: head, weight, id) so a keyless `sum`/`count`/
+// `bool` still gets its zero row; keyed relations produce nothing for
+// absent groups, per `aggregateOver`'s zero-row policy.
+export function foldReactiveAt(
   store: Store,
-  item: ReactiveFinalization,
+  foo: string,
+  m: Term,
   schema: Map<string, string>,
 ): boolean {
+  const head: Term = { tag: "Symbol", name: foo };
+  const widths = new Set<number>();
+  for (const idx of candidatesByHead(store, foo)) widths.add(store.tuples[idx]!.atom.terms.length);
+  if (widths.size === 0) widths.add(3);
   let any = false;
-  for (const res of foldGroupAt(store, item.foo, item.key, item.bp, schema)) {
-    if (emitAggValRow(store, res.filledTerms, res.weight, item.bp)) any = true;
+  for (const w of widths) {
+    // Stored `[head, key..., weight, id]` → wrapped `[head, _free..., _free]`
+    // of length `w - 1`: every key position free (group by all of them),
+    // weight folded.
+    const arity = w - 1;
+    if (arity < 2) continue;
+    const wrapped: Atom = { terms: [head, ...Array.from({ length: arity - 1 }, () => SYM_FREE)] };
+    for (const res of aggregateOver(store, wrapped, m, m, schema)) {
+      if (emitAggValRow(store, res.filledTerms, res.weight, m)) any = true;
+    }
   }
   return any;
+}
+
+// The reactive moment handler. `strata` is `computeAggStrata`'s map; relations
+// it does not mention are stratum 0. Never blocked.
+export function reactiveHandler(
+  reactive: Set<string>,
+  schema: Map<string, string>,
+  strata: Map<string, number>,
+): MomentHandler {
+  // Relations grouped by stratum, ascending.
+  const byStratum = new Map<number, string[]>();
+  for (const foo of reactive) {
+    const s = strata.get(foo) ?? 0;
+    let bucket = byStratum.get(s);
+    if (bucket === undefined) { bucket = []; byStratum.set(s, bucket); }
+    bucket.push(foo);
+  }
+  const levels = [...byStratum.keys()].sort((a, b) => a - b);
+  return {
+    name: "reactive",
+    run(store, m) {
+      for (const s of levels) {
+        let progress = false;
+        for (const foo of byStratum.get(s)!) {
+          if (foldReactiveAt(store, foo, m, schema)) progress = true;
+        }
+        // A stratum that added rows must settle (the monotone part may derive
+        // new contributors from them) before any higher stratum is folded.
+        if (progress) return { progress: true, blocked: false };
+      }
+      return { progress: false, blocked: false };
+    },
+  };
 }
 
 // Static aggregate dependency strata over the `#reactive` relations, computed
@@ -810,23 +751,21 @@ export function computeAggStrata(rules: Rule[], reactive: Set<string>): Map<stri
   return strata;
 }
 
-// Emit `_aggval head key... value <id>` at `[bp, top]`. The id is a
-// deterministic Id over the row contents + breakpoint so re-finalizing the
-// same breakpoint dedups. `filledTerms` is `[head, key...]` from
-// `aggregateOver`.
+// Emit `_aggval head key... value <id>` at the point `[m, m]`. The id is a
+// deterministic Id over the row contents + moment so re-folding the same
+// moment dedups. `filledTerms` is `[head, key...]` from `aggregateOver`.
 function emitAggValRow(
   store: Store,
   filledTerms: Term[],
   weight: Term,
-  bp: Term,
+  m: Term,
 ): boolean {
   const userTerms = [SYM_AGGVAL, ...filledTerms, weight].map((t) => hashconsTerm(t, store.hash));
   const idInner: Term = {
     tag: "Id",
-    atom: { terms: [SYM_AGGVAL_ID, ...filledTerms, weight, bp].map((t) => hashconsTerm(t, store.hash)) },
+    atom: { terms: [SYM_AGGVAL_ID, ...filledTerms, weight, m].map((t) => hashconsTerm(t, store.hash)) },
   };
   const id = hashconsTerm(idInner, store.hash);
   const atom: Atom = { terms: [...userTerms, id] };
-  // [bp, top]: the `bp < top` edge is implicit, so no addOrder needed.
-  return addTuple(store, atom, bp, SYM_TOP);
+  return addTuple(store, atom, m, m);
 }

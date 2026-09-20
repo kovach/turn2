@@ -1268,13 +1268,24 @@ function decomposeMatch(
   return { XL: XLnext, XR: XRnext };
 }
 
-// Reactive read: a `#reactive head pat -> weight` consumer lowers to a plain
-// Match of the standing value relation `_aggval head pat... weight`, evaluated
-// at the running anchor like any ordinary match (overlap + intersection, then
-// semi-naive). There is no producer Emit — the `_aggval` rows are materialized
-// eagerly by the scheduler at breakpoints (see scheduler.ts/fixpoint.ts and
-// plans/v2-reactive-aggregates.md). A variable in the weight slot binds the
-// current value; a literal filters to where the value equals it.
+// Reactive read: a `#reactive head pat -> weight` consumer samples the
+// relation's value at the running anchor's *left endpoint* (plans/
+// v2-moment-walk.md). The moment walk materializes `_aggval head key...
+// value` as a point row `[m, m]` at every moment `m` it resolves, so the read
+// lowers to a Match of that row with both endpoints pinned to `XL`:
+//
+//   Match [_aggval, head, pat..., weight, _]  at (XL, XL)
+//
+// `evalMatch` unifies the endpoints before the atom, so rows at other moments
+// are rejected cheaply. Until `XL` is resolved the row does not exist and the
+// rule does not fire — the read is blocked; when the walk emits the row, the
+// semi-naive delta variant on this Match wakes the rule. The running anchor
+// is unchanged: threading the point row through `Max`/`Min` would collapse
+// it to `[XL, XL]` and make every later `+` emit assert a cycle. No
+// `_l_k`/`_r_k` slots are minted — `XL` is already in the chain, and the
+// row's user terms enter it below, so firing identity is intact. There is no
+// producer Emit. A variable in the weight slot binds the value at `XL`; a
+// literal filters to where the value equals it.
 function decomposeReactiveRead(
   a: Extract<RuleAtom, { tag: "Atom" }>,
   state: DecState,
@@ -1284,15 +1295,18 @@ function decomposeReactiveRead(
   if (a.weight === undefined) {
     throw new Error("internal: reactive read without weight");
   }
-  // `[_aggval, head, key..., value]`. decomposeMatch appends the trailing
-  // universal id Wildcard, matching the scheduler-emitted row's id slot.
-  const matchAtom: Extract<RuleAtom, { tag: "Atom" }> = {
-    tag: "Atom",
-    marker: "match",
-    atom: { terms: [SYM_AGGVAL, ...a.atom.terms, a.weight] },
-    span: a.span,
-  };
-  return decomposeMatch(matchAtom, state, XL, XR);
+  // `[_aggval, head, key..., value, <id>]` — the trailing Wildcard matches the
+  // scheduler-emitted row's universal id slot.
+  const matchAtom: Atom = { terms: [SYM_AGGVAL, ...a.atom.terms, a.weight, { tag: "Wildcard" }] };
+  const constraint = (a as { constraint?: MatchConstraint }).constraint;
+  state.out.push(
+    constraint === undefined
+      ? { tag: "Match", atom: matchAtom, l: XL, r: XL, span: a.span }
+      : { tag: "Match", atom: matchAtom, l: XL, r: XL, constraint, span: a.span },
+  );
+  for (const t of a.atom.terms) collectVarsTerm(t, state);
+  collectVarsTerm(a.weight, state);
+  return { XL, XR };
 }
 
 // Aggregate: lowers `pat -> weight` into a paired producer `Emit (_do-agg
