@@ -78,7 +78,7 @@ export function collectProgramSymbols(text: string): Set<string> {
     for (const t of toks) {
       if (t.tag === "atom" || t.tag === "equal") {
         for (const w of tokenizeTermText(t.text)) add(w);
-      } else if (t.tag === "command" && t.name === "agg") {
+      } else if (t.tag === "command" && (t.name === "agg" || t.name === "reactive" || t.name === "acc")) {
         const head = tokenizeTermText(t.argText)[0];
         if (head !== undefined) add(head);
       }

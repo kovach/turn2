@@ -3,6 +3,7 @@ import { refTagOf } from "./hashcons.js";
 import { atomFingerprint, renderTermShallow } from "./print.js";
 import { lessThan, tokenOf, type Store } from "./store.js";
 import { renderTimeline, type CollapsedInterval } from "./timeline.js";
+import { accRelationVisible, accSnapshot } from "./acc-view.js";
 
 export interface TuplesOptions {
   hideInternal?: boolean;
@@ -14,6 +15,16 @@ export interface TimelineOptions {
   momentStyle?: "spine" | "edges";
   // Episodes (by `timelineCollapseKey`) whose intervals render collapsed.
   collapsedKeys?: Iterable<string>;
+  // `#acc` relations forced shown / hidden; see TimelineOpts.accOverrides.
+  accOverrides?: ReadonlyMap<string, boolean>;
+  // Render the acc controls around the timeline: a strip of per-relation
+  // toggles above it (`data-acc-toggle`) and, when `inspectKey` names a
+  // moment of this store (`momentKey`), the moment inspector below it
+  // (`data-acc-inspector-close`). The host owns the state and the events;
+  // moment dots carry `data-tl-moment`. Off by default (pres embeds get the
+  // bare timeline).
+  accControls?: boolean;
+  inspectKey?: string | null;
 }
 
 function escapeHtml(s: string): string {
@@ -185,13 +196,128 @@ export function resolveCollapsed(store: Store, keys: Iterable<string>): Collapse
   return out;
 }
 
+// Identifies a moment across re-evaluations of the program, the way
+// `timelineCollapseKey` identifies an episode: tokens shift with interning
+// order, the structural fingerprint of the moment term does not.
+export function momentKey(store: Store, tok: number): string | null {
+  const term = store.momentTerms.get(tok);
+  if (term === undefined) return null;
+  return atomFingerprint(store, { terms: [term] });
+}
+
+function resolveMomentKey(store: Store, key: string | null | undefined): number | null {
+  if (key === null || key === undefined) return null;
+  for (const tok of store.momentTerms.keys()) if (momentKey(store, tok) === key) return tok;
+  return null;
+}
+
+// One checkbox per `#acc` relation. Unchecked relations are left off the
+// timeline; the default (no override) shows the relations ordinary rules
+// read and hides pure intermediates.
+function renderAccToggles(store: Store, overrides: ReadonlyMap<string, boolean>): HTMLElement {
+  const strip = document.createElement("div");
+  strip.classList.add("tl-acc-toggles");
+  const lead = document.createElement("span");
+  lead.classList.add("tl-acc-toggles-lead");
+  lead.textContent = "acc";
+  strip.appendChild(lead);
+  for (const [relation, info] of store.accRelations) {
+    const label = document.createElement("label");
+    label.title = info.readByRules
+      ? "read by ordinary rules (shown by default)"
+      : "read only by other acc rules (hidden by default)";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = accRelationVisible(store, relation, overrides);
+    box.setAttribute("data-acc-toggle", relation);
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(" " + relation));
+    strip.appendChild(label);
+  }
+  return strip;
+}
+
+// The moment inspector: every acc relation's rows at one moment, diffed
+// against the moment's immediate predecessors. `+` rows are missing at some
+// predecessor, struck `−` rows are rows a predecessor has and this moment
+// lacks. It ignores the timeline's per-relation visibility — this is where
+// the hidden relations can still be looked up.
+function renderMomentInspector(store: Store, tok: number): HTMLElement {
+  const snap = accSnapshot(store, tok);
+  const panel = document.createElement("div");
+  panel.classList.add("tl-inspector");
+  const head = document.createElement("div");
+  head.classList.add("tl-inspector-head");
+  const name = renderTermShallow(store, store.momentTerms.get(tok)!);
+  const state = snap.resolved
+    ? "resolved"
+    : tok === store.topTok ? "top is never resolved" : "not resolved: acc relations are not computed here yet";
+  const title = document.createElement("span");
+  title.textContent = `moment ${name} · ${state}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.title = "Close";
+  close.setAttribute("data-acc-inspector-close", "");
+  head.appendChild(title);
+  head.appendChild(close);
+  panel.appendChild(head);
+  for (const rel of snap.relations) {
+    const section = document.createElement("div");
+    section.classList.add("tl-inspector-rel");
+    const h = document.createElement("div");
+    h.classList.add("tl-inspector-rel-head");
+    h.textContent = rel.relation;
+    if (rel.consulted) {
+      const badge = document.createElement("span");
+      badge.classList.add("tl-inspector-read");
+      badge.textContent = "read here";
+      h.appendChild(badge);
+    }
+    section.appendChild(h);
+    if (rel.rows.length === 0 && rel.gone.length === 0) {
+      const none = document.createElement("div");
+      none.classList.add("tl-inspector-row", "tl-inspector-none");
+      none.textContent = "(no rows)";
+      section.appendChild(none);
+    }
+    for (const row of rel.rows) {
+      const r = document.createElement("div");
+      r.classList.add("tl-inspector-row");
+      if (row.status === "new") r.classList.add("tl-inspector-new");
+      r.textContent = `${row.status === "new" ? "+" : " "} ${row.label}`;
+      r.setAttribute("data-tl-tuple", String(row.tupleIndex));
+      section.appendChild(r);
+    }
+    for (const label of rel.gone) {
+      const r = document.createElement("div");
+      r.classList.add("tl-inspector-row", "tl-inspector-gone");
+      r.textContent = `− ${label}`;
+      section.appendChild(r);
+    }
+    panel.appendChild(section);
+  }
+  return panel;
+}
+
 export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineOptions = {}): void {
+  const accOverrides = opts.accOverrides ?? new Map<string, boolean>();
+  const controls = opts.accControls === true && store.accRelations.size > 0;
+  const inspectTok = controls ? resolveMomentKey(store, opts.inspectKey) : null;
   const out = renderTimeline(store, {
     hideInternal: opts.hideInternal ?? true,
     orientation: "horizontal",
     laneMode: "tree",
     momentStyle: opts.momentStyle ?? "edges",
     collapsed: opts.collapsedKeys === undefined ? [] : resolveCollapsed(store, opts.collapsedKeys),
+    accOverrides,
+    selectedMoment: inspectTok,
   });
-  host.replaceChildren(out.main);
+  if (!controls) {
+    host.replaceChildren(out.main);
+    return;
+  }
+  const parts: Element[] = [renderAccToggles(store, accOverrides), out.main];
+  if (inspectTok !== null) parts.push(renderMomentInspector(store, inspectTok));
+  host.replaceChildren(...parts);
 }

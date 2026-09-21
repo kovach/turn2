@@ -13,6 +13,7 @@
 //     evaluator is a flat dispatch over these primitives.
 
 import type { Atom, Term, Span } from "./term.js";
+import type { AccOp } from "./acc-ops.js";
 
 // Semi-naive evaluation tag on `Match` atoms. Set by the delta-variant pass:
 // each rule is cloned once per match position, and within one variant
@@ -219,6 +220,32 @@ export type RuleAtom =
       out: Term;
       span: Span;
     }
+  // ----- Acc rules only (plans/v2-acc-relations.md) -----
+  //
+  // Read a local acc row while the acc handler computes a moment's rows.
+  // `atom` is `[Symbol relation, pat...]` (no trailing id slot); `moment` is
+  // a fresh Variable bound to the matched row's moment. Only legal inside a
+  // lowered acc rule — `evaluateRule` needs an `AccEvalCtx`.
+  | {
+      tag: "AccMatch";
+      relation: string;
+      atom: Atom;
+      moment: Term;
+      span: Span;
+    }
+  // The head of a lowered acc rule: one contribution to `relation`. `terms`
+  // are the head's columns (agg column included, the unit Atom for count);
+  // `moments` are the `_l_k` / AccMatch moment Variables of the body (the
+  // contribution's moment is their lub); `ids` are the `_id_k` Variables
+  // bound to the matched stored tuples' ids (the firing identity).
+  | {
+      tag: "AccContribute";
+      relation: string;
+      terms: Term[];
+      moments: Term[];
+      ids: Term[];
+      span: Span;
+    }
   | {
       tag: "Min";
       a: Term;
@@ -246,6 +273,35 @@ export interface Rule {
   // the body. When false, the rule may emit tuples earlier in its body
   // that the short-circuit would incorrectly suppress.
   deltaSafeSkip?: boolean;
+}
+
+// One column of an `#acc` declaration (plans/v2-acc-relations.md §1.1): a
+// key column with a documentary base type, or the relation's single agg
+// column naming a registry op (acc-ops.ts) and optionally the type of the
+// values it folds.
+export type AccColumn =
+  | { kind: "key"; type: string }
+  | { kind: "agg"; op: AccOp; type?: string };
+
+// `#acc name : col...`. `aggIndex` is the position of the agg column in
+// `columns`, or null for a boolean relation (no agg column).
+export interface AccDecl {
+  relation: string;
+  columns: AccColumn[];
+  aggIndex: number | null;
+  span: Span;
+}
+
+// An acc rule `body / head` (plans/v2-acc-relations.md §1.2). `body` is
+// pre-expand: match `Atom`s and `Equal`s only (the parser rejects anything
+// else). `head` is `[Symbol relation, col1, ..., coln]`; the agg column's
+// term is the contribution (already unwrapped from `(@op T)`).
+export interface AccRule {
+  name: string;
+  explicitName?: string;
+  body: RuleAtom[];
+  head: Atom;
+  span: Span;
 }
 
 export interface SchemaDecl {
@@ -317,6 +373,12 @@ export interface Program {
   // Eliminated by `expandMacros` before any other expand pass, which leaves
   // this map empty (plans/v2-aggregation-synonyms.md).
   macros: Map<string, MacroDef>;
+  // `#acc` relations and the `/` rules that compute them
+  // (plans/v2-acc-relations.md). Disjoint from `schema`, `jsDefs`, `jsRels`
+  // and `macros` keys (enforced at parse). Not touched by `expand`; compiled
+  // separately by acc.ts.
+  accDecls: Map<string, AccDecl>;
+  accRules: AccRule[];
   // Set by `applyExceptions` when it generates default rules; absent
   // otherwise. Carried through by the pass's early return on a second
   // invocation (no Exception atoms remain).

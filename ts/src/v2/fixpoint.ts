@@ -24,7 +24,8 @@ import {
   resolveRngChoice,
   type RngCommit,
 } from "./scheduler.js";
-import { markResolved, runWalkRound, type MomentHandler } from "./moment-walk.js";
+import { markResolved, resolveMoments, runWalkRound, type MomentHandler } from "./moment-walk.js";
+import { accHandler, compileAcc } from "./acc.js";
 import { computeComponents } from "./constraint-query.js";
 import { attachRules } from "./stats.js";
 
@@ -68,11 +69,25 @@ export function runFixpoint(
     reactiveHandler(expanded.reactive, expanded.schema, strata),
     demandAggHandler(expanded.schema),
     choiceHandler(),
+    // `#acc` relations (plans/v2-acc-relations.md): computed at `resolve`,
+    // once a moment's other handlers have settled.
+    accHandler(compileAcc(expanded), expanded.schema, jsFuncs, jsRelFuncs),
   ];
   const store = createStore();
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
   attachRules(store.stats, expanded.rules.map((r) => r.name));
+  // Display bookkeeping for the timeline (plans/v2-acc-timeline-display.md):
+  // which acc relations exist, and which of them some ordinary rule reads.
+  for (const name of expanded.accDecls.keys()) store.accRelations.set(name, { readByRules: false });
+  for (const rule of expanded.rules) {
+    for (const a of rule.body) {
+      if (a.tag !== "Match") continue;
+      const h = a.atom.terms[0];
+      const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
+      if (info !== undefined) info.readByRules = true;
+    }
+  }
   let totalIters = 0;
   const rngCommits: RngCommit[] = [];
 
@@ -190,11 +205,24 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     // changed). Only when every frontier moment is blocked do the choices
     // there surface.
     let round = runWalkRound(store, handlers);
+    let resolvedProgress = false;
     while (!round.progress && !round.exhausted) {
       const toMark = round.frontier.filter((tok) => !round.blocked.has(tok));
       if (toMark.length === 0) break;
       markResolved(store, toMark);
+      // Resolution hooks (acc rows, plans/v2-acc-relations.md): rows written
+      // here are progress — readers must see them — so hand back to the
+      // inner loop rather than continuing the walk.
+      if (resolveMoments(store, handlers, toMark)) {
+        resolvedProgress = true;
+        break;
+      }
       round = runWalkRound(store, handlers);
+    }
+    if (resolvedProgress) {
+      store.iteration++;
+      swapHeads(store);
+      continue;
     }
     if (round.exhausted) {
       return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };

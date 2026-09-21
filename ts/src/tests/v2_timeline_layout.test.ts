@@ -7,6 +7,8 @@ import { runFixpoint } from "../v2/fixpoint.js";
 import { timelineCollapseKey } from "../v2/render-output.js";
 import { compressRefs, renderAtom } from "../v2/print.js";
 import { layoutTimeline, DEFAULT_OPTS, type TimelineOpts, type TimelineLayout } from "../v2/timeline.js";
+import { addOrder, addTuple, createStore, intern } from "../v2/store.js";
+import type { Term } from "../v2/term.js";
 
 const SOURCE = `
 ~game
@@ -462,6 +464,54 @@ pick C
     `collapse keys must be a 64-bit fingerprint; got ${after.get("pick")}`,
   );
   console.log("PASS: collapse keys survive an appended `is` resolution");
+}
+
+// ===== Point bars (tuples at `[m, m]`) =======================================
+// A point has no extent, so the placers' "temporally disjoint" test (which
+// allows touching endpoints) used to put every point at one moment, and the
+// bars starting or ending there, on one lane — drawn on top of each other —
+// and reserved no column width for their labels. A point must not share a
+// lane with anything it touches, and the gap after its rank must hold its
+// label. (`#acc` rows were the original source of these; they are now merged
+// into bars — v2_acc_view.test.ts — so the fixture is built by hand.)
+{
+  const ps = createStore();
+  const sym = (name: string): Term => ({ tag: "Symbol", name });
+  const [m1, m2, m3] = ["m1", "m2", "m3"].map((n) => intern(ps, sym(n))) as [Term, Term, Term];
+  addOrder(ps, m1, m2);
+  addOrder(ps, m2, m3);
+  const put = (head: string, arg: string, l: Term, r: Term): void => {
+    addTuple(ps, { terms: [sym(head), sym(arg), sym("id")] }, l, r);
+  };
+  put("ep", "first", m1, m2);
+  put("ep", "second", m2, m3);
+  for (const arg of ["alpha", "beta-with-a-long-label", "gamma"]) put("pt", arg, m2, m2);
+  put("pt", "delta", m1, m1);
+  put("pt", "epsilon", m3, m3);
+  const px = (t: string): number => t.length * 7;
+  for (const laneMode of ["tree", "nested", "compact"] as const) {
+    const L = layoutTimeline(ps, { ...DEFAULT_OPTS, laneMode, momentStyle: "edges" }, px);
+    const points = L.bars.filter((b) => b.lTok === b.rTok);
+    assert.equal(points.length, 5, `${laneMode}: expected the point rows among the bars`);
+    for (let i = 0; i < L.bars.length; i++) {
+      for (let j = i + 1; j < L.bars.length; j++) {
+        const a = L.bars[i]!, b = L.bars[j]!;
+        if (a.lane !== b.lane) continue;
+        if (a.lTok !== a.rTok && b.lTok !== b.rTok) continue;
+        const touch = a.lTok === b.lTok || a.lTok === b.rTok || a.rTok === b.lTok || a.rTok === b.rTok;
+        assert.ok(!touch, `${laneMode}: '${a.label}' and '${b.label}' share lane ${a.lane} at one moment`);
+      }
+    }
+    for (const b of points) {
+      const r = L.moments.get(b.lTok)!.rank;
+      if (r >= L.maxRank) continue;
+      assert.ok(
+        L.colWidths[r]! >= px(b.label) + 12,
+        `${laneMode}: column ${r} (${L.colWidths[r]}) too narrow for point label '${b.label}'`,
+      );
+    }
+  }
+  console.log("PASS: point bars get their own lanes and label width");
 }
 
 console.log("ALL v2 timeline-layout tests passed");

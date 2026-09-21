@@ -5,9 +5,10 @@
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
-import type { Actor, JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
 import { isActor } from "./types.js";
 import { aggregators } from "./aggregators.js";
+import { accOp, UNIT, type AccOp } from "./acc-ops.js";
 
 export interface ParseError {
   line: number;
@@ -44,13 +45,17 @@ type Token =
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number }
-  | { tag: "semi"; line: number };
+  | { tag: "semi"; line: number }
+  // Standalone `/` (whitespace on both sides) separating an acc rule's body
+  // from its head (plans/v2-acc-relations.md §1.2). `do/rest` stays a Symbol.
+  | { tag: "slash"; line: number };
 
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
   | { kind: "def"; name: string; line: number }
   | { kind: "agg"; decl: SchemaDecl }
   | { kind: "reactive"; decl: SchemaDecl }
+  | { kind: "acc"; decl: AccDecl }
   | { kind: "js"; name: string; params: string[]; body: string; line: number }
   | { kind: "js-rel"; def: JsRelDef; line: number }
   | { kind: "exit"; line: number };
@@ -128,6 +133,14 @@ export function tokenize(input: string): Token[] | ParseError {
         // token above). Emits a `semi` for parseProgram to wrap the
         // current line's accumulated items into a sequence sub.
         tokens.push({ tag: "semi", line: lineno });
+        pos++;
+        atomStart = true;
+        continue;
+      }
+      if (ch === "/" && isStandaloneSlash(raw, pos)) {
+        // Acc rule separator `body / head` (plans/v2-acc-relations.md).
+        // Only a whitespace-delimited `/`: symbols like `do/rest` keep it.
+        tokens.push({ tag: "slash", line: lineno });
         pos++;
         atomStart = true;
         continue;
@@ -346,6 +359,7 @@ export function tokenize(input: string): Token[] | ParseError {
           continue;
         }
         if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}" || c === "[" || c === "]")) break;
+        if (depth === 0 && c === "/" && isStandaloneSlash(raw, pos)) break;
         if (c === "(") depth++;
         else if (c === ")") depth--;
         pos++;
@@ -379,6 +393,16 @@ export function tokenize(input: string): Token[] | ParseError {
     }
   }
   return tokens;
+}
+
+// A `/` at `pos` is the acc-rule separator iff it is whitespace-delimited:
+// preceded by whitespace (or line start) and followed by whitespace (or line
+// end). Mirrors the `=` rule; `do/rest` and `a/b` stay inside Symbol tokens.
+function isStandaloneSlash(raw: string, pos: number): boolean {
+  if (raw[pos] !== "/") return false;
+  const before = pos === 0 || /\s/.test(raw[pos - 1]!);
+  const after = pos + 1 >= raw.length || /\s/.test(raw[pos + 1]!);
+  return before && after;
 }
 
 // Index of a top-level `:=` in `raw` at or after `from` (depth counted over
@@ -448,6 +472,11 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
   }
   if (tok.name === "js-def") {
     return parseJsRelCommand(tok.argText, tok.body ?? "", tok.line);
+  }
+  if (tok.name === "acc") {
+    const decl = parseAccDeclText(tok.argText, tok.line);
+    if ("message" in decl) return decl;
+    return { kind: "acc", decl };
   }
   if (tok.name === "exit") {
     if (tok.argText.trim().length > 0) {
@@ -533,6 +562,10 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const jsDefs = new Map<string, JsDef>();
   const jsRels = new Map<string, JsRelDef[]>();
   const macros = new Map<string, MacroDef>();
+  const accDecls = new Map<string, AccDecl>();
+  const accRules: AccRule[] = [];
+  // Ordinary and acc rules in source order, for shared auto-naming.
+  const allRules: { name: string; explicitName?: string; span: Span }[] = [];
   let i = 0;
 
   while (i < tokens.length) {
@@ -556,6 +589,13 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         }
         schema.set(cmd.decl.relation, cmd.decl.aggregator);
         if (cmd.kind === "reactive") reactive.add(cmd.decl.relation);
+        continue;
+      }
+      if (cmd.kind === "acc") {
+        if (accDecls.has(cmd.decl.relation)) {
+          return { line: t.line, message: `duplicate '#acc' declaration for '${cmd.decl.relation}'` };
+        }
+        accDecls.set(cmd.decl.relation, cmd.decl);
         continue;
       }
       if (cmd.kind === "exit") {
@@ -614,6 +654,25 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     if (!Array.isArray(bodyRes)) return bodyRes;
     i = pos.i;
     const body = bodyRes;
+    // Acc rule `body / head` (plans/v2-acc-relations.md §1.2): the body
+    // parse stopped at a top-level `/`.
+    if (i < tokens.length && tokens[i]!.tag === "slash") {
+      const slashLine = tokens[i]!.line;
+      i++;
+      const headPos = { i };
+      const headRes = parseBodyItems(tokens, headPos, slashLine, false);
+      if (!Array.isArray(headRes)) return headRes;
+      i = headPos.i;
+      if (i < tokens.length && tokens[i]!.tag === "slash") {
+        return { line: tokens[i]!.line, message: "an acc rule has exactly one '/'" };
+      }
+      const acc = buildAccRule(body, headRes, startLine, slashLine);
+      if ("message" in acc) return acc;
+      if (explicitName !== undefined) acc.explicitName = explicitName;
+      accRules.push(acc);
+      allRules.push(acc);
+      continue;
+    }
     if (body.length > 0) {
       const usedNames = new Set<string>();
       collectUsedNames(body, usedNames);
@@ -624,16 +683,37 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const rule: Rule = { name: "", body: desugared, span: { line: startLine } };
       if (explicitName !== undefined) rule.explicitName = explicitName;
       rules.push(rule);
+      allRules.push(rule);
     } else if (explicitName !== undefined) {
       return { line: startLine, message: "'#def' must precede a rule" };
     }
   }
 
-  const nameErr = resolveRuleNames(rules);
+  const nameErr = resolveRuleNames(allRules);
   if (nameErr !== null) return nameErr;
 
   const boolErr = validateBoolWeights(rules, schema);
   if (boolErr !== null) return boolErr;
+  for (const r of accRules) {
+    const err = walkBoolValidate(r.body, schema);
+    if (err !== null) return err;
+  }
+
+  // Acc relations (plans/v2-acc-relations.md): heads declared and shaped,
+  // names disjoint from every other kind of declaration, body reads of
+  // `#agg` relations rejected. Checked after the loop since declaration
+  // order is free.
+  for (const [name, decl] of accDecls) {
+    const line = decl.span.line;
+    if (schema.has(name)) return { line, message: `'#acc' name '${name}' already has a '#agg'/'#reactive' declaration` };
+    if (jsDefs.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js' function` };
+    if (jsRels.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js-def' relation` };
+    if (macros.has(name)) return { line, message: `'#acc' name '${name}' is already a macro` };
+  }
+  for (const r of accRules) {
+    const err = validateAccRule(r, accDecls, schema, reactive);
+    if (err !== null) return err;
+  }
 
   // js relations claim their name exclusively: a stored-relation schema or a
   // macro under the same name would make match sites ambiguous (js matches
@@ -649,7 +729,129 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     }
   }
 
-  return { rules, schema, reactive, jsDefs, jsRels, macros };
+  return { rules, schema, reactive, jsDefs, jsRels, macros, accDecls, accRules };
+}
+
+// Assemble an acc rule from its parsed halves (plans/v2-acc-relations.md
+// §1.2). The body desugars like an ordinary rule (dots, arity saturation)
+// and is then restricted to match atoms and `=`; the head must be exactly
+// one unmarked, unweighted atom. Declaration-dependent checks (head
+// declared, arity, agg-column shape) run in `validateAccRule` once every
+// `#acc` line has been seen.
+function buildAccRule(
+  bodyItems: BodyItem[],
+  headItems: BodyItem[],
+  startLine: number,
+  slashLine: number,
+): AccRule | ParseError {
+  const usedNames = new Set<string>();
+  collectUsedNames(bodyItems, usedNames);
+  collectUsedNames(headItems, usedNames);
+  const counter = { n: 1 };
+  const body = desugarBody(bodyItems, usedNames, counter, undefined);
+  if (!Array.isArray(body)) return body;
+  saturateArity(body);
+  for (const a of body) {
+    if (a.tag === "Equal") continue;
+    if (a.tag === "Atom" && (a.marker === "match" || a.marker === "aggregate") && a.subAtoms === undefined) continue;
+    const what =
+      a.tag === "Sub" ? "a sub-rule" :
+      a.tag === "AggComp" ? "a '[...]' aggregation" :
+      a.tag === "Exception" ? "an exception block" :
+      a.tag === "Atom" ? `a '${markerChar(a.marker)}' atom` : a.tag;
+    return { line: a.span.line, message: `acc rule bodies contain only matches and '=' (found ${what})` };
+  }
+  const headDesugared = desugarBody(headItems, usedNames, counter, undefined);
+  if (!Array.isArray(headDesugared)) return headDesugared;
+  if (headDesugared.length !== 1) {
+    return { line: slashLine, message: "an acc rule head is exactly one atom after '/'" };
+  }
+  const h = headDesugared[0]!;
+  if (h.tag !== "Atom" || h.marker !== "match" || h.subAtoms !== undefined) {
+    return { line: h.span.line, message: "an acc rule head is a plain atom (no marker)" };
+  }
+  if (h.weight !== undefined) {
+    return { line: h.span.line, message: "an acc rule head carries no '-> weight' (the aggregated column is an ordinary argument)" };
+  }
+  saturateArity([h]);
+  const headSym = h.atom.terms[0];
+  if (headSym === undefined || headSym.tag !== "Symbol") {
+    return { line: h.span.line, message: "an acc rule head must start with a relation name" };
+  }
+  return { name: "", body, head: h.atom, span: { line: startLine } };
+}
+
+function markerChar(m: Marker): string {
+  switch (m) {
+    case "match": return "-";
+    case "episode": return "~";
+    case "fact": return "+";
+    case "anchor": return "^";
+    case "ask": return "?";
+    case "constrain": return "!";
+    case "aggregate": return "->";
+  }
+}
+
+// Declaration-dependent acc rule checks; also unwraps the head's agg column
+// from `(@op T)` / `()` to the bare contribution term.
+function validateAccRule(
+  r: AccRule,
+  accDecls: Map<string, AccDecl>,
+  schema: Map<string, string>,
+  reactive: Set<string>,
+): ParseError | null {
+  const line = r.span.line;
+  const headSym = r.head.terms[0]!;
+  const name = headSym.tag === "Symbol" ? headSym.name : "";
+  const decl = accDecls.get(name);
+  if (decl === undefined) {
+    return { line, message: `acc rule head '${name}' is not declared with '#acc'` };
+  }
+  const args = r.head.terms.length - 1;
+  if (args !== decl.columns.length) {
+    return { line, message: `acc rule head '${name}' has ${args} column(s); '#acc ${name}' declares ${decl.columns.length}` };
+  }
+  if (decl.aggIndex !== null) {
+    const col = decl.columns[decl.aggIndex]!;
+    const op = col.kind === "agg" ? accOp(col.op)! : undefined;
+    const pos = decl.aggIndex + 1;
+    const t = r.head.terms[pos]!;
+    // `(@op T)` wrapper or `()` — unwrap to the contribution term.
+    if (t.tag === "Atom") {
+      const first = t.atom.terms[0];
+      if (first !== undefined && first.tag === "Symbol" && first.name.startsWith("@")) {
+        if (first.name.slice(1) !== op!.name) {
+          return { line, message: `acc rule head '${name}': column ${pos} is declared '@${op!.name}', not '${first.name}'` };
+        }
+        if (t.atom.terms.length !== op!.arity + 1) {
+          return { line, message: `acc rule head '${name}': '(${first.name} ...)' takes ${op!.arity} argument(s)` };
+        }
+        r.head.terms[pos] = op!.arity === 0 ? UNIT : t.atom.terms[1]!;
+      } else if (t.atom.terms.length === 0) {
+        if (op!.arity !== 0) {
+          return { line, message: `acc rule head '${name}': '@${op!.name}' takes a contribution term, not '()'` };
+        }
+      } else if (op!.arity === 0) {
+        return { line, message: `acc rule head '${name}': '@${op!.name}' takes no argument (write '()')` };
+      }
+    } else if (op!.arity === 0) {
+      return { line, message: `acc rule head '${name}': '@${op!.name}' takes no argument (write '()')` };
+    }
+  }
+  // Body reads: a weighted atom is a `#reactive` read (allowed) or a
+  // `#agg` read (rejected — the demand path needs a round trip).
+  for (const a of r.body) {
+    if (a.tag !== "Atom" || a.weight === undefined) continue;
+    const h = a.atom.terms[0];
+    const hn = h !== undefined && h.tag === "Symbol" ? h.name : "";
+    if (reactive.has(hn)) continue;
+    if (schema.has(hn)) {
+      return { line: a.span.line, message: `acc rule cannot read '#agg ${hn}' (declare it '#acc' or '#reactive')` };
+    }
+    return { line: a.span.line, message: `acc rule body: '${hn}' has no '#reactive' declaration for a '-> weight' read` };
+  }
+  return null;
 }
 
 // Parse a macro definition `#macro head P1..Pn := [ ... ]`
@@ -854,6 +1056,14 @@ function parseBodyItems(
       // appeared where a rule body was expected (e.g. right after `#def`).
       return { line: tok.line, message: "'#macro' must begin its own definition" };
     }
+    if (tok.tag === "slash") {
+      // Acc rule separator (plans/v2-acc-relations.md). Legal only at the
+      // top level of a rule body; parseProgram consumes it and parses the
+      // head that follows.
+      if (fragment) return { line: tok.line, message: "'/' is not allowed in an exception block" };
+      if (depth > 0) return { line: tok.line, message: "'/' is not allowed inside a sub-rule" };
+      break;
+    }
     const parsed = parseAtomText(tok.text, tok.marker, tok.line, tok.startCol, tok.endCol);
     if ("message" in parsed) return parsed;
     top.items.push({ kind: "atom", atom: parsed });
@@ -1022,7 +1232,7 @@ function describeTerm(t: Term): string {
   return t.tag;
 }
 
-function resolveRuleNames(rules: Rule[]): ParseError | null {
+function resolveRuleNames(rules: { name: string; explicitName?: string; span: Span }[]): ParseError | null {
   const seen = new Map<string, number>();
   for (const r of rules) {
     if (r.explicitName === undefined) continue;
@@ -1412,6 +1622,65 @@ function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {
     return { line, message: `unknown aggregator '${aggregator}'` };
   }
   return { relation, aggregator, span: { line } };
+}
+
+// `#acc name : col...` (plans/v2-acc-relations.md §1.1). Each column is a
+// base-type Symbol (a key column), a bare `@op`, or a group `(@op base)`;
+// at most one agg column. Ops come from the acc-ops.ts registry.
+function parseAccDeclText(text: string, line: number): AccDecl | ParseError {
+  const tokens = tokenizeTermText(text);
+  const relation = tokens[0];
+  if (relation === undefined) return { line, message: "'#acc' requires a relation name" };
+  if (!isSymToken(relation) || relation.startsWith("@") || relation === ":") {
+    return { line, message: `'#acc' relation must be a lower-case symbol (got '${relation}')` };
+  }
+  if (tokens[1] !== ":") {
+    return { line, message: "'#acc' requires a standalone ':' after the relation name (`#acc name : col...`)" };
+  }
+  const columns: AccColumn[] = [];
+  let aggIndex: number | null = null;
+  const aggColumn = (opTok: string, type: string | undefined): AccColumn | ParseError => {
+    const name = opTok.slice(1);
+    const def = accOp(name);
+    if (def === undefined) return { line, message: `unknown aggregation '${opTok}' in '#acc ${relation}'` };
+    if (aggIndex !== null) {
+      return { line, message: `one aggregation column per acc relation ('#acc ${relation}' has two)` };
+    }
+    aggIndex = columns.length;
+    return type === undefined ? { kind: "agg", op: name as AccOp } : { kind: "agg", op: name as AccOp, type };
+  };
+  let i = 2;
+  while (i < tokens.length) {
+    const t = tokens[i]!;
+    if (t === "(") {
+      const close = tokens.indexOf(")", i);
+      if (close < 0) return { line, message: `unbalanced '(' in '#acc ${relation}'` };
+      const inner = tokens.slice(i + 1, close);
+      const op = inner[0];
+      if (op === undefined || !op.startsWith("@") || inner.length > 2 || inner.includes("(")) {
+        return { line, message: `'#acc ${relation}': a parenthesized column must be '(@op base)'` };
+      }
+      const col = aggColumn(op, inner[1]);
+      if ("message" in col) return col;
+      columns.push(col);
+      i = close + 1;
+      continue;
+    }
+    if (t === ")") return { line, message: `unbalanced ')' in '#acc ${relation}'` };
+    if (t.startsWith("@")) {
+      const col = aggColumn(t, undefined);
+      if ("message" in col) return col;
+      columns.push(col);
+      i++;
+      continue;
+    }
+    if (!isSymToken(t)) {
+      return { line, message: `'#acc ${relation}': column type must be a lower-case symbol (got '${t}')` };
+    }
+    columns.push({ kind: "key", type: t });
+    i++;
+  }
+  return { relation, columns, aggIndex, span: { line } };
 }
 
 function parseEqualText(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {

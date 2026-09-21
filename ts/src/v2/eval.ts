@@ -13,7 +13,7 @@
 import type { Atom, Term, Trail } from "./term.js";
 import { newTrail, trailLength, trailUnwind } from "./term.js";
 import { substAtom, substTerm, unifyAtoms, unifyTerms } from "./unify.js";
-import type { HashconsState } from "./hashcons.js";
+import { hashconsTerm, type HashconsState } from "./hashcons.js";
 import type { JsDef, Rule, RuleAtom } from "./types.js";
 import {
   addOrder,
@@ -21,8 +21,10 @@ import {
   candidatesByHead,
   comparable,
   internAtom,
+  leastUpperBound,
   lessEq,
   lessThan,
+  tokenOf,
   type Store,
 } from "./store.js";
 import { getOrCreateHead } from "./stats.js";
@@ -49,6 +51,21 @@ export function compileJsDefs(jsDefs: Map<string, JsDef>): Map<string, CompiledJ
   return m;
 }
 
+// A computed acc row (plans/v2-acc-relations.md): the key and value column
+// terms (hashconsed, no head, no id) and the row's moment (§2.1).
+export interface AccRow {
+  terms: Term[];
+  moment: Term;
+}
+
+// What a lowered acc rule needs from its caller (acc.ts): the local rows of
+// the relations it reads, and a sink for the contributions its head makes.
+// `AccMatch` / `AccContribute` atoms throw without it.
+export interface AccEvalCtx {
+  rows(relation: string): readonly AccRow[];
+  contribute(relation: string, terms: Term[], moment: Term, firing: string): void;
+}
+
 interface Ctx {
   store: Store;
   schema: Map<string, string>;
@@ -57,6 +74,7 @@ interface Ctx {
   trail: Trail;
   ruleName: string;
   ruleIdx: number;
+  acc?: AccEvalCtx;
 }
 
 export function evaluateRule(
@@ -66,6 +84,7 @@ export function evaluateRule(
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]> = new Map(),
   ruleIdx = -1,
+  acc?: AccEvalCtx,
 ): void {
   const ctx: Ctx = {
     store,
@@ -76,6 +95,7 @@ export function evaluateRule(
     ruleName: rule.name,
     ruleIdx,
   };
+  if (acc !== undefined) ctx.acc = acc;
   const rs = ruleIdx >= 0 ? store.stats.rules[ruleIdx] : undefined;
   if (rs !== undefined) rs.invocations++;
   const tracking = store.stats.enabled && rs !== undefined;
@@ -100,6 +120,8 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
     case "Min":        evalMaxMin(a, ctx, next, false); return;
     case "JsCall":     evalJsCall(a, ctx, next); return;
     case "JsIterate":  evalJsIterate(a, ctx, next); return;
+    case "AccMatch":   evalAccMatch(a, ctx, next); return;
+    case "AccContribute": evalAccContribute(a, ctx, next); return;
     case "Atom":
     case "Sub":
     case "Exception":
@@ -173,6 +195,60 @@ function evalJsIterate(
   }
 }
 
+// Read a local acc row (plans/v2-acc-relations.md §5.3): unify the pattern
+// against `[relation, ...row.terms]` and the moment Variable against the
+// row's moment, as a backtracking choice point over the relation's rows.
+function evalAccMatch(
+  a: Extract<RuleAtom, { tag: "AccMatch" }>,
+  ctx: Ctx,
+  next: () => void,
+): void {
+  const acc = ctx.acc;
+  if (acc === undefined) {
+    throw new Error(`internal: rule '${ctx.ruleName}': AccMatch outside an acc rule`);
+  }
+  const head: Term = { tag: "Symbol", name: a.relation };
+  for (const row of acc.rows(a.relation)) {
+    const mark = trailLength(ctx.trail);
+    const rowAtom: Atom = { terms: [head, ...row.terms] };
+    if (
+      unifyAtoms(a.atom, rowAtom, ctx.trail, ctx.store.hash) &&
+      unifyTerms(a.moment, row.moment, ctx.trail, ctx.store.hash)
+    ) {
+      next();
+    }
+    trailUnwind(ctx.trail, mark);
+  }
+}
+
+// The head of an acc rule: hand one contribution to the acc handler. The
+// contribution's moment is the lub of the matched tuples' left endpoints
+// and matched acc rows' moments (`bot` for none; the handler substitutes
+// the moment being resolved if no lub exists). Firing identity = the ids
+// of the matched stored tuples.
+function evalAccContribute(
+  a: Extract<RuleAtom, { tag: "AccContribute" }>,
+  ctx: Ctx,
+  next: () => void,
+): void {
+  const acc = ctx.acc;
+  if (acc === undefined) {
+    throw new Error(`internal: rule '${ctx.ruleName}': AccContribute outside an acc rule`);
+  }
+  const terms = a.terms.map((t) => hashconsTerm(substTerm(t, ctx.trail), ctx.store.hash));
+  const moments = a.moments.map((t) => substTerm(t, ctx.trail));
+  const lub = leastUpperBound(ctx.store, moments);
+  const moment = lub ?? substTerm({ tag: "Variable", name: ACC_MOMENT_VAR }, ctx.trail);
+  const firing = a.ids.map((t) => String(tokenOf(ctx.store, substTerm(t, ctx.trail)))).join("|");
+  acc.contribute(a.relation, terms, moment, firing);
+  next();
+}
+
+// The Variable a lowered acc rule's body is pinned to (expand.ts
+// `decomposeAccRule` binds every read to it; acc.ts prepends `Equal` of it
+// to the moment being resolved).
+export const ACC_MOMENT_VAR = "_acc_m";
+
 function evalJsCall(
   a: Extract<RuleAtom, { tag: "JsCall" }>,
   ctx: Ctx,
@@ -217,6 +293,18 @@ function evalMatch(
   const rs = ctx.ruleIdx >= 0 ? ctx.store.stats.rules[ctx.ruleIdx] : undefined;
   const hs = getOrCreateHead(ctx.store.stats, head);
   hs.scanCount++;
+  // Display bookkeeping (plans/v2-acc-timeline-display.md): an ordinary
+  // rule's point read of an acc relation is recorded at its moment whether
+  // or not a row matches, so the timeline can mark where a relation was
+  // consulted. Acc rules read through `AccMatch`, so they never land here.
+  if (ctx.store.accRelations.size > 0 && ctx.store.accRelations.has(head)) {
+    const at = substTerm(a.l, ctx.trail);
+    if (at.tag !== "Variable" && at.tag !== "Wildcard") {
+      let seen = ctx.store.accConsulted.get(head);
+      if (seen === undefined) { seen = new Set(); ctx.store.accConsulted.set(head, seen); }
+      seen.add(tokenOf(ctx.store, at));
+    }
+  }
   for (const idx of candidatesByHead(ctx.store, head)) {
     if (rs !== undefined) rs.candScanned++;
     const gen = ctx.store.gens[idx]!;

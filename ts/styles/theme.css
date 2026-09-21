@@ -50,3 +50,26 @@ html.mode-dark .timeline-svg { --tl-bar-bg: #2e2e2e; --tl-bar-line: #fff; --tl-b
  * one expands it again (web-v2.ts). */
 .timeline-svg .tl-bar-collapsed { stroke-dasharray: 3,2; }
 .timeline-svg .tl-bar-collapsed-label { opacity: 0.7; }
+
+/* --- Merged `#acc` bars, read markers, moment inspector (v2/acc-view.ts) --- */
+/* Acc bars are square-cornered and tinted so they read apart from episodes;
+ * an open one carries its dashed right edge as a stroke-dasharray attribute. */
+.timeline-svg { --tl-acc-bg: #e6eef8; }
+html.mode-dark .timeline-svg { --tl-acc-bg: #263140; }
+.timeline-svg .tl-bar.tl-bar-acc { fill: var(--tl-acc-bg); }
+.timeline-svg .tl-bar.tl-bar-acc.source-highlight { fill: var(--tl-bar-hl-caret); }
+.timeline-svg .tl-bar.tl-bar-acc.hover-highlight  { fill: var(--tl-bar-hl-hover); }
+.timeline-svg [data-tl-moment] { cursor: pointer; }
+.tl-acc-toggles { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 11px; color: var(--fg-mute2); margin-bottom: 8px; }
+.tl-acc-toggles-lead { color: var(--fg-faint); }
+.tl-acc-toggles label { cursor: pointer; white-space: nowrap; }
+.tl-inspector { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg-2); font-family: monospace; font-size: 11px; max-width: 520px; }
+.tl-inspector-head { display: flex; justify-content: space-between; align-items: center; color: var(--fg-mute); margin-bottom: 6px; }
+.tl-inspector-head button { border: none; background: none; color: var(--fg-mute); cursor: pointer; font-size: 14px; line-height: 1; }
+.tl-inspector-rel { margin-top: 4px; }
+.tl-inspector-rel-head { color: var(--syn-pred); }
+.tl-inspector-read { margin-left: 8px; padding: 0 4px; border-radius: 3px; background: #e2a03f; color: #1a1a1a; font-size: 10px; }
+.tl-inspector-row { white-space: pre; padding-left: 8px; }
+.tl-inspector-new { color: var(--syn-head); }
+.tl-inspector-gone { color: var(--fg-faint); text-decoration: line-through; }
+.tl-inspector-none { color: var(--fg-faint); }

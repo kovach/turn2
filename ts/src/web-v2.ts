@@ -6,7 +6,7 @@
 import { parse } from "./v2/parse.js";
 import { runFixpoint } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
-import { renderTuples, renderTimelineH, timelineCollapseKey } from "./v2/render-output.js";
+import { renderTuples, renderTimelineH, timelineCollapseKey, momentKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import { attachSourceLink } from "./v2/source-link.js";
 import type { Atom, Term } from "./v2/term.js";
@@ -379,11 +379,52 @@ timelineInlineEl.addEventListener("contextmenu", (e: MouseEvent) => {
   link.setCaretLine(editor.caretLine());
 });
 
+// `#acc` display state (plans/v2-acc-timeline-display.md). `accOverrides`
+// holds the relations whose checkbox the user has touched, by name, so a
+// choice survives re-evaluation; untouched relations follow the default
+// (shown iff an ordinary rule reads them). `inspectKey` is the moment the
+// inspector is open on, by structural fingerprint (momentKey) for the same
+// reason collapse keys are. Both are in-memory only, like `collapsedKeys`.
+const accOverrides = new Map<string, boolean>();
+let inspectKey: string | null = null;
+
+function rerenderTimeline(): void {
+  if (lastStore === null) return;
+  renderDbPane(lastStore);
+  link.setCaretLine(editor.caretLine());
+}
+
+timelineInlineEl.addEventListener("click", (e: MouseEvent) => {
+  const target = e.target as Element | null;
+  if (target === null || lastStore === null) return;
+  if (target.closest("[data-acc-inspector-close]") !== null) {
+    inspectKey = null;
+    rerenderTimeline();
+    return;
+  }
+  const dot = target.closest("[data-tl-moment]");
+  if (dot === null) return;
+  const key = momentKey(lastStore, Number(dot.getAttribute("data-tl-moment")));
+  // Clicking the selected moment again closes the inspector.
+  inspectKey = key === inspectKey ? null : key;
+  rerenderTimeline();
+});
+
+timelineInlineEl.addEventListener("change", (e: Event) => {
+  const box = (e.target as Element | null)?.closest("[data-acc-toggle]") as HTMLInputElement | null;
+  if (box === null) return;
+  accOverrides.set(box.getAttribute("data-acc-toggle")!, box.checked);
+  rerenderTimeline();
+});
+
 function renderDbPane(store: Store): void {
   if (dbView === "timeline") {
     renderTimelineH(timelineInlineEl, store, {
       hideInternal: hideInternalEl.checked,
       collapsedKeys,
+      accOverrides,
+      accControls: true,
+      inspectKey,
     });
   } else {
     renderTuples(dbEl, store, {

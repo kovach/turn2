@@ -68,6 +68,14 @@ export interface Store {
   // strictly below it is marked. In-memory only: every run starts from a
   // fresh store.
   resolved: Set<number>;
+  // `#acc` display bookkeeping (plans/v2-acc-timeline-display.md); never
+  // consulted by evaluation. `accRelations` names every declared acc
+  // relation and says whether some ordinary rule reads it (static; set by
+  // `runFixpoint`). `accConsulted` records, per relation, the moment tokens
+  // at which an ordinary rule's point read was attempted — whether or not
+  // a row matched (`evalMatch`).
+  accRelations: Map<string, { readByRules: boolean }>;
+  accConsulted: Map<string, Set<number>>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
   // Hard cap on inserted tuples. When exceeded, `addTuple` throws GasError;
@@ -133,6 +141,8 @@ export function createStore(): Store {
     gt: new Map(),
     orderBwd: new Map(),
     resolved: new Set(),
+    accRelations: new Map(),
+    accConsulted: new Map(),
     tupleSet: new Set(),
     tupleGas: 0,
     iteration: 1,

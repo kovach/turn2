@@ -67,6 +67,10 @@ function rewriteAtom(a: RuleAtom, live: Set<string>, essential: Set<string>): Ru
       return { ...a, args: a.args.map(rw), out: rw(a.out) };
     case "JsIterate":
       return { ...a, args: a.args.map(rw) };
+    case "AccMatch":
+      return { ...a, atom: { terms: a.atom.terms.map(rw) }, moment: rw(a.moment) };
+    case "AccContribute":
+      return { ...a, terms: a.terms.map(rw), moments: a.moments.map(rw), ids: a.ids.map(rw) };
     case "Atom":
     case "Sub":
     case "Exception":
@@ -100,6 +104,15 @@ function addUses(a: RuleAtom, live: Set<string>): void {
       break;
     case "JsIterate":
       for (const t of a.args) collectVars(t, live);
+      break;
+    case "AccMatch":
+      for (const t of a.atom.terms) collectVars(t, live);
+      collectVars(a.moment, live);
+      break;
+    case "AccContribute":
+      for (const t of a.terms) collectVars(t, live);
+      for (const t of a.moments) collectVars(t, live);
+      for (const t of a.ids) collectVars(t, live);
       break;
     case "Atom":
     case "Sub":

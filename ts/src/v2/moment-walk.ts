@@ -41,6 +41,14 @@ export interface MomentHandler {
   // moments are run alongside the frontier without being re-opened —
   // everything below them is settled, so the answer is as final as it gets.
   demanded?(store: Store): Iterable<number>;
+  // Optional: called once for each moment the walk marks resolved, after
+  // marking, in the same step (`resolveMoments`). Runs only once every
+  // `run` round at `m` has settled, so it sees the final state at `m`. May
+  // add tuples at `m`; returns true iff it did. Used by the acc handler
+  // (acc.ts, plans/v2-acc-relations.md): acc rows are a snapshot of the
+  // state at `m` as of resolution, and what readers then emit at `m` does
+  // not re-open it.
+  resolve?(store: Store, m: Term): boolean;
 }
 
 // Tokens of every moment the store has seen (`momentTerms`) except `top`
@@ -112,6 +120,22 @@ function strictMinimal(store: Store, unresolved: readonly number[]): number[] {
 
 export function markResolved(store: Store, toks: Iterable<number>): void {
   for (const t of toks) store.resolved.add(t);
+}
+
+// Run every handler's `resolve` hook at each just-marked moment. Returns
+// true iff any handler added a tuple (the caller then re-enters the inner
+// loop so readers of the new rows fire).
+export function resolveMoments(store: Store, handlers: readonly MomentHandler[], toks: Iterable<number>): boolean {
+  let progress = false;
+  for (const tok of toks) {
+    const m = store.momentTerms.get(tok);
+    if (m === undefined) continue;
+    for (const h of handlers) {
+      if (h.resolve === undefined) continue;
+      if (h.resolve(store, m)) progress = true;
+    }
+  }
+  return progress;
 }
 
 export interface WalkRound {

@@ -1,5 +1,13 @@
+# timeline display of acc relations
+plan: plans/v2-acc-timeline-display.md
+(implemented 26/09/20)
+
+- acc rows are stored at every resolved moment, so the timeline repeated each value once per moment
+- display only: merge each row content into bars over the moments it holds at; mark on the bars where ordinary rules read the relation; click a moment for the full acc state there (diffed against its predecessors); per-relation checkboxes, defaulting to the relations ordinary rules read
+
 # further refactoring of reactive/agg
 plan: plans/v2-acc-relations.md
+(implemented 26/09/20)
 
 - this feature will eventually supplant reactive/agg/bracket aggregates. for now we'll call it `acc`
 - acc tuples are not asserted by normal rules

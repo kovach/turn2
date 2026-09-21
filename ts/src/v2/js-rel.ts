@@ -150,6 +150,14 @@ function resolveRule(rule: Rule, jsRels: Map<string, JsRelDef[]>): Rule {
         for (const t of a.args) add(t); // every arg is bound after the atom
         return { ...a, defIndex: idx };
       }
+      case "AccMatch":
+        // Binds everything it mentions by unification against a local acc
+        // row (plans/v2-acc-relations.md §4.1).
+        for (const t of a.atom.terms) add(t);
+        add(a.moment);
+        return a;
+      case "AccContribute":
+        return a;
       case "Atom":
       case "Sub":
       case "Exception":

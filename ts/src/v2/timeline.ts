@@ -18,6 +18,7 @@ import { spanKey, type Atom, type Span, type Term } from "./term.js";
 import type { Store } from "./store.js";
 import { tokenOf } from "./store.js";
 import { renderAtom, renderTerm, renderTermShallow } from "./print.js";
+import { accRelationVisible, accRuns, isAccRow, type AccRun } from "./acc-view.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -46,6 +47,8 @@ const PAIR_EXIT_STEP = 8;
 // it never grows to fit the contents it is hiding.
 const COLLAPSED_BAR_W = 30;
 const COLLAPSED_SUFFIX = "...";
+// Read markers on merged `#acc` bars, and the selected-moment ring.
+const ACC_READ_COLOR = "#e2a03f";
 
 export type Measurer = (text: string, fontPx: number) => number;
 
@@ -95,6 +98,14 @@ export interface TimelineOpts {
   // endpoints aren't displayed moments, or that aren't ordered l < r, are
   // ignored; an interval nested inside another collapsed one is subsumed.
   collapsed: CollapsedInterval[];
+  // `#acc` relations (plans/v2-acc-timeline-display.md). Their point rows
+  // are never drawn one by one: each distinct row content is merged into
+  // bars over the moments it holds at (acc-view.ts `accRuns`). This maps a
+  // relation to a forced visibility; a relation without an entry shows iff
+  // some ordinary rule reads it (`accRelationVisible`).
+  accOverrides: ReadonlyMap<string, boolean>;
+  // Moment token to draw as selected (the moment inspector's subject).
+  selectedMoment: number | null;
 }
 
 export const DEFAULT_OPTS: TimelineOpts = {
@@ -110,6 +121,8 @@ export const DEFAULT_OPTS: TimelineOpts = {
   laneMode: "tree",
   momentStyle: "spine",
   collapsed: [],
+  accOverrides: new Map(),
+  selectedMoment: null,
 };
 
 interface MomentNode {
@@ -129,10 +142,25 @@ interface Bar {
   full: string;
   // True for the `...` stand-in bar of a collapsed interval.
   collapsed: boolean;
+  // Set on a merged `#acc` bar (acc-view.ts `accRuns`): `tupleIndex` is then
+  // the row at the bar's first moment.
+  acc?: AccBarInfo;
   // Index of this bar among all bars sharing its starting rank (lane order).
   // Used by the vertical projector to stagger label y-positions so labels
   // for bars that start at the same moment don't overlap.
   startGroupRow: number;
+}
+
+export interface AccBarInfo {
+  relation: string;
+  // The right end is not "the value ended": the next moment is unresolved
+  // (or the bar runs to `top`). Drawn with a dashed right edge.
+  open: boolean;
+  // Displayed moments inside the bar at which an ordinary rule read the
+  // relation. Drawn as markers on the bar.
+  consulted: number[];
+  // Number of moments the content holds at.
+  momentCount: number;
 }
 
 interface Fact {
@@ -255,13 +283,22 @@ export function layoutTimeline(
       continue;
     }
     if (opts.hideInternal && isInternalHead(head)) continue;
+    // Acc rows are drawn as merged bars (`allRuns` below), never one by one.
+    if (isAccRow(store, i)) continue;
     allMainTuples.push(i);
   }
+  const allRuns = accRuns(store).filter((r) => accRelationVisible(store, r.relation, opts.accOverrides));
 
   const botTok = store.botTok;
   const topTok = store.topTok;
 
-  const buildMoments = (idxs: number[]): Map<number, MomentNode> => {
+  // `hiddenMoment` keeps an acc bar's read markers from resurrecting moments
+  // inside a collapsed interval; bar endpoints always survive.
+  const buildMoments = (
+    idxs: number[],
+    runs: AccRun[],
+    hiddenMoment: (tok: number) => boolean,
+  ): Map<number, MomentNode> => {
     const m = new Map<number, MomentNode>();
     for (const i of idxs) {
       const t = store.tuples[i]!;
@@ -270,12 +307,20 @@ export function layoutTimeline(
       if (!m.has(lTok)) m.set(lTok, { tok: lTok, term: t.l, rank: 0 });
       if (!m.has(rTok)) m.set(rTok, { tok: rTok, term: t.r, rank: 0 });
     }
+    for (const run of runs) {
+      if (!m.has(run.lTok)) m.set(run.lTok, { tok: run.lTok, term: run.lTerm, rank: 0 });
+      if (!m.has(run.rTok)) m.set(run.rTok, { tok: run.rTok, term: run.rTerm, rank: 0 });
+      for (const tok of run.consulted) {
+        if (m.has(tok) || hiddenMoment(tok)) continue;
+        m.set(tok, { tok, term: store.momentTerms.get(tok)!, rank: 0 });
+      }
+    }
     if (!m.has(botTok)) m.set(botTok, { tok: botTok, term: store.bot, rank: 0 });
     if (!m.has(topTok)) m.set(topTok, { tok: topTok, term: store.top, rank: 0 });
     return m;
   };
 
-  let moments = buildMoments(allMainTuples);
+  let moments = buildMoments(allMainTuples, allRuns, () => false);
   let gt = reachability(store, new Set(moments.keys()));
 
   // Collapse pass: drop everything inside the requested intervals and stand
@@ -284,6 +329,7 @@ export function layoutTimeline(
   // moment set and reachability are then rebuilt over what survives, which
   // makes the interior moments (and their ranks) vanish.
   let mainTuples = allMainTuples;
+  let runs = allRuns;
   const collapsedBars: { lTok: number; rTok: number; tupleIndex: number; label: string; full: string }[] = [];
   if (opts.collapsed.length > 0) {
     const leq0 = (a: number, b: number): boolean => a === b || (gt.get(a)?.has(b) ?? false);
@@ -344,7 +390,14 @@ export function layoutTimeline(
 
     const allMoments = moments;
     mainTuples = kept;
-    moments = buildMoments(mainTuples);
+    // A merged acc bar folds away like an episode: when it lies inside a
+    // collapsed interval.
+    runs = allRuns.filter((run) => !owned.some((I) => inside(run.lTok, run.rTok, I)));
+    const orderAtCollapse = gt;
+    const strictlyInside = (tok: number): boolean => owned.some((I) =>
+      tok !== I.l && tok !== I.r
+      && (orderAtCollapse.get(I.l)?.has(tok) ?? false) && (orderAtCollapse.get(tok)?.has(I.r) ?? false));
+    moments = buildMoments(mainTuples, runs, strictlyInside);
     // The collapsed endpoints must survive even when no remaining tuple
     // mentions them.
     for (const I of ivs) {
@@ -450,6 +503,23 @@ export function layoutTimeline(
       rawBars.push({ tupleIndex: i, lTok, rTok, lRank, rRank, label, full, collapsed: false });
     }
   }
+  for (const run of runs) {
+    const t = store.tuples[run.tupleIndex]!;
+    const content = renderAtom(store, t.atom);
+    const consulted = run.consulted.filter((tok) => moments.has(tok));
+    const n = run.moments.length;
+    const full = `${content}  [acc · ${n} moment${n === 1 ? "" : "s"}`
+      + (run.consulted.length > 0 ? ` · read at ${run.consulted.length}` : "")
+      + (run.open ? " · open" : "") + "]";
+    rawBars.push({
+      tupleIndex: run.tupleIndex,
+      lTok: run.lTok, rTok: run.rTok,
+      lRank: moments.get(run.lTok)!.rank,
+      rRank: moments.get(run.rTok)!.rank,
+      label: truncate(content, opts.barLabelMaxLen), full, collapsed: false,
+      acc: { relation: run.relation, open: run.open, consulted, momentCount: n },
+    });
+  }
   for (const c of collapsedBars) {
     rawBars.push({
       tupleIndex: c.tupleIndex,
@@ -465,10 +535,18 @@ export function layoutTimeline(
   // share a rank without being comparable in the order.
   const leqTok = (a: number, b: number): boolean =>
     a === b || (gt.get(a)?.has(b) ?? false);
-  const { bars, laneCount: packedLaneCount } =
-    opts.laneMode === "nested" ? packBarsNested(rawBars, leqTok) :
-    opts.laneMode === "tree"   ? packBarsTree(rawBars, leqTok) :
-    packBarsCompact(rawBars);
+  // Merged acc bars are packed apart from the episodes, in a band of lanes
+  // above them (`packAccBand`). They are not episodes: most run to `top`, so
+  // in the containment forest they would adopt every later episode.
+  const plainRaw = rawBars.filter((b) => b.acc === undefined);
+  const accRaw = rawBars.filter((b) => b.acc !== undefined);
+  const plainPacked =
+    opts.laneMode === "nested" ? packBarsNested(plainRaw, leqTok) :
+    opts.laneMode === "tree"   ? packBarsTree(plainRaw, leqTok) :
+    packBarsCompact(plainRaw);
+  const accPacked = packAccBand(accRaw, leqTok, plainPacked.laneCount);
+  const bars = [...plainPacked.bars, ...accPacked.bars];
+  const packedLaneCount = accPacked.laneCount;
   // Group bars by starting rank; assign each its row within the group
   // (lane-ordered). Track the largest group for downstream sizing.
   const byStartRank = new Map<number, PartialBar[]>();
@@ -585,7 +663,16 @@ export function layoutTimeline(
   for (const b of barOrder) {
     const lR = moments.get(b.lTok)!.rank;
     const rR = moments.get(b.rTok)!.rank;
-    if (rR <= lR) continue;
+    if (rR <= lR) {
+      // Point bar: its label is drawn to the right of its tick, so the gap
+      // after its rank has to hold it (like a fact label). Nothing else on
+      // its lane starts before the next rank (see `fits` / `placeBar`).
+      if (isPointBar(b) && lR < maxRank) {
+        const w = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
+        if (w > colWidths[lR]!) colWidths[lR] = w;
+      }
+      continue;
+    }
     // A collapsed bar only has to fit `name...`, floored at COLLAPSED_BAR_W —
     // never the width of what it hides.
     const labelW = measure(b.label, BAR_LABEL_PX) + BAR_LABEL_PAD;
@@ -613,6 +700,7 @@ export function layoutTimeline(
     lTok: b.lTok, rTok: b.rTok,
     lane: b.lane, label: b.label, full: b.full,
     collapsed: b.collapsed,
+    ...(b.acc !== undefined ? { acc: b.acc } : {}),
     startGroupRow: b.startGroupRow,
   }));
 
@@ -622,8 +710,12 @@ export function layoutTimeline(
   // tupleIndex order, `l` before `r`; later occurrences become dashed ties.
   const momentAnchor = new Map<number, { barIndex: number; side: "l" | "r" } | null>();
   const momentTies: { tok: number; barIndex: number; side: "l" | "r" }[] = [];
+  // Episode bars anchor before merged acc bars, so a moment's dot sits on an
+  // episode's edge whenever it has one.
   const barOrderIdx = finalBars.map((_, i) => i)
-    .sort((a, b) => finalBars[a]!.tupleIndex - finalBars[b]!.tupleIndex);
+    .sort((a, b) =>
+      ((finalBars[a]!.acc === undefined ? 0 : 1) - (finalBars[b]!.acc === undefined ? 0 : 1))
+      || (finalBars[a]!.tupleIndex - finalBars[b]!.tupleIndex));
   for (const i of barOrderIdx) {
     const b = finalBars[i]!;
     for (const side of ["l", "r"] as const) {
@@ -650,8 +742,18 @@ function truncate(s: string, n: number): string {
 
 // --- Lane-pack strategies ---
 
-type RawBar = { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string; collapsed: boolean };
+type RawBar = { tupleIndex: number; lTok: number; rTok: number; lRank: number; rRank: number; label: string; full: string; collapsed: boolean; acc?: AccBarInfo };
 type PartialBar = Bar & { lRank: number };
+
+// A bar with no extent: a tuple stored at the point `[m, m]`.
+function isPointBar(b: { lTok: number; rTok: number }): boolean {
+  return b.lTok === b.rTok;
+}
+
+// True iff two bars share an endpoint moment.
+function barsTouch(a: { lTok: number; rTok: number }, b: { lTok: number; rTok: number }): boolean {
+  return a.lTok === b.lTok || a.lTok === b.rTok || a.rTok === b.lTok || a.rTok === b.rTok;
+}
 
 // Greedy interval-graph packing — minimum lane count.
 function packBarsCompact(rawBars: RawBar[]): { bars: PartialBar[]; laneCount: number } {
@@ -746,8 +848,15 @@ function makePlacer(
   const lanes: RawBar[][] = [];
   const lane: number[] = new Array(N).fill(-1);
 
+  // A point bar (`l === r` — e.g. an acc row at `[m, m]`,
+  // plans/v2-acc-relations.md) has no extent, so "temporally disjoint" with
+  // non-strict endpoints would let any number of points at one moment, and
+  // the bars that start or end there, share a lane and draw on top of each
+  // other. A point therefore also conflicts with every bar it touches.
   const fits = (laneBars: RawBar[], b: RawBar): boolean =>
-    laneBars.every((x) => leqTok(x.rTok, b.lTok) || leqTok(b.rTok, x.lTok));
+    laneBars.every((x) =>
+      (leqTok(x.rTok, b.lTok) || leqTok(b.rTok, x.lTok)) &&
+      !((isPointBar(x) || isPointBar(b)) && barsTouch(x, b)));
 
   const place = (idx: number, minLane: number): void => {
     const b = rawBars[idx]!;
@@ -767,6 +876,7 @@ function makePlacer(
         lTok: b.lTok, rTok: b.rTok,
         lane: lane[i]!, label: b.label, full: b.full,
         collapsed: b.collapsed,
+        ...(b.acc !== undefined ? { acc: b.acc } : {}),
         startGroupRow: 0, lRank: b.lRank,
       };
     }
@@ -818,18 +928,55 @@ function packBarsTree(
   return finalize();
 }
 
+// Lanes for the merged `#acc` bars, stacked above lane `baseLane`. Each
+// relation gets its own run of lanes, and within it a bar takes the first
+// lane that is free over its interval — so a key whose value changes reads
+// left to right along one lane (`occupancy here 1` then `occupancy here 2`),
+// like a track. Relations are ordered by name, bars by start.
+function packAccBand(
+  accBars: RawBar[],
+  leqTok: (a: number, b: number) => boolean,
+  baseLane: number,
+): { bars: PartialBar[]; laneCount: number } {
+  if (accBars.length === 0) return { bars: [], laneCount: baseLane };
+  const order = accBars.map((_, i) => i).sort((i, j) => {
+    const A = accBars[i]!, B = accBars[j]!;
+    return A.acc!.relation.localeCompare(B.acc!.relation)
+      || (A.lRank - B.lRank) || (A.rRank - B.rRank) || (A.tupleIndex - B.tupleIndex);
+  });
+  const { place, lane, finalize } = makePlacer(accBars, leqTok);
+  let bandStart = 0;
+  let used = 0;
+  let relation: string | null = null;
+  for (const i of order) {
+    const rel = accBars[i]!.acc!.relation;
+    if (rel !== relation) { relation = rel; bandStart = used; }
+    place(i, bandStart);
+    if (lane[i]! + 1 > used) used = lane[i]! + 1;
+  }
+  const packed = finalize();
+  for (const b of packed.bars) b.lane += baseLane;
+  return { bars: packed.bars, laneCount: baseLane + used };
+}
+
 function placeBar(b: RawBar, laneEnds: number[]): PartialBar {
+  // Point bars (`l === r`) occupy their rank exclusively: one may not join a
+  // lane whose last bar ends at its rank, and it leaves the lane's frontier
+  // half a rank past itself so nothing starting at that rank follows it.
+  const point = isPointBar(b);
   let lane = -1;
   for (let li = 0; li < laneEnds.length; li++) {
-    if (laneEnds[li]! <= b.lRank) { lane = li; break; }
+    const end = laneEnds[li]!;
+    if (point ? end < b.lRank : end <= b.lRank) { lane = li; break; }
   }
-  if (lane < 0) { lane = laneEnds.length; laneEnds.push(0); }
-  laneEnds[lane] = b.rRank;
+  if (lane < 0) { lane = laneEnds.length; laneEnds.push(-1); }
+  laneEnds[lane] = point ? b.rRank + 0.5 : b.rRank;
   return {
     tupleIndex: b.tupleIndex,
     lTok: b.lTok, rTok: b.rTok,
     lane, label: b.label, full: b.full,
     collapsed: b.collapsed,
+    ...(b.acc !== undefined ? { acc: b.acc } : {}),
     startGroupRow: 0, lRank: b.lRank,
   };
 }
@@ -1246,7 +1393,32 @@ export function renderTimeline(
     const title = document.createElementNS(SVG_NS, "title");
     title.textContent = renderTermShallow(store, m.term);
     dot.appendChild(title);
+    dot.classList.add("tl-moment");
     svg.appendChild(dot);
+    if (o.selectedMoment === m.tok) {
+      const ring = document.createElementNS(SVG_NS, "circle");
+      ring.setAttribute("cx", String(p.x));
+      ring.setAttribute("cy", String(p.y));
+      ring.setAttribute("r", "6.5");
+      ring.setAttribute("fill", "none");
+      ring.setAttribute("stroke", ACC_READ_COLOR);
+      ring.setAttribute("stroke-width", "2");
+      ring.classList.add("tl-moment-selected");
+      svg.appendChild(ring);
+    }
+    // A 3px dot is a poor click target; this transparent disc over it is what
+    // the host listens on (`data-tl-moment`: the moment inspector, web-v2).
+    const hit = document.createElementNS(SVG_NS, "circle");
+    hit.setAttribute("cx", String(p.x));
+    hit.setAttribute("cy", String(p.y));
+    hit.setAttribute("r", "6");
+    hit.setAttribute("fill", "transparent");
+    hit.setAttribute("data-tl-moment", String(m.tok));
+    hit.classList.add("tl-moment-hit");
+    const hitTitle = document.createElementNS(SVG_NS, "title");
+    hitTitle.textContent = renderTermShallow(store, m.term);
+    hit.appendChild(hitTitle);
+    svg.appendChild(hit);
     if (isBot || isTop) {
       const tp = proj.endTickPos(m.rank, isBot ? "bot" : "top");
       const txt = document.createElementNS(SVG_NS, "text");
@@ -1283,6 +1455,37 @@ export function renderTimeline(
     rect.setAttribute("stroke-width", "1");
     rect.classList.add("tl-bar");
     if (b.collapsed) rect.classList.add("tl-bar-collapsed");
+    if (b.acc !== undefined) {
+      // Merged acc bars are square-cornered (episodes are rounded), and an
+      // open one has a dashed right edge. A rect's outline starts at its
+      // top-left corner and runs clockwise, so the dash pattern is: the top
+      // edge solid, the right edge dashed, the rest solid.
+      rect.classList.add("tl-bar-acc");
+      rect.setAttribute("rx", "0");
+      rect.setAttribute("data-tl-acc", b.acc.relation);
+      if (b.acc.open) {
+        rect.classList.add("tl-bar-acc-open");
+        const horizontal = o.orientation === "horizontal";
+        // Horizontal: the open (later) end is the right edge. Vertical: it is
+        // the bottom edge, third on the outline.
+        const lead = horizontal ? r.w : r.w + r.h;
+        const dashed = horizontal ? r.h : r.w;
+        const pattern: number[] = [lead];
+        let left = dashed;
+        while (left > 0) {
+          const gap = Math.min(3, left);
+          pattern.push(gap);
+          left -= gap;
+          if (left <= 0) break;
+          const dash = Math.min(3, left);
+          pattern.push(dash);
+          left -= dash;
+        }
+        if (pattern.length % 2 === 1) pattern.push(0);
+        pattern.push(2 * (r.w + r.h));
+        rect.setAttribute("stroke-dasharray", pattern.join(","));
+      }
+    }
     // Identifies the bar's tuple for host-side interactions (e.g. the
     // right-click collapse toggle in web-v2). Omitted when there is no tuple.
     if (b.tupleIndex >= 0) rect.setAttribute("data-tl-tuple", String(b.tupleIndex));
@@ -1320,6 +1523,28 @@ export function renderTimeline(
       label.setAttribute("data-bar-label", "");
     }
     svg.appendChild(label);
+    // Read markers: one per displayed moment inside the bar at which an
+    // ordinary rule read the relation. Placed on the bar's outer corner at
+    // that moment (top edge in horizontal, left edge in vertical), clear of
+    // the label and of the moment dots on the bar's mid-line.
+    if (b.acc !== undefined) {
+      for (const tok of b.acc.consulted) {
+        const at = layout.moments.get(tok);
+        if (at === undefined) continue;
+        const c = proj.barRect(at.rank, at.rank, b.lane);
+        const mark = document.createElementNS(SVG_NS, "circle");
+        mark.setAttribute("cx", String(c.x));
+        mark.setAttribute("cy", String(c.y));
+        mark.setAttribute("r", "3");
+        mark.setAttribute("fill", ACC_READ_COLOR);
+        mark.classList.add("tl-acc-read");
+        mark.setAttribute("data-tl-moment", String(tok));
+        const mt = document.createElementNS(SVG_NS, "title");
+        mt.textContent = `${b.acc.relation}: read here by an ordinary rule`;
+        mark.appendChild(mt);
+        svg.appendChild(mark);
+      }
+    }
   }
   };
 

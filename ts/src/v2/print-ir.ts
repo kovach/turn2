@@ -13,7 +13,7 @@
 // still renders as an opaque `*n` handle, so nothing unfolds unboundedly.
 
 import type { Atom, Term } from "./term.js";
-import type { Program, Rule, RuleAtom } from "./types.js";
+import type { AccRule, Program, Rule, RuleAtom } from "./types.js";
 
 export function renderTermRaw(term: Term): string {
   switch (term.tag) {
@@ -93,6 +93,11 @@ export function renderRuleAtom(atom: RuleAtom): string {
       const c = atom.constraint ? `[${atom.constraint}]` : "";
       return `Match${c} ${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
     }
+    case "AccMatch":
+      return `AccMatch ${renderAtomRaw(atom.atom)} @${renderTermRaw(atom.moment)}`;
+    case "AccContribute":
+      return `AccContribute ${atom.relation} ${atom.terms.map(renderTermRaw).join(" ")}` +
+        ` [moments: ${atom.moments.map(renderTermRaw).join(" ")}; ids: ${atom.ids.map(renderTermRaw).join(" ")}]`;
     case "Emit":
       return `Emit ${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
     case "Le":
@@ -143,7 +148,27 @@ export function renderProgram(program: Program, opts: RenderOptions = {}): strin
       parts.push(`#js-def ${c.name} ${c.params.map((p) => p.mode + p.name).join(" ")} { ... }`);
     }
   }
+  for (const decl of program.accDecls.values()) {
+    const cols = decl.columns.map((c) =>
+      c.kind === "key" ? c.type : c.type === undefined ? `@${c.op}` : `(@${c.op} ${c.type})`,
+    );
+    parts.push(`#acc ${decl.relation} : ${cols.join(" ")}`);
+  }
   if (parts.length > 0) parts.push("");
-  parts.push(program.rules.map((r) => renderRule(r, opts)).join("\n\n"));
+  const ruleTexts = program.rules.map((r) => renderRule(r, opts));
+  for (const r of program.accRules) ruleTexts.push(renderAccRule(r, opts));
+  parts.push(ruleTexts.join("\n\n"));
   return parts.join("\n");
+}
+
+// An acc rule (plans/v2-acc-relations.md): body atoms as usual, then the
+// head after a `/` line.
+export function renderAccRule(rule: AccRule, opts: RenderOptions = {}): string {
+  const tag = opts.lines ? `${lineTag(rule.span.line)} ` : "";
+  const header = `${tag}#def ${rule.name}  [acc]`;
+  const body = rule.body
+    .map((a) => `  ${opts.lines ? `${lineTag(a.span.line)} ` : ""}${renderRuleAtom(a)}`)
+    .join("\n");
+  const head = `  / ${renderAtomRaw(rule.head)}`;
+  return body.length > 0 ? `${header}\n${body}\n${head}` : `${header}\n${head}`;
 }

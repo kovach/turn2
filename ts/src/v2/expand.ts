@@ -9,9 +9,11 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "./term.js";
-import type { JsDef, JsRelDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
+import type { AccDecl, AccRule, JsDef, JsRelDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 import { resolveJsModes } from "./js-rel.js";
+import { accOp, UNIT } from "./acc-ops.js";
+import { ACC_MOMENT_VAR } from "./eval.js";
 
 // The named intermediate rule-lists of the expansion pipeline, in order. The
 // CLI's `--stage` flag dumps these; `expand` returns the final `variants`.
@@ -29,7 +31,7 @@ export function expandStages(program: Program): ExpandStages {
   const macroExpanded = program.rules;
   program = applyExceptions(program);
   const decomposed = program.rules.map((r) => {
-    const { rule, essential } = decomposeRule(r, program.jsDefs, program.jsRels, program.reactive);
+    const { rule, essential } = decomposeRule(r, program.jsDefs, program.jsRels, program.reactive, program.accDecls);
     return pruneChains(rule, essential);
   });
   const split: Rule[] = [];
@@ -59,6 +61,8 @@ export function expand(program: Program): Program {
     jsDefs: program.jsDefs,
     jsRels: program.jsRels,
     macros: new Map(),
+    accDecls: program.accDecls,
+    accRules: program.accRules,
   };
 }
 
@@ -390,6 +394,10 @@ export function applyExceptions(program: Program): Program {
       if (program.jsRels.has(p)) {
         throw new Error(`rule '${R.name}': js relation '${p}' cannot be an exception's left-hand side`);
       }
+      // Nor is an acc relation (computed by `/` rules at resolution).
+      if (program.accDecls.has(p)) {
+        throw new Error(`rule '${R.name}': acc relation '${p}' cannot be an exception's left-hand side`);
+      }
       const tTerms = exc.left.terms.slice(1);
 
       // 1. Flag key t° = t1..tn with each wildcard replaced by a fresh
@@ -700,9 +708,14 @@ function collectProgramSymbols(program: Program): Set<string> {
     }
   };
   for (const r of program.rules) walk(r.body);
+  for (const r of program.accRules) {
+    walk(r.body);
+    for (const t of r.head.terms) term(t);
+  }
   for (const key of program.schema.keys()) out.add(key);
   for (const key of program.jsDefs.keys()) out.add(key);
   for (const key of program.jsRels.keys()) out.add(key);
+  for (const key of program.accDecls.keys()) out.add(key);
   return out;
 }
 
@@ -837,6 +850,10 @@ interface DecState {
   // a plain Match of the `_aggval` value relation instead of the demand
   // `_do-agg`/`_agg-result` pair. See plans/v2-reactive-aggregates.md.
   reactive: Set<string>;
+  // Relations declared `#acc` (plans/v2-acc-relations.md): a plain match
+  // lowers to a point read at the anchor's left endpoint
+  // (`decomposeAccRead`); every other appearance is an error.
+  accDecls: Map<string, AccDecl>;
 }
 
 const SYM_BOT: Term = { tag: "Symbol", name: "bot" };
@@ -869,14 +886,15 @@ const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
-function decomposeRule(
-  rule: Rule,
+function freshDecState(
+  ruleName: string,
   jsDefs: Map<string, JsDef>,
   jsRels: Map<string, JsRelDef[]>,
   reactive: Set<string>,
-): { rule: Rule; essential: Set<string> } {
-  const state: DecState = {
-    ruleName: rule.name,
+  accDecls: Map<string, AccDecl>,
+): DecState {
+  return {
+    ruleName,
     out: [],
     lexPos: 0,
     anchorCounter: 0,
@@ -889,9 +907,181 @@ function decomposeRule(
     jsRels,
     jsCounter: 0,
     reactive,
+    accDecls,
   };
+}
+
+function decomposeRule(
+  rule: Rule,
+  jsDefs: Map<string, JsDef>,
+  jsRels: Map<string, JsRelDef[]>,
+  reactive: Set<string>,
+  accDecls: Map<string, AccDecl>,
+): { rule: Rule; essential: Set<string> } {
+  const state = freshDecState(rule.name, jsDefs, jsRels, reactive, accDecls);
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
   return { rule: { ...rule, body: state.out }, essential: state.essential };
+}
+
+// ----- Acc rules (plans/v2-acc-relations.md §4.1) -----
+//
+// Lower `body / head` into a flat body the evaluator runs at one moment.
+// The anchor is the single Variable `_acc_m` (ACC_MOMENT_VAR); acc.ts
+// prepends `Equal _acc_m <m>` per moment. Every stored-tuple read is a
+// point-containment check (`Le l m`, `Le m r`), never a Max/Min — the anchor
+// is the point and never moves. Reads of other acc relations become
+// `AccMatch` against the handler's local rows; the head becomes one
+// `AccContribute`. No split, no chain pruning, no delta variants: acc rules
+// run naively to a local fixpoint inside the handler.
+export function decomposeAccRule(rule: AccRule, program: Program): Rule {
+  const state = freshDecState(rule.name, program.jsDefs, program.jsRels, program.reactive, program.accDecls);
+  const M: Term = { tag: "Variable", name: ACC_MOMENT_VAR };
+  state.seen.add(ACC_MOMENT_VAR);
+  state.chain.push(M);
+  const moments: Term[] = [];
+  const ids: Term[] = [];
+  for (const a of rule.body) {
+    if (a.tag === "Equal") {
+      collectVarsTerm(a.lhs, state);
+      collectVarsTerm(a.rhs, state);
+      state.out.push(a);
+      continue;
+    }
+    if (a.tag !== "Atom") {
+      throw new Error(`internal: acc rule '${rule.name}': unexpected body atom '${a.tag}'`);
+    }
+    state.lexPos++;
+    if (decomposeJsRel(a, state)) continue;
+    const h = a.atom.terms[0];
+    const hn = h !== undefined && h.tag === "Symbol" ? h.name : undefined;
+    if (a.lLit !== undefined || a.rLit !== undefined) {
+      throw new Error(`acc rule '${rule.name}': endpoint literals are not supported in acc bodies`);
+    }
+    const k = state.lexPos;
+    if (hn !== undefined && state.accDecls.has(hn)) {
+      // Read of another acc relation, at this same moment.
+      if (a.weight !== undefined) {
+        throw new Error(`acc rule '${rule.name}': acc relation '${hn}' carries no '-> weight'`);
+      }
+      const decl = state.accDecls.get(hn)!;
+      if (a.atom.terms.length - 1 !== decl.columns.length) {
+        throw new Error(
+          `acc rule '${rule.name}': '${hn}' has ${decl.columns.length} column(s), pattern has ${a.atom.terms.length - 1}`,
+        );
+      }
+      const mv: Term = { tag: "Variable", name: `_am_${k}` };
+      state.seen.add(mv.name);
+      state.chain.push(mv);
+      state.essential.add(mv.name);
+      state.out.push({ tag: "AccMatch", relation: hn, atom: a.atom, moment: mv, span: a.span });
+      for (const t of a.atom.terms) collectVarsTerm(t, state);
+      moments.push(mv);
+      continue;
+    }
+    if (a.weight !== undefined) {
+      // The parser only lets a `#reactive` read through with a weight.
+      if (hn === undefined || !state.reactive.has(hn)) {
+        throw new Error(`acc rule '${rule.name}': weighted read of '${hn ?? "?"}' is not a #reactive relation`);
+      }
+      decomposeReactiveRead(a, state, M, M);
+      continue;
+    }
+    // Ordinary stored relation: Match at (l, r) with the tuple's id bound
+    // (firing identity), then point containment of `_acc_m`.
+    const lVar: Term = { tag: "Variable", name: `_l_${k}` };
+    const rVar: Term = { tag: "Variable", name: `_r_${k}` };
+    const idVar: Term = { tag: "Variable", name: `_id_${k}` };
+    for (const v of [lVar, rVar, idVar]) {
+      if (v.tag !== "Variable") continue;
+      state.seen.add(v.name);
+      state.chain.push(v);
+      state.essential.add(v.name);
+    }
+    const matchAtom: Atom = { terms: [...a.atom.terms, idVar] };
+    state.out.push({ tag: "Match", atom: matchAtom, l: lVar, r: rVar, span: a.span });
+    state.out.push({ tag: "Le", a: lVar, b: M, span: a.span });
+    state.out.push({ tag: "Le", a: M, b: rVar, span: a.span });
+    for (const t of a.atom.terms) collectVarsTerm(t, state);
+    moments.push(lVar);
+    ids.push(idVar);
+  }
+  // Head: every column term must be ground given the body (range
+  // restriction); `@js(...)` lowers to JsCall atoms pushed before the
+  // contribution; the agg column of an arity-0 op is the unit.
+  const headSym = rule.head.terms[0];
+  if (headSym === undefined || headSym.tag !== "Symbol") {
+    throw new Error(`internal: acc rule '${rule.name}': head is not a Symbol`);
+  }
+  const decl = program.accDecls.get(headSym.name);
+  if (decl === undefined) {
+    throw new Error(`acc rule '${rule.name}': head '${headSym.name}' is not declared with '#acc'`);
+  }
+  const aggCol = decl.aggIndex === null ? null : decl.columns[decl.aggIndex]!;
+  const op = aggCol !== null && aggCol.kind === "agg" ? accOp(aggCol.op) : undefined;
+  const lexPos = state.lexPos + 1;
+  const terms: Term[] = rule.head.terms.slice(1).map((t, i) => {
+    if (decl.aggIndex === i && op !== undefined && op.arity === 0) return UNIT;
+    return accHeadTerm(t, state, lexPos, rule.span);
+  });
+  state.out.push({ tag: "AccContribute", relation: headSym.name, terms, moments, ids, span: rule.span });
+  return { name: rule.name, body: state.out, span: rule.span };
+}
+
+// Head terms of an acc rule: bound Variables and ground terms pass through,
+// `@js(...)` lowers, anything unbound is a range-restriction error.
+function accHeadTerm(t: Term, state: DecState, lexPos: number, span: Span): Term {
+  if (t.tag === "Variable") {
+    if (t.name === "_" || !state.seen.has(t.name)) {
+      throw new Error(
+        `acc rule '${state.ruleName}': head variable '${t.name}' is not bound by the body`,
+      );
+    }
+    return t;
+  }
+  if (t.tag === "Wildcard") {
+    throw new Error(`acc rule '${state.ruleName}': '_' in the head has no value`);
+  }
+  if (isJsHead(t)) return lowerJsCall(t, state, lexPos, span);
+  if (t.tag === "Atom" || t.tag === "Id") {
+    return { tag: t.tag, atom: { terms: t.atom.terms.map((x) => accHeadTerm(x, state, lexPos, span)) } };
+  }
+  return t;
+}
+
+// An acc relation read in an ordinary rule (plans/v2-acc-relations.md
+// §4.3): `Match [name, pat…, _] at (XL, XL)`, anchor unchanged — the same
+// shape as a reactive read. Samples the relation at the anchor's start and
+// cannot fire before the walk has resolved that moment. Returns true when
+// the atom was consumed; any non-match use of an acc relation throws.
+function decomposeAccRead(
+  a: Extract<RuleAtom, { tag: "Atom" }>,
+  state: DecState,
+  XL: Term,
+): boolean {
+  if (a.subAtoms !== undefined) return false; // `!(...)`: checked in buildConstrainRowAtom
+  const h = a.atom.terms[0];
+  if (h === undefined || h.tag !== "Symbol" || !state.accDecls.has(h.name)) return false;
+  if (a.marker !== "match" || a.weight !== undefined) {
+    throw new Error(
+      `rule '${state.ruleName}': '${h.name}' is an acc relation — computed by '/' rules, never asserted; ` +
+      `read it with a plain match (no marker, no '-> weight')`,
+    );
+  }
+  const decl = state.accDecls.get(h.name)!;
+  if (a.atom.terms.length - 1 !== decl.columns.length) {
+    throw new Error(
+      `rule '${state.ruleName}': '${h.name}' has ${decl.columns.length} column(s), pattern has ${a.atom.terms.length - 1}`,
+    );
+  }
+  const matchAtom: Atom = { terms: [...a.atom.terms, { tag: "Wildcard" }] };
+  const constraint = (a as { constraint?: MatchConstraint }).constraint;
+  state.out.push(
+    constraint === undefined
+      ? { tag: "Match", atom: matchAtom, l: XL, r: XL, span: a.span }
+      : { tag: "Match", atom: matchAtom, l: XL, r: XL, constraint, span: a.span },
+  );
+  for (const t of a.atom.terms) collectVarsTerm(t, state);
+  return true;
 }
 
 function freshAnchorVar(state: DecState, kind: "xl" | "xr"): Term {
@@ -1134,6 +1324,9 @@ function decomposeBody(
       // the running anchor untouched (js relations are timeless). Any
       // other appearance throws inside decomposeJsRel.
       if (decomposeJsRel(a, state)) continue;
+      // acc relations (plans/v2-acc-relations.md): a point read at the
+      // anchor's left; anchor unchanged.
+      if (decomposeAccRead(a, state, XL)) continue;
       if (a.marker === "match") {
         const next = decomposeMatch(a, state, XL, XR);
         XL = next.XL;
@@ -1493,6 +1686,14 @@ function aggCompOutCols(
         `${where}: js relation '${ih.name}' cannot appear inside a '[ ... ]' aggregate query`,
       );
     }
+    // acc relations too: the bracket join reads stored tuples containing the
+    // anchor, and acc rows are point rows at resolved moments
+    // (plans/v2-acc-relations.md §10).
+    if (ih !== undefined && ih.tag === "Symbol" && state !== null && state.accDecls.has(ih.name)) {
+      throw new Error(
+        `${where}: acc relation '${ih.name}' cannot appear inside a '[ ... ]' aggregate query (not yet supported)`,
+      );
+    }
     for (const t of it.atom.terms) {
       if (state !== null && isJsHead(t)) jsNotAllowed(state);
       noteFreeVars(t, prefixSeen, seen, join);
@@ -1715,6 +1916,15 @@ function buildConstrainRowAtom(
 
   const subTerms: Term[] = [SYM_CONJ];
   for (const sub of subAtoms) {
+    // acc relations are not readable inside `!(...)` yet: constraint-query
+    // reads stored tuples containing the component's anchor, and acc rows
+    // are point rows (plans/v2-acc-relations.md §10).
+    const sh = sub.atom.terms[0];
+    if (sh !== undefined && sh.tag === "Symbol" && state.accDecls.has(sh.name)) {
+      throw new Error(
+        `rule '${state.ruleName}': acc relation '${sh.name}' cannot appear inside a '!(...)' block (not yet supported)`,
+      );
+    }
     // A sub-atom naming a `#js-def` relation is tagged `*c-js` so the
     // constraint-query evaluator enumerates its generator instead of
     // reading the store (plans/v2-js-rel-in-constrain.md). No `-> weight`
