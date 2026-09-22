@@ -778,7 +778,9 @@ no `#acc` declarations pays one no-op `resolve` per marked moment.
   contributions cannot; it belongs to the negation follow-up above).
 - Acc relations inside `[...]` queries and `!(...)` blocks (they need the
   bracket join and constraint-query to read point rows at the component's
-  moment).
+  moment). (`!(...)`: done since — plans/v2-choice-components-by-moment.md
+  step 6, which also moves the acc write from resolution to a `settle` stage
+  ahead of it. `[...]` is still open.)
 - Static well-definedness: a warning when a non-`idempotent` op (registry
   flag) lies on a recursive stratum, or when an acc relation is read by a
   rule that `^`-emits into one of its contributors

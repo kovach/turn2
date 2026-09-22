@@ -1916,14 +1916,27 @@ function buildConstrainRowAtom(
 
   const subTerms: Term[] = [SYM_CONJ];
   for (const sub of subAtoms) {
-    // acc relations are not readable inside `!(...)` yet: constraint-query
-    // reads stored tuples containing the component's anchor, and acc rows
-    // are point rows (plans/v2-acc-relations.md §10).
+    // An acc relation inside `!(...)` is an ordinary `*c-plain` sub-atom
+    // (plans/v2-choice-components-by-moment.md step 6): the component is
+    // evaluated at its ask moment `m`, the acc rows at `m` are written when
+    // `m` settles — before its choices surface — and constraint-query's
+    // stored-tuple match admits a point row at `[m, m]`. Only the shape is
+    // checked here.
     const sh = sub.atom.terms[0];
-    if (sh !== undefined && sh.tag === "Symbol" && state.accDecls.has(sh.name)) {
-      throw new Error(
-        `rule '${state.ruleName}': acc relation '${sh.name}' cannot appear inside a '!(...)' block (not yet supported)`,
-      );
+    const accDecl = sh !== undefined && sh.tag === "Symbol" ? state.accDecls.get(sh.name) : undefined;
+    if (accDecl !== undefined) {
+      if (sub.kind === "agg") {
+        throw new Error(
+          `rule '${state.ruleName}': acc relation '${accDecl.relation}' cannot take '-> weight' inside a ` +
+          `'!(...)' block — it is computed by '/' rules; read it with a plain pattern`,
+        );
+      }
+      if (sub.atom.terms.length - 1 !== accDecl.columns.length) {
+        throw new Error(
+          `rule '${state.ruleName}': '${accDecl.relation}' has ${accDecl.columns.length} column(s), ` +
+          `pattern has ${sub.atom.terms.length - 1} (inside '!(...)')`,
+        );
+      }
     }
     // A sub-atom naming a `#js-def` relation is tagged `*c-js` so the
     // constraint-query evaluator enumerates its generator instead of
@@ -1985,9 +1998,7 @@ function decomposeEmit(
   // We push lVar/rVar onto the chain at the end of this function.
   let emitL: Term, emitR: Term;
   switch (a.marker) {
-    case "fact":
-    case "ask":
-    case "constrain": {
+    case "fact": {
       // l = fresh moment, r = top.
       const momL = freshMomTemplate(state, k, "l");
       state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
@@ -2010,7 +2021,15 @@ function decomposeEmit(
       emitR = rVar;
       break;
     }
+    case "ask":
+    case "constrain":
     case "anchor": {
+      // `^`, and the `_choose` / `_constrain` rows of `?` / `!`
+      // (plans/v2-choice-components-by-moment.md): emitted at the running
+      // anchor, no fresh moment, anchor unchanged. A choice is asked at the
+      // moment its rule has reached, and a constraint written next to its
+      // `?` sits at that same moment — which is what locates a choice
+      // component at one (frontier) moment.
       // Bind slot vars to current anchor for chain consistency.
       state.out.push({ tag: "Equal", lhs: lVar, rhs: XL, span: a.span });
       state.out.push({ tag: "Equal", lhs: rVar, rhs: XR, span: a.span });
@@ -2110,9 +2129,11 @@ function decomposeEmit(
   switch (a.marker) {
     case "episode":
       return { XL: lVar, XR: rVar };
+    case "ask":
+    case "constrain":
     case "anchor":
       return { XL, XR };
-    default: // fact / ask / constrain
+    default: // fact
       return { XL: lVar, XR };
   }
 }

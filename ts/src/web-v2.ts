@@ -4,7 +4,7 @@
 // side-channel buffer.
 
 import { parse } from "./v2/parse.js";
-import { runFixpoint } from "./v2/fixpoint.js";
+import { describeErrorStatus, runFixpoint } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
 import { renderTuples, renderTimelineH, timelineCollapseKey, momentKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
@@ -550,7 +550,8 @@ async function run(): Promise<void> {
       setStatus(`active-choices(${status.choices.length}) — ${iterations} iter${iterations === 1 ? "" : "s"}`, false);
       break;
     case "empty-fringe-error":
-      setStatus(`empty-fringe-error: active term ${renderTermShallow(store, status.activeTerm)} has no constraint row`, true);
+    case "late-constraint-error":
+      setStatus(describeErrorStatus(store, status) ?? status.kind, true);
       break;
   }
 
@@ -586,8 +587,8 @@ async function run(): Promise<void> {
         infoLines.push(`  ${termLabel}: ${parts.join(" ")}`);
       }
     }
-  } else if (status.kind === "empty-fringe-error") {
-    infoLines.push(`<span class="err">empty-fringe-error: ${escapeHtml(renderTermShallow(store, status.activeTerm))}</span>`);
+  } else if (status.kind === "empty-fringe-error" || status.kind === "late-constraint-error") {
+    infoLines.push(`<span class="err">${escapeHtml(describeErrorStatus(store, status) ?? status.kind)}</span>`);
   }
   setInfo(infoLines.join("\n"));
   infoEl.querySelectorAll(".opt").forEach((el) => {
@@ -604,7 +605,7 @@ async function run(): Promise<void> {
   updateFileNameDisplay(displayName);
   const display = await loadDisplay(displayName);
   displayEl.innerHTML = "";
-  if (display && status.kind !== "empty-fringe-error") {
+  if (display && status.kind !== "empty-fringe-error" && status.kind !== "late-constraint-error") {
     const ctx: DisplayCallContext = {
       components: status.kind === "active-choices" ? status.components : [],
       schema: parsed.schema,

@@ -85,16 +85,22 @@ mk-bool
 -- your-hand refers to the hand of the active player this turn
 turn.actor.player:hand.^your-hand
 
+-- A `!` sits at the moment its `?` was asked. choose-card asks at its own
+-- start, so its constraint comes before `~it` (which moves the rule on), and
+-- choose-action adds `!action` from the same moment: `~choose-card D` leaves
+-- it at choose-card's start, and the parenthesized `(it D Card)` reads the
+-- card without moving it.
 choose-action E
-  ~choose-card.it Card
-  ~it E Card
+  ~choose-card D
+  (it D Card)
   !action Card
+  ~it E Card
 
 choose-card E
   your-hand H
   ? Card
-  ~it E Card
   !at Card -> H
+  ~it E Card
 
 play-action.^it C
 

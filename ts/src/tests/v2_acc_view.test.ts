@@ -192,7 +192,7 @@ opt _ / n ()
 
 pick, ^opt x, ^opt y
 
-pick, ? C, ~choice C, !opt C
+pick, ? C, !opt C, ~choice C
 
 after, n N, +seen N
 `);
@@ -202,10 +202,17 @@ after, n N, +seen N
   const last = runs.filter((r) => r.open);
   assert.ok(last.length > 0, "the value held when the walk stopped has an open bar");
   for (const r of last) {
-    assert.ok(!store.resolved.has(r.rTok), "an open bar ends at an unresolved moment");
+    assert.ok(!store.settled.has(r.rTok), "an open bar ends at a moment that has not settled");
     assert.notEqual(r.rTok, store.topTok, "…the first one, not top");
   }
-  assert.ok(runs.every((r) => r.moments.every((m) => store.resolved.has(m))));
+  assert.ok(runs.every((r) => r.moments.every((m) => store.settled.has(m))));
+  // The choice's own moment has settled — its acc rows are written, which is
+  // what lets a `!(...)` block read them — but it is not resolved.
+  const pick = startOf(store, "pick");
+  assert.ok(store.settled.has(pick) && !store.resolved.has(pick));
+  assert.ok(runs.some((r) => r.moments.includes(pick)), "acc rows exist at the pending choice's moment");
+  const snap = accSnapshot(store, pick);
+  assert.deepEqual([snap.settled, snap.resolved], [true, false]);
   console.log("PASS: a bar stops, open, at the first unresolved moment");
 }
 
@@ -224,7 +231,7 @@ after, n N, +seen N
   };
   for (const at of [m, a, b, j]) row("x", at);
   row("y", a);
-  for (const t of [s.bot, m, a, b, j, z]) s.resolved.add(tokenOf(s, t));
+  for (const t of [s.bot, m, a, b, j, z]) { s.settled.add(tokenOf(s, t)); s.resolved.add(tokenOf(s, t)); }
   const T = (t: Term): number => tokenOf(s, t);
   const runs = accRuns(s);
   const x = runs.filter((r) => label(s, r) === "v x");

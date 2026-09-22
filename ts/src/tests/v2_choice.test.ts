@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { parse } from "../v2/parse.js";
-import { runFixpoint } from "../v2/fixpoint.js";
+import { describeErrorStatus, runFixpoint } from "../v2/fixpoint.js";
 import type { Atom, Term } from "../v2/term.js";
-import type { Store } from "../v2/store.js";
+import { tokenOf, type Store } from "../v2/store.js";
 import { expandTerm } from "../v2/hashcons.js";
 
 function ok(input: string) {
@@ -141,11 +141,16 @@ cell-choice C
   console.log("PASS: is-resolution unblocks downstream rule");
 }
 
-// 5) Two independent chooses at different moments — only the earliest tier
-//    surfaces. The later one stays blocked and would re-surface after the
-//    earlier is resolved.
+// Choice components are located at their ask moment
+// (plans/v2-choice-components-by-moment.md): `?` and `!` emit at the running
+// anchor without minting a moment, a component holds terms asked at one
+// moment, and choices are resolved in temporal order.
+
+// 5) Two independent chooses at one moment surface together, as two
+//    components. With an anchor-advancing atom between them, only the
+//    earlier one surfaces; the later stays blocked until the walk reaches it.
 {
-  const src = `
+  const same = `
 + cell c1
   + cell c2
   + turn
@@ -156,7 +161,30 @@ turn
   ? B
   ! cell B
 `;
-  const { status } = runFixpoint(ok(src));
+  const r = runFixpoint(ok(same));
+  assert.equal(r.status.kind, "active-choices", `status: ${r.status.kind}`);
+  if (r.status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(r.status.choices.length, 2);
+  assert.equal(r.status.components.length, 2, "no shared row -> two components");
+  assert.equal(
+    tokenOf(r.store, r.status.components[0]!.moment),
+    tokenOf(r.store, r.status.components[1]!.moment),
+    "both asked at the same moment",
+  );
+
+  const apart = `
++ cell c1
+  + cell c2
+  + turn
+
+turn
+  ? A
+  ! cell A
+  + step
+  ? B
+  ! cell B
+`;
+  const { status } = runFixpoint(ok(apart));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
   if (status.kind !== "active-choices") throw new Error("unreachable");
   assert.equal(status.choices.length, 1, `expected only earliest choose to surface, got ${status.choices.length}`);
@@ -165,9 +193,8 @@ turn
   console.log("PASS: independent later choose stays blocked while earliest surfaces");
 }
 
-// 6) Entanglement via a shared `_constrain` row: two chooses sharing one
-//    constraint surface together even though only one is in the earliest
-//    tier.
+// 6) A shared `_constrain` row makes a joint component — when both terms
+//    were asked at the same moment.
 {
   const src = `
 + pair c1 c1
@@ -178,17 +205,164 @@ turn
   ? B
   ! pair A B
 `;
-  const { status } = runFixpoint(ok(src));
+  const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
   if (status.kind !== "active-choices") throw new Error("unreachable");
-  assert.equal(status.choices.length, 2, "both chooses should be pulled in by shared constrain row");
-  assert.equal(status.components.length, 1, "shared row -> one entangled component");
+  assert.equal(status.choices.length, 2);
+  assert.equal(status.components.length, 1, "shared row -> one joint component");
   assert.equal(status.components[0]!.activeTerms.length, 2);
-  console.log("PASS: shared _constrain row entangles seed with later choose");
+  // The component's moment is a settled frontier moment: everything below it
+  // is resolved, and it is blocked only by its own choice.
+  const m = tokenOf(store, status.components[0]!.moment);
+  assert.ok(store.settled.has(m) && !store.resolved.has(m));
+  for (const p of store.orderBwd.get(m) ?? []) assert.ok(store.resolved.has(p), "predecessors are resolved");
+  console.log("PASS: a shared _constrain row joins two choices asked at one moment");
 }
 
-// 7) Mixed: A and B entangled via `! pair A B`; D is independent. Earliest
-//    tier seed = {A}; closure pulls in B; D stays blocked.
+// 6b) The same shared row across moments does NOT join: the earlier choice
+//     is resolved first, on its own constraints, and the later one then sees
+//     the earlier one's value. The earlier component is the same with and
+//     without the later tail (monotonicity).
+{
+  const head = `
++ opt c1
+  + opt c2
+  + pair c1 d1
+  + pair c2 d2
+  + turn
+
+`;
+  const alone = head + `turn
+  ? X
+  ! opt X
+`;
+  const both = head + `turn
+  ? X
+  ! opt X
+  + mark
+  ? Y
+  ! pair X Y
+  ^ got X.is Y.is
+`;
+  const describe = (src: string) => {
+    const { store, status } = runFixpoint(ok(src));
+    assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
+    if (status.kind !== "active-choices") throw new Error("unreachable");
+    assert.equal(status.components.length, 1);
+    const c = status.components[0]!;
+    return {
+      store,
+      comp: c,
+      terms: c.activeTerms.length,
+      options: c.options.map((o) => o.map((t) => renderTerm(store, t)).join(",")).sort(),
+    };
+  };
+  const a = describe(alone), b = describe(both);
+  assert.equal(b.terms, 1, "only X surfaces first");
+  assert.deepEqual(b.options, ["c1", "c2"]);
+  assert.deepEqual(b.options, a.options, "X's options do not depend on the later ask");
+  assert.equal(renderTerm(a.store, a.comp.activeTerms[0]!), renderTerm(b.store, b.comp.activeTerms[0]!));
+
+  const xText = renderTerm(b.store, b.comp.activeTerms[0]!);
+  const next = describe(both + `\n^ is ${xText} c2\n`);
+  assert.equal(next.terms, 1, "then Y surfaces on its own");
+  assert.deepEqual(next.options, ["d2"], "its constraint sees X's value");
+  assert.notEqual(tokenOf(next.store, next.comp.moment), tokenOf(b.store, b.comp.moment));
+  console.log("PASS: choices asked at different moments are resolved in temporal order");
+}
+
+// 6c) A term whose only constraint also mentions a later ask has an empty
+//     fringe, and the status says why.
+{
+  const { store, status } = runFixpoint(ok(`
++ pair c1 d1
+  + turn
+
+turn
+  ? X
+  + mark
+  ? Y
+  ! pair X Y
+`));
+  assert.equal(status.kind, "empty-fringe-error", `status: ${status.kind}`);
+  if (status.kind !== "empty-fringe-error") throw new Error("unreachable");
+  assert.equal(status.deferredOnly, true);
+  assert.match(describeErrorStatus(store, status)!, /asked at a later moment/);
+  console.log("PASS: a choice constrained only jointly with a later ask is an empty fringe");
+}
+
+// 6d) A constraint must sit at the moment its choice was asked. An
+//     anchor-advancing atom between the `?` and the `!` is an error naming
+//     the line; moving the `!` next to the `?` fixes it. A constraint in
+//     another rule is fine as long as that rule reaches the same moment
+//     (a parenthesized match does not narrow the anchor).
+{
+  const late = runFixpoint(ok(`
++ opt c1
+  + turn
+
+turn
+  ? C
+  ~ choice C
+  ! opt C
+`));
+  assert.equal(late.status.kind, "late-constraint-error", `status: ${late.status.kind}`);
+  if (late.status.kind !== "late-constraint-error") throw new Error("unreachable");
+  assert.equal(late.status.reason, "late");
+  assert.equal(late.status.line, 8);
+  assert.match(describeErrorStatus(late.store, late.status)!, /line 8.*Move the '!' next to its '\?'/);
+
+  const fixed = runFixpoint(ok(`
++ opt c1
+  + turn
+
+turn
+  ? C
+  ! opt C
+  ~ choice C
+`));
+  assert.equal(fixed.status.kind, "active-choices");
+
+  const crossRule = runFixpoint(ok(`
++ opt c1
+  + opt c2
+  + good c2
+  + turn
+
+turn
+  ? C
+  ! opt C
+  ~ choice C
+
+turn, (choice C), ! good C
+`));
+  assert.equal(crossRule.status.kind, "active-choices", `status: ${crossRule.status.kind}`);
+  if (crossRule.status.kind !== "active-choices") throw new Error("unreachable");
+  assert.deepEqual(
+    crossRule.status.components[0]!.options.map((o) => renderTerm(crossRule.store, o[0]!)),
+    ["c2"],
+  );
+
+  // The placement check also runs when the choice never surfaces because a
+  // saved `is` row resolved it up front.
+  const lateTerm = late.status.activeTerm;
+  const saved = runFixpoint(ok(`
++ opt c1
+  + turn
+
+turn
+  ? C
+  ~ choice C
+  ! opt C
+
+^ is ${renderTerm(late.store, lateTerm)} c1
+`));
+  assert.equal(saved.status.kind, "late-constraint-error", `status: ${saved.status.kind}`);
+  console.log("PASS: a constraint away from its ask moment is reported");
+}
+
+// 7) Mixed: A and B joined via `! pair A B`; D is independent. All asked at
+//    one moment, so all surface: two components.
 {
   const src = `
 + pair c1 c2
@@ -205,11 +379,11 @@ turn
   const { status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices");
   if (status.kind !== "active-choices") throw new Error("unreachable");
-  assert.equal(status.choices.length, 2, `independent later choose should stay blocked, got ${status.choices.length}`);
-  assert.equal(status.components.length, 1);
-  assert.equal(status.components[0]!.activeTerms.length, 2);
+  assert.equal(status.choices.length, 3);
+  assert.equal(status.components.length, 2);
+  assert.deepEqual(status.components.map((c) => c.activeTerms.length).sort(), [1, 2]);
 }
-console.log("PASS: mixed entangled + independent — only entangled batch surfaces");
+console.log("PASS: mixed joint + independent choices at one moment");
 
 // 8) Sequential c1 episodes with a `! at C -> here` constrain-agg that
 //    narrows after the first choice. After picking t1, t1's last `at`
@@ -232,10 +406,10 @@ game, +thing t1, +thing t2, +thing bad
 
 c1
   ?C
-  ~it C
   !thing C
+  ~it C
 
-c1, it C, !at C -> here
+c1, (it C), !at C -> here
 
 c1
   ( it C, is C V ); +at V there
@@ -268,12 +442,14 @@ c1
   console.log("PASS: sequential c1's narrow {t1,t2} → {t2} after resolving t1");
 }
 
-// 9) The `!thing C` constraint is what gives the choice component a
-//    plain-row anchor; without it the choice has no satisfiable option
-//    even though `!at C -> a` could in principle match (timing /
-//    contribution-visibility differences).
+// 9) Constraints emitted from later episodes. This program asks `C` in `t`
+//    and constrains it from inside the later episodes `a` and `b` — the
+//    shape the lub-located component was built for. Components now sit at
+//    their ask moment (plans/v2-choice-components-by-moment.md), so those
+//    rows are reported as misplaced; the constraint that can be stated at the
+//    ask moment is written next to the `?`.
 {
-  const baseWithThing = `
+  const spread = `
 #agg at * -> last
 
 (~setup); ~t
@@ -291,44 +467,26 @@ a, it C, +at it -> a
 
 b, it C, !at C -> a
 `;
-  const r1 = runFixpoint(ok(baseWithThing));
-  assert.equal(r1.status.kind, "active-choices", `with-thing status: ${r1.status.kind}`);
-  if (r1.status.kind !== "active-choices") throw new Error("unreachable");
-  assert.equal(r1.status.components.length, 1, `with-thing components: ${r1.status.components.length}`);
-  const opts1 = r1.status.components[0]!.options.map((opt) => renderTerm(r1.store, opt[0]!)).sort();
-  assert.deepEqual(opts1, ["it"], `with-thing options: ${opts1.join(",")}`);
-  console.log("PASS: with `!thing C` the choice has one option (it)");
+  const r1 = runFixpoint(ok(spread));
+  assert.equal(r1.status.kind, "late-constraint-error", `spread status: ${r1.status.kind}`);
+  console.log("PASS: a constraint emitted from a later episode is reported as late");
 
-  // Same program with `!thing C` removed — expect no active choice
-  // surfaces (the choice's only remaining constraint network can't bind
-  // a valid option).
-  const baseWithoutThing = `
+  const local = `
 #agg at * -> last
 
 (~setup); ~t
 
-setup, +thing it
+setup, +thing it, +thing other, +at it -> a
 
-t, ?C, ~it C
-
-t, it _, ~a
-
-t, it _, ~b
-
-a, it C, +at it -> a
-
-b, it C, !at C -> a
+t, ?C, !thing C, !at C -> a, ~it C
 `;
-  const r2 = runFixpoint(ok(baseWithoutThing));
-  if (r2.status.kind === "active-choices") {
-    const opts2 = r2.status.components[0]!.options.map((opt) =>
-      opt.map((t) => renderTerm(r2.store, t)).join(","),
-    );
-    assert.equal(opts2.length, 0,
-      `without-thing expected 0 options, got: ${opts2.join(" | ")}`);
-  }
-  // Either kind ≠ active-choices (no choice surfaced) or options.length === 0.
-  console.log("PASS: without `!thing C` the choice has no options");
+  const r2 = runFixpoint(ok(local));
+  assert.equal(r2.status.kind, "active-choices", `local status: ${r2.status.kind}`);
+  if (r2.status.kind !== "active-choices") throw new Error("unreachable");
+  assert.equal(r2.status.components.length, 1);
+  const opts2 = r2.status.components[0]!.options.map((opt) => renderTerm(r2.store, opt[0]!)).sort();
+  assert.deepEqual(opts2, ["it"], `local options: ${opts2.join(",")}`);
+  console.log("PASS: the same constraints at the ask moment give one option (it)");
 }
 
 // 10) Partial bind in a two-active-term component. After committing one

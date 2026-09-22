@@ -408,7 +408,7 @@ check, at X -> L, ^seen X L
 
 pick, ^opt x, ^opt y
 
-pick, ?${actor} C, ~choice C, !opt C
+pick, ?${actor} C, !opt C, ~choice C
 
 after, dmg -> N, +seen N
 `;

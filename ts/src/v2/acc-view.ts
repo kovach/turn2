@@ -3,7 +3,7 @@
 // render-output.ts (the moment inspector).
 //
 // The engine writes every acc relation's rows as point tuples at every
-// resolved moment (acc.ts), so a value that holds for a while is stored once
+// settled moment (acc.ts), so a value that holds for a while is stored once
 // per moment. Nothing here changes that; these functions only fold the
 // repetition back up for display:
 //
@@ -30,7 +30,7 @@ export interface AccRun {
   // already held there). `rTok` is where the chain stops: the moment at
   // which the content no longer holds, the moment it merges into another bar
   // of the same content, or — `open` — the first moment past the chain that
-  // is not resolved (`top` when the chain's last moment is maximal).
+  // has not settled (`top` when the chain's last moment is maximal).
   lTok: number;
   rTok: number;
   lTerm: Term;
@@ -192,7 +192,7 @@ export function accRuns(store: Store): AccRun[] {
       const tail = chain.moments[chain.moments.length - 1]!;
       const next = cov.succ.get(tail)!.slice().sort(byTopo);
       const merge = next.find((n) => at.has(n));
-      const ended = next.find((n) => store.resolved.has(n));
+      const ended = next.find((n) => store.settled.has(n));
       let rTok: number;
       let open = false;
       if (merge !== undefined) rTok = merge;
@@ -237,8 +237,10 @@ export interface AccSnapshotRelation {
 
 export interface AccSnapshot {
   tok: number;
-  // Acc rows exist only at resolved moments; an unresolved moment (a pending
-  // choice at or below it, or `top`) has none yet.
+  // Acc rows exist only at settled moments (`store.settled`: the walk has
+  // been quiet there). A moment above a pending choice, or `top`, has none
+  // yet. A moment *with* a pending choice is settled but not `resolved`.
+  settled: boolean;
   resolved: boolean;
   relations: AccSnapshotRelation[];
 }
@@ -257,7 +259,7 @@ function coverPreds(store: Store, tok: number): number[] {
 // The full acc state at one moment, every relation included (the inspector
 // ignores the timeline's per-relation visibility).
 export function accSnapshot(store: Store, tok: number): AccSnapshot {
-  const preds = coverPreds(store, tok).filter((p) => store.resolved.has(p));
+  const preds = coverPreds(store, tok).filter((p) => store.settled.has(p));
   const relations: AccSnapshotRelation[] = [];
   for (const [relation, info] of store.accRelations) {
     // content key → label / tuple index, per moment of interest.
@@ -288,5 +290,5 @@ export function accSnapshot(store: Store, tok: number): AccSnapshot {
       gone: [...gone.values()].sort(),
     });
   }
-  return { tok, resolved: store.resolved.has(tok), relations };
+  return { tok, settled: store.settled.has(tok), resolved: store.resolved.has(tok), relations };
 }

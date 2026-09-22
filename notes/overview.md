@@ -1,3 +1,16 @@
+# choice components are located at their ask moment
+plan: plans/v2-choice-components-by-moment.md
+(implemented 26/09/21, both recommended decisions)
+
+- choices need to resolve by moment.
+  a constraint relating choice variables at two moments should not "pull" the earlier one later in time because this introduces non-monotonicity to the earliest unresolved moment property
+- in `a, ?X, !(opt X), +mark, ?Y, !(pair X Y)` we need one component containing simply X, and later, after resolution, Y will be its own component (with its constraint referring to the already bound value of X)
+- this still allows for components containing several variables, but they must all be created at the same moment
+- motivation: rule evaluation needs to be monotone. if a component is located at a lub M of other moments, and only that M is distinguished as an unresolved choice, then the earliest unresolved choice depends non-monotonically on the presence of ask/constrain tuples. this may reduce expressivity somewhat, but it restores monotonicity
+- prerequisite for allowing `acc` relations inside `!()`; the plan includes that as its step 6
+
+# 26/09/21
+
 # timeline display of acc relations
 plan: plans/v2-acc-timeline-display.md
 (implemented 26/09/20)

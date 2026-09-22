@@ -68,6 +68,11 @@ export interface Store {
   // strictly below it is marked. In-memory only: every run starts from a
   // fresh store.
   resolved: Set<number>;
+  // Moments whose `settle` hooks have run (moment-walk.ts `settleMoments`):
+  // the walk was quiet there, and the acc rows at the moment are written. A
+  // superset of `resolved` — a moment with a pending choice is settled but
+  // not resolved.
+  settled: Set<number>;
   // `#acc` display bookkeeping (plans/v2-acc-timeline-display.md); never
   // consulted by evaluation. `accRelations` names every declared acc
   // relation and says whether some ordinary rule reads it (static; set by
@@ -141,6 +146,7 @@ export function createStore(): Store {
     gt: new Map(),
     orderBwd: new Map(),
     resolved: new Set(),
+    settled: new Set(),
     accRelations: new Map(),
     accConsulted: new Map(),
     tupleSet: new Set(),

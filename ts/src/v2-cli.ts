@@ -11,7 +11,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { parse } from "./v2/parse.js";
 import { expand, expandStages } from "./v2/expand.js";
-import { runFixpoint } from "./v2/fixpoint.js";
+import { describeErrorStatus, runFixpoint } from "./v2/fixpoint.js";
 import { renderProgram } from "./v2/print-ir.js";
 import { renderTimelineAscii } from "./v2/timeline.js";
 import { renderAtomShallow, renderTermShallow, renderDebugDump } from "./v2/print.js";
@@ -123,7 +123,7 @@ function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
 export function runStage(stage: Stage, parsed: Program, opts: RunOptions): string {
   if (stage === "eval") {
     const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas);
-    console.error(`status: ${status.kind}`);
+    console.error(`status: ${describeErrorStatus(store, status) ?? status.kind}`);
     return renderStore(store, opts.out);
   }
   const rules = rulesForStage(stage, parsed).filter((r) => ruleMatches(r, opts));

@@ -7,7 +7,11 @@
 //   3. Read `constrain` rows; build a bipartite graph between unresolved
 //      active terms and the constrain rows that mention them (recursively
 //      walking each row's wrapped atom).
-//   4. BFS to form components.
+//   4. Form components per ask moment
+//      (plans/v2-choice-components-by-moment.md): a component holds terms
+//      asked at one blocked moment `m` and the constrain rows at `m` whose
+//      unresolved terms were all asked there. A row that also mentions a
+//      term asked later belongs to the later moment and waits for it.
 //   5. For each component, lift the constrain rows into a conjunctive query
 //      over store.byHead, replacing active and existential subterms with
 //      substitution slots; collect the joint bindings of active terms as
@@ -28,7 +32,7 @@ import {
   intern,
   internAtom,
   intervalContains,
-  leastUpperBound,
+  lessEq,
   tokenOf,
   type Store,
 } from "./store.js";
@@ -40,7 +44,23 @@ export type { ComponentOptions };
 
 export type ComputeComponentsResult =
   | { kind: "ok"; components: ComponentOptions[]; surfaced: BlockedChoose[] }
-  | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term };
+  // `deferredOnly`: the term does have constrain rows, but every one of
+  // them also mentions a choice asked at a later moment.
+  | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term; deferredOnly: boolean }
+  | ({ kind: "late-constraint-error" } & ConstraintPlacementError);
+
+// A `_constrain` row that does not sit at the ask moment of the choice
+// terms it mentions (plans/v2-choice-components-by-moment.md):
+//  - "late": the row's moment is not the ask moment of any term it mentions
+//    (an anchor-advancing atom sits between the `?` and the `!`).
+//  - "entangled": it mentions a term whose ask moment is not at or below the
+//    row's moment — choices asked at incomparable moments, which have no
+//    temporal order to be resolved in.
+export interface ConstraintPlacementError {
+  rowIndex: number;
+  activeTerm: Term;
+  reason: "late" | "entangled";
+}
 
 interface ChoiceContext {
   resolved: Set<number>;
@@ -222,7 +242,7 @@ interface ConstrainSub {
   // "plain": match candidates one tuple at a time by structural
   // unification against the sub-atom. "agg": fold candidates via the
   // relation's schema aggregator. The choice component moment `M`
-  // (see `choiceComponentMoment`) gates which candidates are visible
+  // (`RawComponent.moment`) gates which candidates are visible
   // in either case. "js": a `#js-def` relation — enumerated by calling
   // its generator (plans/v2-js-rel-in-constrain.md); timeless, so `M`
   // does not gate it.
@@ -239,11 +259,84 @@ interface ConstrainRow {
   // Active tokens this row touches (unioned across subs, against the
   // post-`is`-substitution sub atoms).
   touched: Set<number>;
-  // The constrain row's stored left endpoint. Used to compute the
-  // choice component moment `M = lub(row.l for row in comp)`; the row's
-  // own right endpoint is not consulted (the component evaluates against
-  // `M` rather than per-row intervals).
+  // The constrain row's stored left endpoint: the moment it was emitted
+  // at. A row belongs to the component at this moment, and must sit at the
+  // ask moment of the terms it mentions (`checkRowPlacement`). Its right
+  // endpoint is not consulted.
   l: Term;
+  // Every choice term the row mentions, resolved or not (tokens, from the
+  // row's atom *before* `is` substitution).
+  mentions: Set<number>;
+}
+
+// Ask moment of every choice term: the left endpoint of the `_choose` row
+// that owns it, resolved or not. A choice term is a compound top-level term
+// of a choose row's wrapped atom (scheduler.ts `collectActiveTerms`).
+function gatherAskMoments(store: Store): Map<number, Term> {
+  const out = new Map<number, Term>();
+  for (const idx of candidatesByHead(store, "_choose")) {
+    const t = store.tuples[idx]!;
+    const wrapped = t.atom.terms[2];
+    if (wrapped === undefined) continue;
+    const atom = unwrapAtom(wrapped, store);
+    if (atom === null) continue;
+    for (const term of atom.terms) {
+      const compound = term.tag === "Atom" || term.tag === "Id"
+        || (term.tag === "Ref" && store.hash.refToAtom.has(term.id));
+      if (!compound) continue;
+      const tok = tokenOf(store, term);
+      if (!out.has(tok)) out.set(tok, t.l);
+    }
+  }
+  return out;
+}
+
+// Rows already judged well-placed, per store: placement never changes (ask
+// moments are fixed and the order only grows), and an ill-placed row ends
+// the run.
+const placedRows = new WeakMap<Store, Set<number>>();
+
+// A row must sit at the ask moment of the latest choice term it mentions,
+// with every other mentioned term asked at or below that moment.
+function checkRowPlacement(
+  store: Store,
+  row: ConstrainRow,
+  askByTok: Map<number, Term>,
+  termOf: (tok: number) => Term,
+): ConstraintPlacementError | null {
+  let done = placedRows.get(store);
+  if (done === undefined) { done = new Set(); placedRows.set(store, done); }
+  if (done.has(row.rowIndex)) return null;
+  const rowTok = tokenOf(store, row.l);
+  let atRow: number | null = null;
+  for (const tok of row.mentions) {
+    const ask = askByTok.get(tok)!;
+    if (tokenOf(store, ask) === rowTok) { atRow = tok; continue; }
+    if (!lessEq(store, ask, row.l)) {
+      return { rowIndex: row.rowIndex, activeTerm: termOf(tok), reason: "entangled" };
+    }
+  }
+  if (atRow === null && row.mentions.size > 0) {
+    const first = row.mentions.values().next().value as number;
+    return { rowIndex: row.rowIndex, activeTerm: termOf(first), reason: "late" };
+  }
+  done.add(row.rowIndex);
+  return null;
+}
+
+// Placement check over every `_constrain` row in the store, for the end of a
+// run: a row whose choices were all resolved before they ever surfaced (saved
+// `is` rows) is never looked at by `computeComponents`.
+export function checkConstrainPlacement(store: Store): ConstraintPlacementError | null {
+  const askByTok = gatherAskMoments(store);
+  if (askByTok.size === 0) return null;
+  const termByTok = new Map<number, Term>();
+  const rows = gatherConstrainRows(store, new Set(), new Map(), new Set(), askByTok, termByTok);
+  for (const row of rows) {
+    const err = checkRowPlacement(store, row, askByTok, (tok) => termByTok.get(tok)!);
+    if (err !== null) return err;
+  }
+  return null;
 }
 
 function gatherConstrainRows(
@@ -251,6 +344,8 @@ function gatherConstrainRows(
   activeSet: Set<number>,
   boundValues: Map<number, Term>,
   existSet: Set<number>,
+  askByTok: Map<number, Term>,
+  mentionedTerms: Map<number, Term>,
 ): ConstrainRow[] {
   const out: ConstrainRow[] = [];
   for (const idx of candidatesByHead(store, "_constrain")) {
@@ -265,6 +360,7 @@ function gatherConstrainRows(
     if (conjHead === undefined || conjHead.tag !== "Symbol" || conjHead.name !== "*conj") continue;
     const subs: ConstrainSub[] = [];
     const touched = new Set<number>();
+    const mentions = new Set<number>();
     for (let i = 1; i < conjAtom.terms.length; i++) {
       const sw = conjAtom.terms[i]!;
       const swAtom = unwrapAtom(sw, store);
@@ -278,6 +374,7 @@ function gatherConstrainRows(
       if (innerTerm === undefined) continue;
       const rawInner = unwrapAtom(innerTerm, store);
       if (rawInner === null) continue;
+      collectMentions(rawInner, store, askByTok, mentions, mentionedTerms);
       const inner = boundValues.size === 0
         ? rawInner
         : substResolvedAtom(rawInner, boundValues, store);
@@ -286,10 +383,42 @@ function gatherConstrainRows(
       subs.push({ kind, atom: inner });
     }
     if (subs.length === 0) continue;
-    if (touched.size === 0) continue;
-    out.push({ rowIndex: idx, subs, touched, l: t.l });
+    // Rows touching no unresolved term stay in the list for the placement
+    // check; component building skips them.
+    if (touched.size === 0 && mentions.size === 0) continue;
+    out.push({ rowIndex: idx, subs, touched, l: t.l, mentions });
   }
   return out;
+}
+
+// Walk `atom` like `collectActiveAndExistTokens`, collecting every choice
+// term (a key of `askByTok`) it mentions.
+function collectMentions(
+  atom: Atom,
+  store: Store,
+  askByTok: Map<number, Term>,
+  out: Set<number>,
+  terms: Map<number, Term>,
+): void {
+  function walk(term: Term): void {
+    const tok = tokenOf(store, term);
+    if (askByTok.has(tok)) {
+      out.add(tok);
+      if (!terms.has(tok)) terms.set(tok, term);
+      return;
+    }
+    if (term.tag === "Ref") {
+      if (refTagOf(store.hash, term.id) === "Id") return;
+      const inner = store.hash.refToAtom.get(term.id);
+      if (inner === undefined) return;
+      for (const t of inner.terms) walk(t);
+      return;
+    }
+    if (term.tag === "Atom") {
+      for (const t of term.atom.terms) walk(t);
+    }
+  }
+  for (const t of atom.terms) walk(t);
 }
 
 function unwrapAtom(term: Term, store: Store): Atom | null {
@@ -338,27 +467,17 @@ function collectActiveAndExistTokens(
 interface RawComponent {
   members: Set<number>;       // active-term tokens in this component
   rows: ConstrainRow[];
+  // The moment every member was asked at and every row sits at
+  // (plans/v2-choice-components-by-moment.md). Every sub-atom is evaluated
+  // against it.
+  moment: Term;
 }
 
-// The choice component moment: the single moment `M` at which every
-// constrain / constrain-agg row in `comp` is interpreted. Defined as the
-// least upper bound of the rows' left endpoints. The moment graph is a
-// lattice (see notes/moment-insertion.md), so `M` is guaranteed to exist
-// uniquely whenever `comp` has at least one row. A zero-row component is
-// unreachable in practice — the empty-fringe check in `computeComponents`
-// intercepts it — but is asserted here as a defensive invariant.
-function choiceComponentMoment(store: Store, comp: RawComponent): Term {
-  if (comp.rows.length === 0) {
-    throw new Error("choiceComponentMoment: zero-row component (should be caught by empty-fringe)");
-  }
-  const m = leastUpperBound(store, comp.rows.map((r) => r.l));
-  if (m === null) {
-    throw new Error("choiceComponentMoment: moment graph invariant violated — expected lattice");
-  }
-  return m;
-}
-
-function buildComponents(activeSet: Set<number>, rows: ConstrainRow[]): RawComponent[] {
+function buildComponents(
+  activeSet: Set<number>,
+  rows: ConstrainRow[],
+  askByTok: Map<number, Term>,
+): RawComponent[] {
   // term -> rows incident to it
   const incident = new Map<number, ConstrainRow[]>();
   for (const r of rows) {
@@ -399,7 +518,9 @@ function buildComponents(activeSet: Set<number>, rows: ConstrainRow[]): RawCompo
       frontier = next;
     }
     for (const k of members) visited.add(k);
-    components.push({ members, rows: compRows });
+    // Ready rows only connect terms asked at one moment, so any member's
+    // ask moment is the component's.
+    components.push({ members, rows: compRows, moment: askByTok.get(start)! });
   }
   return components;
 }
@@ -421,9 +542,9 @@ function runComponent(
   const activeTerms = activeKeys.map((k) => termByTok.get(k)!);
   const actors = activeKeys.map((k) => actorByTok.get(k) ?? "you");
 
-  // The choice component moment — every row in `comp` is evaluated against
-  // this single moment rather than its own stored interval.
-  const M = choiceComponentMoment(store, comp);
+  // The component's moment — the ask moment of its terms, which is also
+  // where every one of its rows sits.
+  const M = comp.moment;
 
   const seen = new Set<string>();
   const options: Term[][] = [];
@@ -482,6 +603,13 @@ function runComponent(
       return;
     }
     const arity = s.atom.terms.length;
+    // Display bookkeeping (plans/v2-acc-timeline-display.md): an acc
+    // relation read inside `!(...)` is a read at the component's moment.
+    if (store.accRelations.has(headTerm.name)) {
+      let seen = store.accConsulted.get(headTerm.name);
+      if (seen === undefined) { seen = new Set(); store.accConsulted.set(headTerm.name, seen); }
+      seen.add(tokenOf(store, M));
+    }
     for (const cidx of candidatesByHead(store, headTerm.name)) {
       const cand = store.tuples[cidx]!;
       // Stored candidates carry the universal trailing id slot; the
@@ -714,51 +842,57 @@ export function computeComponents(
   const { activeSet, termByTok, boundValues, existSet, actorByTok } = ctx;
   if (activeSet.size === 0) return { kind: "ok", components: [], surfaced: [] };
 
-  const allRows = gatherConstrainRows(store, activeSet, boundValues, existSet);
+  const askByTok = gatherAskMoments(store);
+  const mentionedTerms = new Map<number, Term>();
+  const allRows = gatherConstrainRows(store, activeSet, boundValues, existSet, askByTok, mentionedTerms);
 
-  // BFS from seed active tokens over the bipartite (token ↔ constrain-row)
-  // graph: a row is reachable iff it touches a reachable token; touching a
-  // reachable row marks all of its other touched tokens reachable.
-  const closedActive = new Set<number>();
-  for (const c of seedChoices) {
-    for (const a of c.activeTerms) {
-      const tok = tokenOf(store, a);
-      if (activeSet.has(tok)) closedActive.add(tok);
-    }
+  // Placement first: a constraint that is not at its terms' ask moment is a
+  // program error, and reporting it beats the empty fringe it would cause.
+  for (const row of allRows) {
+    const err = checkRowPlacement(store, row, askByTok, (tok) => mentionedTerms.get(tok)!);
+    if (err !== null) return { kind: "late-constraint-error", ...err };
   }
-  const reachableRows = new Set<number>();
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (let i = 0; i < allRows.length; i++) {
-      if (reachableRows.has(i)) continue;
-      const row = allRows[i]!;
-      let hits = false;
-      for (const tok of row.touched) {
-        if (closedActive.has(tok)) { hits = true; break; }
-      }
-      if (!hits) continue;
-      reachableRows.add(i);
-      for (const tok of row.touched) {
-        if (!closedActive.has(tok)) {
-          closedActive.add(tok);
-          changed = true;
-        }
-      }
-    }
+
+  // Seed terms: the unresolved terms asked at the blocked moments. No
+  // closure to other moments — a choice asked later is resolved later
+  // (plans/v2-choice-components-by-moment.md).
+  const seedMoments = new Set<number>();
+  for (const c of seedChoices) seedMoments.add(tokenOf(store, c.l));
+  const seedActive = new Set<number>();
+  for (const tok of activeSet) {
+    const ask = askByTok.get(tok);
+    if (ask !== undefined && seedMoments.has(tokenOf(store, ask))) seedActive.add(tok);
   }
-  const rowsForComponents = [...reachableRows].map((i) => allRows[i]!);
+
+  // A row is ready iff every unresolved term it touches is a seed term asked
+  // at the row's own moment. A row that also touches a term asked elsewhere
+  // (necessarily at a lower moment, by placement) is deferred: it belongs to
+  // its own, later moment, and is evaluated there once the earlier term has a
+  // value.
+  const readyRows: ConstrainRow[] = [];
+  const deferredTouch = new Set<number>();
+  for (const row of allRows) {
+    if (row.touched.size === 0) continue;
+    const rowTok = tokenOf(store, row.l);
+    let ready = true;
+    for (const tok of row.touched) {
+      const ask = askByTok.get(tok);
+      if (!seedActive.has(tok) || ask === undefined || tokenOf(store, ask) !== rowTok) { ready = false; break; }
+    }
+    if (ready) readyRows.push(row);
+    else for (const tok of row.touched) deferredTouch.add(tok);
+  }
+
   const surfaced = blocked.filter((c) =>
-    c.activeTerms.some((a) => closedActive.has(tokenOf(store, a))),
+    c.activeTerms.some((a) => seedActive.has(tokenOf(store, a))),
   );
 
-  const components = buildComponents(closedActive, rowsForComponents);
+  const components = buildComponents(seedActive, readyRows, askByTok);
 
   // Empty-fringe: any component with active members but no rows.
   for (const c of components) {
     if (c.rows.length > 0) continue;
     for (const k of c.members) {
-      if (!closedActive.has(k)) continue;
       const choiceTerm = termByTok.get(k)!;
       const owning = surfaced.find((b) =>
         b.activeTerms.some((t) => tokenOf(store, t) === k),
@@ -766,10 +900,10 @@ export function computeComponents(
       if (owning === undefined) {
         throw new Error("computeComponents: active term has no owning choose row");
       }
-      return { kind: "empty-fringe-error", choice: owning, activeTerm: choiceTerm };
+      return { kind: "empty-fringe-error", choice: owning, activeTerm: choiceTerm, deferredOnly: deferredTouch.has(k) };
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, closedActive, existSet, termByTok, actorByTok, schema, jsRels));
+  const out = components.map((c) => runComponent(store, c, seedActive, existSet, termByTok, actorByTok, schema, jsRels));
   return { kind: "ok", components: out, surfaced };
 }

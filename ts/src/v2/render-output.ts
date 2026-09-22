@@ -251,7 +251,8 @@ function renderMomentInspector(store: Store, tok: number): HTMLElement {
   const name = renderTermShallow(store, store.momentTerms.get(tok)!);
   const state = snap.resolved
     ? "resolved"
-    : tok === store.topTok ? "top is never resolved" : "not resolved: acc relations are not computed here yet";
+    : snap.settled ? "settled, a choice is pending here"
+    : tok === store.topTok ? "top is never resolved" : "not reached: acc relations are not computed here yet";
   const title = document.createElement("span");
   title.textContent = `moment ${name} · ${state}`;
   const close = document.createElement("button");

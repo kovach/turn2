@@ -8,7 +8,7 @@
 
 import type { Actor, ComponentOptions, FixpointStatus, Program, ProvLink, Rule } from "./types.js";
 import { maxActor } from "./types.js";
-import type { Span } from "./term.js";
+import type { Span, Term } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
 import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
@@ -24,9 +24,10 @@ import {
   resolveRngChoice,
   type RngCommit,
 } from "./scheduler.js";
-import { markResolved, resolveMoments, runWalkRound, type MomentHandler } from "./moment-walk.js";
+import { markResolved, settleMoments, runWalkRound, type MomentHandler } from "./moment-walk.js";
 import { accHandler, compileAcc } from "./acc.js";
-import { computeComponents } from "./constraint-query.js";
+import { renderTermShallow } from "./print.js";
+import { checkConstrainPlacement, computeComponents, type ConstraintPlacementError } from "./constraint-query.js";
 import { attachRules } from "./stats.js";
 
 export interface FixpointResult {
@@ -80,8 +81,22 @@ export function runFixpoint(
   // Display bookkeeping for the timeline (plans/v2-acc-timeline-display.md):
   // which acc relations exist, and which of them some ordinary rule reads.
   for (const name of expanded.accDecls.keys()) store.accRelations.set(name, { readByRules: false });
+  // A read inside `!(...)` counts too: those sub-atoms travel as terms
+  // nested in the `_constrain` row an `Emit` writes.
+  const markAccReads = (t: Term): void => {
+    if (t.tag !== "Atom" && t.tag !== "Id") return;
+    const h = t.atom.terms[0];
+    const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
+    if (info !== undefined) info.readByRules = true;
+    for (const u of t.atom.terms) markAccReads(u);
+  };
   for (const rule of expanded.rules) {
     for (const a of rule.body) {
+      if (a.tag === "Emit") {
+        const eh = a.atom.terms[0];
+        if (eh !== undefined && eh.tag === "Symbol" && eh.name === "_constrain") a.atom.terms.forEach(markAccReads);
+        continue;
+      }
       if (a.tag !== "Match") continue;
       const h = a.atom.terms[0];
       const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
@@ -182,6 +197,38 @@ function findPrimeTuple(store: Store, prime: string, idx: number): number | unde
   return undefined;
 }
 
+// One-line description of an error status, for hosts (web-v2, v2-cli).
+// Null for the non-error kinds.
+export function describeErrorStatus(store: Store, status: FixpointStatus): string | null {
+  if (status.kind === "empty-fringe-error") {
+    const term = renderTermShallow(store, status.activeTerm);
+    return status.deferredOnly === true
+      ? `empty-fringe-error: choice ${term} has no constraint of its own — its only '!' rows also mention a choice ` +
+        `asked at a later moment. Ask them at the same moment for a joint choice, or constrain it on its own`
+      : `empty-fringe-error: active term ${term} has no constraint row`;
+  }
+  if (status.kind === "late-constraint-error") {
+    const where = status.line === undefined ? "" : ` (line ${status.line})`;
+    const term = renderTermShallow(store, status.activeTerm);
+    return status.reason === "late"
+      ? `late-constraint-error${where}: this '!' is not at the moment choice ${term} was asked — ` +
+        `a '+', '~', ';' or narrowing match sits between the '?' and the '!'. Move the '!' next to its '?'`
+      : `late-constraint-error${where}: this '!' ties choice ${term} to a choice asked at an unrelated moment; ` +
+        `choices are resolved in temporal order, so there is no order to resolve them in`;
+  }
+  return null;
+}
+
+function lateConstraintStatus(store: Store, e: ConstraintPlacementError): FixpointStatus {
+  return {
+    kind: "late-constraint-error",
+    rowIndex: e.rowIndex,
+    activeTerm: e.activeTerm,
+    reason: e.reason,
+    line: store.tupleSource[e.rowIndex]?.line,
+  };
+}
+
 function runLoop(expanded: Program, store: Store, gas: number, startIters: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, handlers: readonly MomentHandler[], explicitRandom: (() => number) | undefined, rngCommits: RngCommit[]): FixpointResult {
   let totalIters = startIters;
   // The random stream is latched at the first rng roll: an explicitly
@@ -207,16 +254,18 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     let round = runWalkRound(store, handlers);
     let resolvedProgress = false;
     while (!round.progress && !round.exhausted) {
-      const toMark = round.frontier.filter((tok) => !round.blocked.has(tok));
-      if (toMark.length === 0) break;
-      markResolved(store, toMark);
-      // Resolution hooks (acc rows, plans/v2-acc-relations.md): rows written
-      // here are progress — readers must see them — so hand back to the
-      // inner loop rather than continuing the walk.
-      if (resolveMoments(store, handlers, toMark)) {
+      // A quiet round: the folds at every frontier moment have settled.
+      // Settle hooks run now — before anything is marked and before choices
+      // surface (acc rows; plans/v2-choice-components-by-moment.md step 6).
+      // Rows written here are progress: readers must see them, and may emit
+      // at the same moment (even a new `?`), so hand back to the inner loop.
+      if (settleMoments(store, handlers, round.frontier)) {
         resolvedProgress = true;
         break;
       }
+      const toMark = round.frontier.filter((tok) => !round.blocked.has(tok));
+      if (toMark.length === 0) break;
+      markResolved(store, toMark);
       round = runWalkRound(store, handlers);
     }
     if (resolvedProgress) {
@@ -225,6 +274,13 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       continue;
     }
     if (round.exhausted) {
+      // A constraint whose choices were all resolved before they surfaced
+      // (saved `is` rows) was never looked at by `computeComponents`; its
+      // placement is still checked.
+      const misplaced = checkConstrainPlacement(store);
+      if (misplaced !== null) {
+        return { store, iterations: totalIters, status: lateConstraintStatus(store, misplaced), rngCommits };
+      }
       return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
     }
     if (round.progress) {
@@ -236,9 +292,9 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       continue;
     }
     // Every frontier moment (and every late demanded one) is blocked on a
-    // choice. Surface only components reachable from the chooses at those
-    // moments; chooses elsewhere entangled via shared constrain rows are
-    // pulled in by `computeComponents`, the rest stay blocked for later.
+    // choice. Surface the components at those moments only: a choice asked
+    // at a later moment is resolved later, even when a constrain row ties it
+    // to one asked here (plans/v2-choice-components-by-moment.md).
     if (round.blocked.size === 0) {
       // A round with nothing to run is `exhausted`; one with no progress and
       // no block resolves its frontier above. Only a handler that reports
@@ -248,11 +304,14 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     const choices = collectBlockedChooses(store);
     const seedChoices = choices.filter((c) => round.blocked.has(tokenOf(store, c.l)));
     const cc = computeComponents(store, choices, expanded.schema, seedChoices, jsRelFuncs);
+    if (cc.kind === "late-constraint-error") {
+      return { store, iterations: totalIters, status: lateConstraintStatus(store, cc), rngCommits };
+    }
     if (cc.kind === "empty-fringe-error") {
       return {
         store,
         iterations: totalIters,
-        status: { kind: "empty-fringe-error", choice: cc.choice, activeTerm: cc.activeTerm },
+        status: { kind: "empty-fringe-error", choice: cc.choice, activeTerm: cc.activeTerm, deferredOnly: cc.deferredOnly },
         rngCommits,
       };
     }

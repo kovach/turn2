@@ -424,7 +424,19 @@ export type FixpointStatus =
       // the public ordering is by hashcons token id of the active term.
       components: ComponentOptions[];
     }
-  | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term };
+  // `deferredOnly`: the term has constrain rows, but each also mentions a
+  // choice asked at a later moment (plans/v2-choice-components-by-moment.md).
+  | { kind: "empty-fringe-error"; choice: BlockedChoose; activeTerm: Term; deferredOnly?: boolean }
+  // A `_constrain` row that does not sit at the ask moment of the choice
+  // terms it mentions (constraint-query.ts `ConstraintPlacementError`).
+  // `line` is the `!` atom's source line, when known.
+  | {
+      kind: "late-constraint-error";
+      rowIndex: number;
+      activeTerm: Term;
+      reason: "late" | "entangled";
+      line: number | undefined;
+    };
 
 // The finite actor set (plans/v2-choice-actors.md): who resolves a choice.
 // `you` = the human (default); `rng` = uniform random, auto-resolved by the
@@ -448,8 +460,10 @@ export interface ComponentOptions {
   // actor). The component's controlling actor is the max over this array.
   actors: Actor[];
   options: Term[][];
-  // Choice component moment: the lub of all the constrain rows' left
-  // endpoints. The display uses it to restrict `icon`/`at` rows.
+  // Choice component moment: the moment the component's terms were asked
+  // at, which is also where its constrain rows sit
+  // (plans/v2-choice-components-by-moment.md). The display uses it to
+  // restrict `icon`/`at` rows.
   moment: Term;
 }
 

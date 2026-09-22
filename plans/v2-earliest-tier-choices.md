@@ -1,5 +1,9 @@
 # Earliest-tier choice components
 
+> Superseded (2026-09-21): the seed closure over shared `_constrain` rows is replaced by components located at
+> their ask moment — plans/v2-choice-components-by-moment.md. Evaluating every
+> sub-atom at one moment stays.
+
 ## Goal
 
 When the v2 scheduler dispatches a `choice` tier, surface only the components

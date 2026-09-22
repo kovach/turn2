@@ -1,5 +1,9 @@
 # Choice component evaluation at the component moment
 
+> Superseded (2026-09-21): the lub-located component moment `M` is replaced by components located at
+> their ask moment — plans/v2-choice-components-by-moment.md. Evaluating every
+> sub-atom at one moment stays.
+
 ## Goal
 
 When evaluating a choice component (the per-component conjunctive query in

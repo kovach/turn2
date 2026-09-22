@@ -41,14 +41,18 @@ export interface MomentHandler {
   // moments are run alongside the frontier without being re-opened —
   // everything below them is settled, so the answer is as final as it gets.
   demanded?(store: Store): Iterable<number>;
-  // Optional: called once for each moment the walk marks resolved, after
-  // marking, in the same step (`resolveMoments`). Runs only once every
-  // `run` round at `m` has settled, so it sees the final state at `m`. May
-  // add tuples at `m`; returns true iff it did. Used by the acc handler
-  // (acc.ts, plans/v2-acc-relations.md): acc rows are a snapshot of the
-  // state at `m` as of resolution, and what readers then emit at `m` does
-  // not re-open it.
-  resolve?(store: Store, m: Term): boolean;
+  // Optional: called once per moment, the first time a walk round with the
+  // moment on the frontier is quiet (`settleMoments`; the moment is then in
+  // `store.settled`). Every `run` round at `m` has settled by then, but `m`
+  // is not yet marked resolved and its choices have not surfaced — so a
+  // moment passes through: created → folds quiet → settled → resolved
+  // (plans/v2-choice-components-by-moment.md step 6). May add tuples at `m`;
+  // returns true iff it did, and the caller re-enters the inner loop so
+  // readers fire (they may emit at `m`, including new `?` / `!` rows). Used
+  // by the acc handler (acc.ts): acc rows are a snapshot of the state at `m`
+  // as of settling — before the choices at `m` resolve — and what readers or
+  // choice continuations then emit at `m` is not folded back in.
+  settle?(store: Store, m: Term): boolean;
 }
 
 // Tokens of every moment the store has seen (`momentTerms`) except `top`
@@ -122,17 +126,20 @@ export function markResolved(store: Store, toks: Iterable<number>): void {
   for (const t of toks) store.resolved.add(t);
 }
 
-// Run every handler's `resolve` hook at each just-marked moment. Returns
-// true iff any handler added a tuple (the caller then re-enters the inner
-// loop so readers of the new rows fire).
-export function resolveMoments(store: Store, handlers: readonly MomentHandler[], toks: Iterable<number>): boolean {
+// Run every handler's `settle` hook at each of `toks` that has not settled
+// yet, recording them in `store.settled`. Returns true iff any handler added
+// a tuple (the caller then re-enters the inner loop so readers of the new
+// rows fire).
+export function settleMoments(store: Store, handlers: readonly MomentHandler[], toks: Iterable<number>): boolean {
   let progress = false;
   for (const tok of toks) {
+    if (store.settled.has(tok)) continue;
+    store.settled.add(tok);
     const m = store.momentTerms.get(tok);
     if (m === undefined) continue;
     for (const h of handlers) {
-      if (h.resolve === undefined) continue;
-      if (h.resolve(store, m)) progress = true;
+      if (h.settle === undefined) continue;
+      if (h.settle(store, m)) progress = true;
     }
   }
   return progress;

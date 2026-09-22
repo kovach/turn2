@@ -28,12 +28,14 @@ cell R C, turn
   ^eligible (cell R C)
 
 -- ?C: C is a choice to be made
+-- !eligible C: C must be *eligible* at the time it is chosen. A `!` sits at
+--   the moment its `?` was asked, so it comes before `~choice`, which moves
+--   the rule on to a later moment
 -- ~choice C: other rules refer to it this way
--- !eligible C: C must be *eligible* at the time it is chosen
 turn, (actor P), did-win -> 0
   ?C
-  ~choice C
   !eligible C
+  ~choice C
   is C Cell -- The external harness writes `is` rows for each user input
     +filled Cell P
     ~did-fill

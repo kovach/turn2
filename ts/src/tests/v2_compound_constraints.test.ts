@@ -92,10 +92,10 @@ turn
 
 turn
   ? X
-  ~ it X
+  ^ it X
 
-it A, !(p1 A Y, p2 Y)
-  it B, !(p3 B Y, p4 Y)
+turn, (it A), !(p1 A Y, p2 Y)
+  (it B), !(p3 B Y, p4 Y)
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);

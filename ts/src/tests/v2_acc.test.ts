@@ -19,7 +19,7 @@ import {
 import { expandTerm } from "../v2/hashcons.js";
 import { ACC_OPS, accOp, natValue, type AccOpDef } from "../v2/acc-ops.js";
 import { accHandler, compileAcc } from "../v2/acc.js";
-import { frontier, markResolved, resolveMoments, unresolvedMoments } from "../v2/moment-walk.js";
+import { frontier, markResolved, settleMoments, unresolvedMoments } from "../v2/moment-walk.js";
 import type { Atom, Term } from "../v2/term.js";
 
 function sym(name: string): Term { return { tag: "Symbol", name }; }
@@ -123,7 +123,9 @@ occupancy X (s (s (s _))) / crowded X
   assert.match(bad(`#acc bar : e\nfoo X / bar X\n^foo a, +bar b`), /is an acc relation/);
   assert.match(bad(`#acc bar : e\nfoo X / bar X\nbar X -> N, ^seen N`), /is an acc relation/);
   assert.match(bad(`#acc bar : e\nfoo X / bar Y`), /head variable 'Y' is not bound/);
-  assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C)`), /inside a '!\(...\)' block/);
+  // Inside `!(...)` an acc relation is a plain pattern: no weight, full arity.
+  assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C -> N)`), /cannot take '-> weight' inside/);
+  assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C extra)`), /has 1 column\(s\), pattern has 2 \(inside/);
   console.log("PASS: acc expand errors");
 }
 
@@ -361,7 +363,7 @@ opt _ / n ()
 
 pick, ^opt x, ^opt y
 
-pick, ?${actor} C, ~choice C, !opt C
+pick, ?${actor} C, !opt C, ~choice C
 
 after, n N, +seen N
 `;
@@ -511,8 +513,8 @@ hit X A / damage X (@sum A)
     const U = unresolvedMoments(s);
     if (U.length === 0) break;
     const F = frontier(s, U);
+    settleMoments(s, [handler], F);
     markResolved(s, F);
-    resolveMoments(s, [handler], F);
   }
   const dmg = s.tuples
     .filter((t) => rt(s, t.atom.terms[0]!) === "damage")
@@ -520,6 +522,104 @@ hit X A / damage X (@sum A)
     .sort();
   assert.deepEqual(dmg, ["damage me 3 @m1", "damage me 4 @m2", "damage me 7 @j"]);
   console.log("PASS: store-level handler writes rows at each input moment and their join");
+}
+
+// ===== 14) Acc relations inside `!(...)` =====================================
+// plans/v2-choice-components-by-moment.md step 6: acc rows at a moment are
+// written when it settles, before its choices surface, so a constraint block
+// reads them with its ordinary stored-tuple match at the component's moment.
+{
+  const options = (src: string): string[][] => {
+    const { store, status } = runFixpoint(ok(src));
+    assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
+    if (status.kind !== "active-choices") throw new Error("unreachable");
+    assert.equal(status.components.length, 1);
+    const comp = status.components[0]!;
+    assert.ok(store.settled.has(tokenOf(store, comp.moment)), "the component's moment has settled");
+    assert.ok(!store.resolved.has(tokenOf(store, comp.moment)), "…and is not resolved: its choice is pending");
+    return comp.options.map((o) => o.map((t) => rt(store, t))).sort();
+  };
+  const world = `
+#acc at : e (@last location)
+#acc distance : location location @min
+#acc n : @count
+
+move A B / at A B
+edge A B / distance A B (s z)
+edge A B, distance B C L / distance A C (s L)
+nothing _ / n ()
+
+^edge here there
+^edge there beyond
+
+~game
+  ~a; ~pick
+
+a, +move me here
+a, +move you here
+a, +move it there
+`;
+  // Active term in a key position, and in a value position.
+  assert.deepEqual(options(world + "pick, ?C, !(at C here)"), [["me"], ["you"]]);
+  assert.deepEqual(options(world + "pick, ?L, !(at it L)"), [["there"]]);
+  // A recursive relation.
+  assert.deepEqual(options(world + "pick, ?C, !(distance here C (s (s z)))"), [["beyond"]]);
+  // A joint choice over two acc patterns.
+  assert.deepEqual(
+    options(world + "pick, ?A, ?B, !(at A L, at B L, distance L there _)"),
+    [["me", "me"], ["me", "you"], ["you", "me"], ["you", "you"]],
+  );
+  // The keyless zero row matches.
+  assert.deepEqual(options(world + "pick, ?N, !(n N)"), [["z"]]);
+  // A keyed relation has no row for an absent key: zero options, dead choice.
+  {
+    const { store, status } = runFixpoint(ok(world + "pick, ?L, !(at nobody L), is L V, +went V"));
+    assert.equal(status.kind, "done");
+    assert.deepEqual(withHead(store, "went"), []);
+    assert.deepEqual(withHead(store, "_dead-choice").length, 1);
+  }
+  // The read is recorded for the timeline, and counts as a rule read.
+  {
+    const { store } = runFixpoint(ok(world + "pick, ?C, !(at C here)"));
+    const pick = store.tuples.find((t) => rt(store, t.atom.terms[0]!) === "pick")!;
+    assert.deepEqual([...(store.accConsulted.get("at") ?? [])], [tokenOf(store, pick.l)]);
+    assert.equal(store.accRelations.get("at")!.readByRules, true);
+    assert.equal(store.accRelations.get("n")!.readByRules, false);
+  }
+  console.log("PASS: acc relations are readable inside !(...)");
+}
+
+// ===== 15) Acc at a moment is the state before its choices resolve ===========
+{
+  const { store, status } = runFixpoint(ok(`
+#acc n : @count
+took _ / n ()
+
+~game
+  ~pick;
+  ~after
+
+pick, ^opt x
+
+pick, n N, ^before N
+
+pick, ?[rng] A, !(opt A), is A V, ^took V
+  ?[rng] B, !(n B), is B W, +saw W
+
+after, n N, +later N
+`), 200, 5000, { random: () => 0 });
+  assert.equal(status.kind, "done");
+  // An ordinary reader at the choice's moment fires before the choice is
+  // made, and sees the state from before it.
+  assert.deepEqual(withHead(store, "before"), ["before z"]);
+  // The documented limit: a second choice chained at the same moment sees the
+  // acc state from before the first — `^took` is alive at that moment, but
+  // acc there was written once, when the moment settled.
+  assert.deepEqual(withHead(store, "took"), ["took x"]);
+  assert.deepEqual(withHead(store, "saw"), ["saw z"]);
+  // `^took` lives inside `pick`, so a later moment does not see it either.
+  assert.deepEqual(withHead(store, "later"), ["later z"]);
+  console.log("PASS: acc at a choice's moment is a snapshot from before the choice");
 }
 
 console.log("ALL v2 acc tests passed");

@@ -1,12 +1,14 @@
-// `#acc` relations: computed at moment resolution (plans/v2-acc-relations.md).
+// `#acc` relations: computed when a moment settles (plans/v2-acc-relations.md;
+// timing from plans/v2-choice-components-by-moment.md step 6).
 //
 // An acc relation's rows are a function of the state alive at a moment:
 // `body / head` rules derive contributions from the stored tuples alive at
 // `m` (and from other acc relations' rows at `m`), the declared op folds
 // them per key (acc-ops.ts: η, ⊕, ρ), and the result is written as point
-// rows `name k… v <id>` at `[m, m]` when the moment walk marks `m`
-// resolved. Ordinary rules read them with a point match at their anchor's
-// left endpoint (expand.ts `decomposeAccRead`).
+// rows `name k… v <id>` at `[m, m]` when the moment walk settles `m`.
+// Ordinary rules read them with a point match at their anchor's left
+// endpoint (expand.ts `decomposeAccRead`); a `!(...)` block reads them with
+// its ordinary stored-tuple match at the component's moment.
 //
 // Evaluation stratifies the acc relations over their read dependencies
 // (edge r → s when a rule with head s reads r), evaluates each SCC in
@@ -15,12 +17,15 @@
 // is a least fixpoint; otherwise the program is assumed well-defined (the
 // section's clause) and a round cap turns divergence into an error.
 //
-// Timing: the handler does nothing in `run` rounds; its `resolve` hook
-// fires once per marked moment, after every fold and same-moment `^` chain
-// at `m` has settled. The rows it writes are progress, so the inner loop
-// runs and readers at `m` fire — but `m` is already resolved, so what they
-// emit at `m` is not folded into `m`'s acc rows (a snapshot), only into
-// later moments'.
+// Timing: the handler does nothing in `run` rounds; its `settle` hook fires
+// once per moment, the first time a walk round with `m` on the frontier is
+// quiet — after every fold and same-moment `^` chain at `m` has settled,
+// before `m` is marked resolved and before any choice at `m` surfaces. The
+// rows it writes are progress, so the inner loop runs and readers at `m`
+// fire — but acc at `m` is written once, so what they (or a choice's
+// continuation) emit at `m` is not folded into `m`'s acc rows (a snapshot),
+// only into later moments'. A second choice chained at the same moment
+// therefore sees the acc state from before the first.
 
 import type { Atom, Term } from "./term.js";
 import { hashconsTerm } from "./hashcons.js";
@@ -254,7 +259,7 @@ function renderMoment(store: Store, m: Term): string {
   return `#${tokenOf(store, m)}`;
 }
 
-// The moment handler (§5.5): nothing in `run`; at `resolve`, compute the
+// The moment handler (§5.5): nothing in `run`; at `settle`, compute the
 // rows at `m` and write them as point tuples with a deterministic id.
 export function accHandler(
   compiled: CompiledAcc,
@@ -267,7 +272,7 @@ export function accHandler(
     run() {
       return { progress: false, blocked: false };
     },
-    resolve(store, m) {
+    settle(store, m) {
       if (compiled.decls.size === 0) return false;
       const rows = computeAccAt(store, compiled, m, schema, jsFuncs, jsRels);
       let any = false;

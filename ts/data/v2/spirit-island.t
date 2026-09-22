@@ -1,48 +1,40 @@
 ~setup; ~test-call
 
 -- Setup --
-#agg at * -> last
-#def move move It To, +at It -> To
+-- #agg at * -> last
+-- #def move move It To, +at It -> To
+
+#acc at : e @last
+move It To, +moved It To
+moved It To / at It To
 
 setup
   +card c
-  +card call, +card:name call call
+  +card call, +card:name call call, ~move call hand
   +land l1
   +land l2
   +dahan d1, ~move d1 l1
   +dahan d2, ~move d2 l1
+
+  +spirit:presence s1 p1
+  +spirit:presence s2 p2
+  ~move p1 l1
+  ~move p2 l2
+  
   +card to-gain, +in-deck to-gain
 
 test-call
   ~activate .(^it.^is call) .(^target l1) ;
-  ~move d2 l2;
-  ~look
-
 
 gain-power E, type E major
-  ( ?P, ~it E P, !in-deck P );
-  ( ~forget-power _ );
+  ( ?P, !in-deck P, ~it E P, is P X );
+  ~move X hand;
+  ~forget-power;
+  ( at to-gain W, ~hi W )
 
-forget-power E, ?P, ~forgot E P, !card P
+forget-power E, ?P, !(at P hand), ~forgot E P
+  is P X, ~move X forgotten-pile
 
-#agg dahan-count land -> count
-
-look, ~locations, ~counts
-
-locations
-  at X -> L
-  ^ here X L
-
-here D L, dahan D, ^has-dahan L, ^dahan-count L -> ()
-
-counts, land L, dahan-count L -> (s _), ^alt-has-dahan L
-
-look
-  (counts, dahan-count L -> N)
-  ^ok L N
-
-
--- new stuff
 
 -- To target, choose a source and target land
 target-power E
@@ -56,13 +48,15 @@ target-power
   .(:actor Spirit)
   !spirit:land Spirit S
 
+#acc spirit:land : spirit land
+spirit:presence S P, at P L / spirit:land S L
+#acc has-dahan : land
+dahan.at L / has-dahan L
+
 target-power .(:actor S)
   entwined S T
   spirit:presence T P
   ^spirit:presence S P
-
-#macro spirit:land S B :=
-  [[ it:at A B, spirit:presence S A | last B] | (s _) = count A]
 
 target-power 
   .(:actor S, spirit:name S mists-shift-and-flow)
@@ -79,7 +73,7 @@ may, ?X, !boolean X, is X true, ^true
 -- https://spiritislandwiki.com/index.php?title=Call_on_Midnight%27s_Dream
 activate .(it.is This, card:name This call) .(target T)
   ( ~this-is This );
-  ( ~look, has-dahan T );
+  ( has-dahan T, ~ok );
   ( ~gain-power.(^type major).(it.is Gained)
-    forget-power.forgot.is This );
+    (forget-power.forgot.is This) );
   ~play-power.^it.^is Gained
