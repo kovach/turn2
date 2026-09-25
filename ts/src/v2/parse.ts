@@ -9,6 +9,7 @@ import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, MacroDef, Mar
 import { isActor } from "./types.js";
 import { aggregators } from "./aggregators.js";
 import { accOp, UNIT, type AccOp } from "./acc-ops.js";
+import { builtinJsRels, isBuiltinRel } from "./builtins.js";
 
 export interface ParseError {
   line: number;
@@ -558,9 +559,11 @@ function parseJsRelCommand(sig: string, body: string, line: number): Command | P
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const schema = new Map<string, string>();
+  const schemaLines = new Map<string, number>(); // declaration line, for errors
   const reactive = new Set<string>();
   const jsDefs = new Map<string, JsDef>();
-  const jsRels = new Map<string, JsRelDef[]>();
+  // Seeded with the built-in relations (builtins.ts); user clauses join them.
+  const jsRels = builtinJsRels();
   const macros = new Map<string, MacroDef>();
   const accDecls = new Map<string, AccDecl>();
   const accRules: AccRule[] = [];
@@ -588,6 +591,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
           return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
         }
         schema.set(cmd.decl.relation, cmd.decl.aggregator);
+        schemaLines.set(cmd.decl.relation, t.line);
         if (cmd.kind === "reactive") reactive.add(cmd.decl.relation);
         continue;
       }
@@ -606,6 +610,9 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (jsDefs.has(cmd.name)) {
           return { line: cmd.line, message: `duplicate '#js' function '${cmd.name}'` };
         }
+        if (isBuiltinRel(cmd.name)) {
+          return { line: cmd.line, message: `'${cmd.name}' is a built-in relation and cannot be redefined` };
+        }
         if (jsRels.has(cmd.name)) {
           return { line: cmd.line, message: `'#js' name '${cmd.name}' is already a '#js-def' relation` };
         }
@@ -614,6 +621,9 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       }
       if (cmd.kind === "js-rel") {
         const def = cmd.def;
+        if (isBuiltinRel(def.name)) {
+          return { line: cmd.line, message: `'${def.name}' is a built-in relation and cannot be redefined` };
+        }
         if (jsDefs.has(def.name)) {
           return { line: cmd.line, message: `'#js-def' name '${def.name}' is already a '#js' function` };
         }
@@ -707,6 +717,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     const line = decl.span.line;
     if (schema.has(name)) return { line, message: `'#acc' name '${name}' already has a '#agg'/'#reactive' declaration` };
     if (jsDefs.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js' function` };
+    if (isBuiltinRel(name)) return { line, message: `'${name}' is a built-in relation and cannot be redefined` };
     if (jsRels.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js-def' relation` };
     if (macros.has(name)) return { line, message: `'#acc' name '${name}' is already a macro` };
   }
@@ -721,10 +732,13 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   // free (a `#macro`/`#agg` may lexically precede or follow the `#js-def`).
   for (const [name, clauses] of jsRels) {
     const line = clauses[0]!.span.line;
-    if (macros.has(name)) {
+    const macro = macros.get(name);
+    if (macro !== undefined) {
+      if (isBuiltinRel(name)) return { line: macro.span.line, message: `'${name}' is a built-in relation and cannot be redefined` };
       return { line, message: `'#js-def' name '${name}' is already a macro` };
     }
     if (schema.has(name)) {
+      if (isBuiltinRel(name)) return { line: schemaLines.get(name)!, message: `'${name}' is a built-in relation and cannot be redefined` };
       return { line, message: `js relation '${name}' cannot have a schema declaration ('#agg'/'#reactive')` };
     }
   }
@@ -1359,7 +1373,9 @@ function renameInQuery(items: RuleAtom[], from: string, to: string): void {
 //                first such atom is seen.
 //   freshVar:    lazily allocated when this frame's anchor first needs
 //                to be threaded; once allocated, the var has been
-//                appended to anchor.atom.terms exactly once.
+//                appended to anchor.atom.terms exactly once. When the left
+//                of the dot was a lone variable (`A . p`), this is that
+//                variable and `anchor` is null: nothing to append to.
 //   pendingDot:  a `.` was just seen — the next atom/sub is the right.
 type Frame = {
   anchor: AtomItem | null;
@@ -1375,6 +1391,19 @@ function ensureFresh(frame: Frame, usedNames: Set<string>, counter: { n: number 
   frame.freshVar = v;
   if (frame.anchor !== null) frame.anchor.atom.terms.push(v);
   return v;
+}
+
+// The variable of a body atom that is just `A` — a bare match with a lone
+// Variable term and nothing else — or null. On the left of a dot such an
+// atom names the value to thread rather than a relation to match: `A.p X`
+// is `p A X`, whatever marker `p` carries, so `x A, A.^p X` and `x.p X`
+// read alike. (A variable-head match with arguments, `T X.p`, is still an
+// atom: `T X _dot1, p _dot1`.)
+function loneVariable(a: AtomItem): Term | null {
+  if (a.marker !== "match" || a.atom.terms.length !== 1) return null;
+  if (a.weight !== undefined || a.subAtoms !== undefined || a.lLit !== undefined || a.rLit !== undefined) return null;
+  const t = a.atom.terms[0]!;
+  return t.tag === "Variable" ? t : null;
 }
 
 // Walks `items` left-to-right. If `incoming` is supplied, the first
@@ -1419,11 +1448,20 @@ function desugarBody(
       if (frame.pendingDot) {
         return { line: it.line, message: "consecutive '.' with no atom between them" };
       }
-      if (frame.anchor === null) {
+      if (frame.anchor === null && frame.freshVar === null) {
         return { line: it.line, message: "dot must follow an atom" };
       }
-      if (frame.anchor.marker === "aggregate") {
-        return { line: it.line, message: "aggregate atom (with '-> weight') cannot appear on the left of '.'" };
+      if (frame.anchor !== null) {
+        if (frame.anchor.marker === "aggregate") {
+          return { line: it.line, message: "aggregate atom (with '-> weight') cannot appear on the left of '.'" };
+        }
+        const lone = loneVariable(frame.anchor);
+        if (lone !== null) {
+          // `A . p`: drop the placeholder atom and thread `A` itself.
+          out.splice(out.lastIndexOf(frame.anchor), 1);
+          frame.anchor = null;
+          frame.freshVar = lone;
+        }
       }
       frame.pendingDot = true;
       frame.dotLine = it.line;

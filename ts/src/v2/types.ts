@@ -333,6 +333,9 @@ export interface JsRelDef {
   params: { mode: "+" | "-"; name: string }[];
   body: string; // raw JS generator source between the braces
   span: Span;
+  // Set on the clauses `builtinJsRels()` (builtins.ts) seeds every program
+  // with; they have no source line and are left out of IR dumps.
+  builtin?: true;
 }
 
 // Static link from an exception default rule's emitted relation back to the

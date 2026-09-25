@@ -4,6 +4,7 @@ import {
   collectProgramSymbols,
   collectRuleVariables,
   completions,
+  partialTokenAt,
   suggestionsFor,
 } from "../v2/autocomplete.js";
 
@@ -155,6 +156,40 @@ function maskedSuggest(text: string, start: number, end: number, line: number): 
   const ctext = "+ play-card e1\n+ play-card";
   assert.deepEqual(maskedSuggest(ctext, ctext.length - 9, ctext.length, 2), []);
   console.log("PASS: token masking");
+}
+
+// --- partialTokenAt: the token under the cursor -----------------------------
+{
+  // Marker glued to the token at the line start is stripped.
+  assert.deepEqual(partialTokenAt("+fo", 3), { text: "fo", start: 1, end: 3 });
+  // ...and equally when the atom is not the first on its line (the bug: the
+  // strip used to apply only at the line's first column, so `+fo` was looked
+  // up verbatim and matched nothing).
+  const t = "+item sceptre, +fo";
+  assert.deepEqual(partialTokenAt(t, t.length), { text: "fo", start: t.length - 2, end: t.length });
+  const u = "  a X, ^fo";
+  assert.deepEqual(partialTokenAt(u, u.length), { text: "fo", start: u.length - 2, end: u.length });
+  // Every marker char is stripped; a bare marker alone is no token.
+  for (const m of ["-", "~", "+", "^", "!", "?"]) {
+    assert.deepEqual(partialTokenAt(`x, ${m}ab`, 6), { text: "ab", start: 4, end: 6 });
+    assert.equal(partialTokenAt(`x, ${m}`, 4), null);
+  }
+  // A `-` inside a token is not a marker.
+  assert.deepEqual(partialTokenAt("x, foo-b", 8), { text: "foo-b", start: 3, end: 8 });
+  // Separators end the run; parens count as separators.
+  assert.deepEqual(partialTokenAt("p (ab", 5), { text: "ab", start: 3, end: 5 });
+  // Not at a token's right edge, or nothing to the left: no token.
+  assert.equal(partialTokenAt("foo", 1), null);
+  assert.equal(partialTokenAt("foo ", 4), null);
+  assert.equal(partialTokenAt("", 0), null);
+  // End-to-end through the masked lookup the editor performs.
+  const text = "+item sceptre, +fo";
+  const tok = partialTokenAt(text, text.length)!;
+  assert.deepEqual(maskedSuggest(text, tok.start, tok.end, 1), []); // no `fo…` symbol yet
+  const text2 = "+item foo\n+item sceptre, +fo";
+  const tok2 = partialTokenAt(text2, text2.length)!;
+  assert.deepEqual(maskedSuggest(text2, tok2.start, tok2.end, 2), ["foo"]);
+  console.log("PASS: partialTokenAt");
 }
 
 console.log("ALL v2 autocomplete tests passed");

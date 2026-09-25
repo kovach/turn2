@@ -435,9 +435,39 @@ assertAlpha(
   "dot — marker-tagged atoms inside sibling subs share fresh var",
 );
 
+// A lone variable on the left of a dot is the value to thread, not an atom
+// to match, whatever marker the right side carries.
+assertAlpha(
+  "x A, A.a:b.b:c C\n",
+  "x A, a:b A T, b:c T C\n",
+  "dot — lone variable on left",
+);
+assertAlpha(
+  "A.a:b.b:c C\n",
+  "a:b A T, b:c T C\n",
+  "dot — lone unbound variable on left binds through the right atom",
+);
+assertAlpha(
+  "x A, A.^p k, A.~q k, A.!r, A.+s k\n",
+  "x A, ^p A k, ~q A k, !r A, +s A k\n",
+  "dot — lone variable on left, every right-side marker",
+);
+assertAlpha(
+  "x A, A.(a:b B).(a:b B2).b:c C\n",
+  "x A, (a:b A B), (a:b A B2), b:c A C\n",
+  "dot — lone variable into sibling subs",
+);
+assertAlpha(
+  "T X . p\n",
+  "T X V, p V\n",
+  "dot — variable head with arguments is still an atom",
+);
+
 // Errors — kept as direct ParseError checks.
 {
   assert.match(err(". bar\n").message, /dot must follow an atom/);
+  assert.match(err("x A, A . . bar\n").message, /consecutive/);
+  assert.match(err("x A, A .\n").message, /trailing '\.'/);
   assert.match(err("foo X . = a b\n").message, /right of '\.'/);
   assert.match(err("foo X . . bar\n").message, /consecutive/);
   assert.match(err("foo -> W . bar\n").message, /aggregate atom .* on the left of '\.'/);

@@ -1,8 +1,4 @@
-~setup; ~test-call
-
--- Setup --
--- #agg at * -> last
--- #def move move It To, +at It -> To
+~setup; ~test-call; ~test-entwine
 
 #acc at : e @last
 move It To, +moved It To
@@ -24,17 +20,18 @@ setup
   +card to-gain, +in-deck to-gain
 
 test-call
-  ~activate .(^it.^is call) .(^target l1) ;
+  ~activate .(^it.^is call) .(^target l1)
+
+test-entwine
+  ~activate .(^it.^is entwine) .(^target s2)
 
 gain-power E, type E major
   ( ?P, !in-deck P, ~it E P, is P X );
   ~move X hand;
-  ~forget-power;
-  ( at to-gain W, ~hi W )
+  ~forget-power
 
 forget-power E, ?P, !(at P hand), ~forgot E P
   is P X, ~move X forgotten-pile
-
 
 -- To target, choose a source and target land
 target-power E
@@ -49,14 +46,11 @@ target-power
   !spirit:land Spirit S
 
 #acc spirit:land : spirit land
-spirit:presence S P, at P L / spirit:land S L
+spirit:presence S P, at P L 
+  / spirit:land S L
 #acc has-dahan : land
 dahan.at L / has-dahan L
 
-target-power .(:actor S)
-  entwined S T
-  spirit:presence T P
-  ^spirit:presence S P
 
 target-power 
   .(:actor S, spirit:name S mists-shift-and-flow)
@@ -77,3 +71,14 @@ activate .(it.is This, card:name This call) .(target T)
   ( ~gain-power.(^type major).(it.is Gained)
     (forget-power.forgot.is This) );
   ~play-power.^it.^is Gained
+
+target-power .(:actor S)
+  entwined S T
+  spirit:presence T P
+  ^spirit:presence S P
+
+turn T,
+  ( activate .(it is entwined-power) .(target You) )
+  ^ entwined 
+
+  

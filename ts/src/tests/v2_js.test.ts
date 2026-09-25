@@ -150,15 +150,15 @@ data P
 // 8) Boolean return encodes to 0 / 1.
 {
   const { store } = runFixpoint(ok(`
-#js (gt x y) {
+#js (above x y) {
   return x > y;
 }
 
 + n 5
 
 n X
-  + b @js(gt X 3)
-  + c @js(gt X 9)
+  + b @js(above X 3)
+  + c @js(above X 9)
 `));
   const tuples = listTuples(store);
   assert(tuples.includes("b 1"), `expected 'b 1': ${tuples}`);

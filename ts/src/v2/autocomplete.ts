@@ -144,6 +144,33 @@ export function collectRuleVariables(text: string, line: number): Set<string> | 
   return out;
 }
 
+// --- cursor token -----------------------------------------------------------
+
+// Token-run separators: whitespace plus the structural punctuation the lexer
+// breaks on. A symbol/variable token is a maximal run of non-separator chars.
+const AC_SEP = /[\s(),.;]/;
+
+function isMarkerCh(ch: string): boolean {
+  return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!" || ch === "?";
+}
+
+// The partial token whose right end is at offset `pos` of `value`, or null
+// when no box should show: the cursor is not at a token's right edge
+// (non-whitespace immediately to the right), the run to the left is empty, or
+// it is only a bare marker. A leading literal-type marker is stripped wherever
+// the run sits on the line (`+item x, +fo` completes `fo`, not `+fo`); a `-`
+// inside a token such as `foo-bar` is untouched since only the run's first
+// char is examined.
+export function partialTokenAt(value: string, pos: number): { text: string; start: number; end: number } | null {
+  if (pos < value.length && !/\s/.test(value[pos]!)) return null;
+  let start = pos;
+  while (start > 0 && !AC_SEP.test(value[start - 1]!)) start--;
+  if (start === pos) return null;
+  if (isMarkerCh(value[start]!)) start++;
+  if (start >= pos) return null;
+  return { text: value.slice(start, pos), start, end: pos };
+}
+
 // --- top-level entry --------------------------------------------------------
 
 // Completions for partial token `token` at 1-indexed `line` of `text`. The

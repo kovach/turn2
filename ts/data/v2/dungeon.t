@@ -69,8 +69,6 @@ shop-item X, ^icon X
 shop, ?X, !shop-option X, ~shop-choice X
 
 -- partial subtract
-#js-def ge +X +Y { if (X >= Y) yield [] }
-#js-def le +X +Y { if (X <= Y) yield [] }
 #js-def subtract +X +Y -R { if (X >= Y) yield [X-Y] }
 
 -- buy : treasure T * cost W C * damage_of W D * weapon_damage _ 

@@ -1,3 +1,17 @@
+# attribute namespaces from a lightweight type system
+plan: plans/v2-attribute-namespaces.md
+
+- `foo X, X.:score S` should expand to `foo:score X S`; `foo.:hand.:card C` to `foo F, foo:hand F H, hand:card H C`
+- the parser gives every rule variable a set of types (namespace symbols): from unary atoms, from the first and last slots of `ns:attr` heads, from `#acc` column declarations, and through `=`
+- a head is a sequence of colon-separated segments, segment i pairing with argument i. an empty segment is filled from the type of its argument: `:attr` from the first slot, `foo:` from the last, `buy::` from both remaining slots. resolution depends only on the rule itself and `#acc` declarations, never on other rules; a gap whose variable has several types is an error, as is an unresolvable fragment — relations with empty segments go away
+- dot-fresh variables are typed like any other variable (positionally), so chains through fresh vars work with one rule
+- `#type card:owner card player` declares a relation's column types explicitly (the `#acc` column syntax without `@`), replacing the positional convention for that relation; the escape hatch when an attribute's name is not its value's type. several declarations can be indented under a bare `#type`
+- the standalone `:` between name and columns is dropped from `#acc` as well (`#acc at e @last`); it carried no information. corpus and tests migrate
+- the corpus's existing `:actor`/`:it`-style relations are unimportant and get migrated
+
+# 26/09/24
+- misc UI fixes
+
 # choice components are located at their ask moment
 plan: plans/v2-choice-components-by-moment.md
 (implemented 26/09/21, both recommended decisions)

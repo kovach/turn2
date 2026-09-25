@@ -1,4 +1,5 @@
-import { suggestionsFor } from "./autocomplete.js";
+import { partialTokenAt, suggestionsFor } from "./autocomplete.js";
+import { applyRename, renameError, renameOccurrences, renameTargetAt, type RenameTarget } from "./rename.js";
 
 export type SaveBackend = "none" | "server" | "url-param";
 
@@ -13,6 +14,10 @@ export interface EditorOptions {
   // Symbol/variable completion overlay (plans/v2-editor-autocomplete.md).
   // Default off; index-v2 opts in, pres leaves it off.
   enableAutocomplete?: boolean;
+  // Right-click code-action menu (rename symbol / variable, rename.ts).
+  // Default off; index-v2 opts in. Shift+right-click still gets the
+  // browser's own menu.
+  enableContextMenu?: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -33,6 +38,7 @@ export class Editor {
   private readonly keyHandler: (ev: KeyboardEvent) => void;
   private readonly inputHandler: () => void;
   private readonly scrollHandler: () => void;
+  private readonly gutterSyncHandler: () => void;
   private readonly mouseDownHandler: (ev: MouseEvent) => void;
   private readonly keyUpHandler: (ev: KeyboardEvent) => void;
   private readonly blurHandler: () => void;
@@ -66,6 +72,13 @@ export class Editor {
   private acMirror: HTMLDivElement | null = null;
   private acItems: string[] = [];
   private acToken: { start: number; end: number } | null = null;
+
+  // Context menu state. `menuEl` is created lazily; `menuClose` undoes the
+  // document-level listeners that dismiss it.
+  private readonly menuEnabled: boolean;
+  private readonly contextMenuHandler: (ev: MouseEvent) => void;
+  private menuEl: HTMLDivElement | null = null;
+  private menuClose: (() => void) | null = null;
 
   constructor(opts: EditorOptions) {
     this.opts = opts;
@@ -104,14 +117,23 @@ export class Editor {
     }
 
     this.acEnabled = opts.enableAutocomplete ?? false;
+    this.menuEnabled = opts.enableContextMenu ?? false;
+    this.contextMenuHandler = (ev) => this.onContextMenu(ev);
 
     this.keyHandler = (ev) => this.onKeyDown(ev);
     this.inputHandler = () => this.onInput();
+    // The gutter never scrolls on its own: it mirrors the textarea. Anything
+    // else that moves it — notably the browser restoring scroll offsets on a
+    // page reload, which fires no textarea scroll — would leave line numbers
+    // (and every overlay aligned off the gutter rows) offset from the text,
+    // so snap it back whenever it moves and once loading has settled.
+    this.gutterSyncHandler = () => this.syncGutterScroll();
     this.scrollHandler = () => {
-      this.gutterEl.scrollTop = this.ta.scrollTop;
+      this.syncGutterScroll();
       this.repositionHighlight();
       this.repositionNotes();
       if (this.acEnabled) this.hideAutocomplete();
+      this.hideMenu();
     };
     this.mouseDownHandler = (ev) => {
       if (this._frozen) ev.preventDefault();
@@ -133,7 +155,11 @@ export class Editor {
     this.ta.addEventListener("keydown", this.keyHandler);
     this.ta.addEventListener("input", this.inputHandler);
     this.ta.addEventListener("scroll", this.scrollHandler);
+    this.gutterEl.addEventListener("scroll", this.gutterSyncHandler);
+    window.addEventListener("load", this.gutterSyncHandler);
+    window.addEventListener("pageshow", this.gutterSyncHandler);
     this.ta.addEventListener("mousedown", this.mouseDownHandler);
+    if (this.menuEnabled) this.ta.addEventListener("contextmenu", this.contextMenuHandler);
     if (this.acEnabled) {
       this.ta.addEventListener("keyup", this.keyUpHandler);
       this.ta.addEventListener("blur", this.blurHandler);
@@ -153,6 +179,11 @@ export class Editor {
     this.ta.value = v;
     this.rebuildGutter();
     if (this.opts.autoGrow) this.fitHeight();
+    this.syncGutterScroll();
+  }
+
+  private syncGutterScroll(): void {
+    if (this.gutterEl.scrollTop !== this.ta.scrollTop) this.gutterEl.scrollTop = this.ta.scrollTop;
   }
   get element(): HTMLTextAreaElement { return this.ta; }
   focus(): void { this.ta.focus(); }
@@ -381,9 +412,15 @@ export class Editor {
     this.ta.removeEventListener("keydown", this.keyHandler);
     this.ta.removeEventListener("input", this.inputHandler);
     this.ta.removeEventListener("scroll", this.scrollHandler);
+    this.gutterEl.removeEventListener("scroll", this.gutterSyncHandler);
+    window.removeEventListener("load", this.gutterSyncHandler);
+    window.removeEventListener("pageshow", this.gutterSyncHandler);
     this.ta.removeEventListener("mousedown", this.mouseDownHandler);
     this.ta.removeEventListener("keyup", this.keyUpHandler);
     this.ta.removeEventListener("blur", this.blurHandler);
+    this.ta.removeEventListener("contextmenu", this.contextMenuHandler);
+    this.hideMenu();
+    this.menuEl?.remove();
     this.acBox?.remove();
     this.acMirror?.remove();
     this.highlightEl?.remove();
@@ -728,22 +765,7 @@ export class Editor {
   private currentToken(): { text: string; start: number; end: number } | null {
     const ta = this.ta;
     if (ta.selectionStart !== ta.selectionEnd) return null;
-    const pos = ta.selectionStart;
-    const value = ta.value;
-    // Right edge: whitespace or end-of-text immediately to the right.
-    if (pos < value.length && !/\s/.test(value[pos]!)) return null;
-    // Scan left over token chars (everything but whitespace / structural
-    // separators).
-    let start = pos;
-    while (start > 0 && !AC_SEP.test(value[start - 1]!)) start--;
-    if (start === pos) return null; // nothing to the left
-    // Strip a leading literal-type marker when the run begins at the line's
-    // first non-whitespace column (e.g. `-foo` typed without a space).
-    const lineStart = value.lastIndexOf("\n", pos - 1) + 1;
-    const indentLen = value.slice(lineStart).match(/^[ \t]*/)![0]!.length;
-    if (start === lineStart + indentLen && isMarkerCh(value[start]!)) start++;
-    if (start >= pos) return null;
-    return { text: value.slice(start, pos), start, end: pos };
+    return partialTokenAt(ta.value, ta.selectionStart);
   }
 
   private updateAutocomplete(): void {
@@ -779,10 +801,20 @@ export class Editor {
       row.textContent = it;
       box.appendChild(row);
     });
-    const { left, top } = this.caretCoords(tokenStart);
+    const { left, top, lineH } = this.caretCoords(tokenStart);
     box.style.left = left + "px";
     box.style.top = top + "px";
     box.style.display = "block";
+    // Flip above the caret's line when the box would be clipped below it (by
+    // the viewport or a scrolling/overflow-hidden ancestor) and there is more
+    // room above.
+    const r = box.getBoundingClientRect();
+    const clip = visibleClipRect(this.wrap);
+    const roomBelow = clip.bottom - r.top;
+    const roomAbove = r.top - lineH - clip.top;
+    if (r.height > roomBelow && roomAbove > roomBelow) {
+      box.style.top = top - lineH - r.height + "px";
+    }
   }
 
   private hideAutocomplete(): void {
@@ -799,9 +831,149 @@ export class Editor {
     this.replaceRange(tok.start, tok.end, first, tok.start + first.length);
   }
 
+  // --- context menu ----------------------------------------------------------
+
+  // Right-click: open the code-action menu at the click point, acting on the
+  // caret. The browser has already placed the caret on the right-button
+  // mousedown (or kept the selection, when the click was inside it), with its
+  // own hit test — recomputing the offset from our overlay geometry drifted
+  // by whole lines where text-line and gutter-row heights differ.
+  private onContextMenu(ev: MouseEvent): void {
+    if (ev.shiftKey) return; // escape hatch to the browser's menu
+    ev.preventDefault();
+    this.hideAutocomplete();
+    const target = renameTargetAt(this.ta.value, this.ta.selectionStart);
+    const menu = this.openMenu(ev.clientX, ev.clientY);
+    const item = document.createElement("div");
+    item.className = "editor-menu-item";
+    if (target === null || this._frozen) {
+      item.classList.add("is-disabled");
+      item.textContent = this._frozen ? "Rename (editor is read-only)" : "Rename (no symbol or variable here)";
+    } else {
+      item.textContent = `Rename ${target.kind} '${target.name}'…`;
+      item.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus
+      item.addEventListener("click", () => this.showRenameInput(target));
+    }
+    menu.appendChild(item);
+    this.placeMenu();
+  }
+
+  // Replace the menu's contents with a name input for `target`. Enter applies
+  // the rename (refused names show why and keep the input open); Escape or a
+  // click elsewhere cancels.
+  private showRenameInput(target: RenameTarget): void {
+    const menu = this.menuEl;
+    if (menu === null) return;
+    const text = this.ta.value;
+    const ranges = renameOccurrences(text, target);
+    menu.textContent = "";
+    const head = document.createElement("div");
+    head.className = "editor-menu-head";
+    const where = target.kind === "symbol" ? "in this file" : "in this rule";
+    head.textContent = `Rename ${target.kind} '${target.name}' · ${ranges.length} occurrence${ranges.length === 1 ? "" : "s"} ${where}`;
+    const input = document.createElement("input");
+    input.className = "editor-menu-input";
+    input.type = "text";
+    input.spellcheck = false;
+    input.value = target.name;
+    const err = document.createElement("div");
+    err.className = "editor-menu-error";
+    menu.append(head, input, err);
+    this.placeMenu();
+    input.focus();
+    input.select();
+    const check = (): string | null => {
+      const e = renameError(text, target, input.value.trim());
+      err.textContent = e ?? "";
+      return e;
+    };
+    input.addEventListener("input", () => { check(); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this.hideMenu();
+        this.ta.focus();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (check() !== null) return;
+        const name = input.value.trim();
+        this.hideMenu();
+        if (name === target.name || this.ta.value !== text) { this.ta.focus(); return; }
+        this.applyRenameEdit(text, target, ranges, name);
+      }
+    });
+  }
+
+  // Rewrite every occurrence as one edit spanning first..last, so the whole
+  // rename is a single native undo step. The caret lands at the end of the
+  // renamed identifier it started on.
+  private applyRenameEdit(text: string, target: RenameTarget, ranges: { start: number; end: number }[], name: string): void {
+    if (ranges.length === 0) return;
+    const from = ranges[0]!.start;
+    const to = ranges[ranges.length - 1]!.end;
+    const shifted = ranges.map((r) => ({ start: r.start - from, end: r.end - from }));
+    const replacement = applyRename(text.slice(from, to), shifted, name);
+    const before = ranges.filter((r) => r.start < target.start).length;
+    const caret = target.start + before * (name.length - target.name.length) + name.length;
+    this.replaceRange(from, to, replacement, caret);
+  }
+
+  // Create (or clear) the menu at a client point and wire up dismissal:
+  // a mousedown outside it, Escape, scroll, resize or window blur.
+  private openMenu(clientX: number, clientY: number): HTMLDivElement {
+    this.hideMenu();
+    if (this.menuEl === null) {
+      this.menuEl = document.createElement("div");
+      this.menuEl.className = "editor-menu";
+      this.wrap.appendChild(this.menuEl);
+    }
+    const menu = this.menuEl;
+    menu.textContent = "";
+    const w = this.wrap.getBoundingClientRect();
+    menu.style.left = clientX - w.left + "px";
+    menu.style.top = clientY - w.top + "px";
+    menu.dataset["y"] = String(clientY);
+    menu.style.display = "block";
+    const onDown = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) this.hideMenu(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); this.hideMenu(); } };
+    const onAway = () => this.hideMenu();
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onAway);
+    window.addEventListener("blur", onAway);
+    this.menuClose = () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onAway);
+      window.removeEventListener("blur", onAway);
+    };
+    return menu;
+  }
+
+  // Keep the menu on screen: open upward from the click point when it would
+  // be clipped below, and shift left when it would run off the right edge.
+  private placeMenu(): void {
+    const menu = this.menuEl;
+    if (menu === null) return;
+    const w = this.wrap.getBoundingClientRect();
+    const y = Number(menu.dataset["y"]);
+    menu.style.top = y - w.top + "px";
+    const r = menu.getBoundingClientRect();
+    const clip = visibleClipRect(this.wrap);
+    if (r.bottom > clip.bottom && y - r.height >= clip.top) menu.style.top = y - r.height - w.top + "px";
+    const overRight = r.right - window.innerWidth;
+    if (overRight > 0) menu.style.left = Math.max(0, r.left - overRight - w.left) + "px";
+  }
+
+  private hideMenu(): void {
+    this.menuClose?.();
+    this.menuClose = null;
+    if (this.menuEl !== null) this.menuEl.style.display = "none";
+  }
+
   // Pixel position (relative to `this.wrap`) of the caret at offset `pos`,
   // via an off-screen mirror that replicates the textarea's text metrics.
-  private caretCoords(pos: number): { left: number; top: number } {
+  private caretCoords(pos: number): { left: number; top: number; lineH: number } {
     const ta = this.ta;
     if (!this.acMirror) {
       this.acMirror = document.createElement("div");
@@ -825,22 +997,29 @@ export class Editor {
     // can be taller than the pane, and lingering overflow gives the document
     // a scroll range that lets caret-reveal/scrollIntoView shift the page.
     mirror.textContent = "";
-    return { left, top };
+    return { left, top, lineH };
   }
 }
 
-// Token-run separators: whitespace plus the structural punctuation the lexer
-// breaks on. A symbol/variable token is a maximal run of non-separator chars.
-const AC_SEP = /[\s(),.;]/;
+// The on-screen region `el`'s descendants can be seen in (client coordinates):
+// the viewport intersected with `el` and every ancestor whose overflow clips.
+function visibleClipRect(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let a: HTMLElement | null = el; a !== null; a = a.parentElement) {
+    const oy = getComputedStyle(a).overflowY;
+    if (oy === "visible") continue;
+    const r = a.getBoundingClientRect();
+    top = Math.max(top, r.top);
+    bottom = Math.min(bottom, r.bottom);
+  }
+  return { top, bottom };
+}
 
 // Bare modifier keys: their keyup must neither refresh nor dismiss the box, so
 // the Shift-up ending an uppercase keystroke doesn't close what the letter
 // opened.
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph"]);
-
-function isMarkerCh(ch: string): boolean {
-  return ch === "-" || ch === "~" || ch === "+" || ch === "^" || ch === "!" || ch === "?";
-}
 
 function lineNumberAt(value: string, pos: number): number {
   let n = 1;

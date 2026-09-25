@@ -372,3 +372,20 @@ ships and we've stared at it for a while.
 5. **Error messages.** `ParseError`s for dot-related errors should
    reference the dot's line, not the surrounding rule's start. The
    `dot` token carries `line`; mechanical.
+
+## Addendum (2026-09-21): a lone variable on the left
+
+`A . p X` used to parse as a variable-head match `A _dot1, p _dot1 X` —
+a relation named by `A`, which matched nothing. Now a bare `match` atom
+whose only term is a Variable (`loneVariable` in parse.ts) is, on the
+left of a dot, the value to thread: the placeholder atom is dropped from
+the body and `A` takes the fresh var's place in the frame (`freshVar =
+A`, `anchor = null`), so `ensureFresh` hands it to the right atom or to
+the first atom of each sibling `.(sub)` without appending anything. The
+right side keeps whatever marker it carries, so `x A, A.^p k` is `x A,
+^p A k` and `A.a:b.b:c C` (with `A` unbound) is `a:b A T, b:c T C`.
+A variable head with arguments, `T X . p`, is still an atom.
+
+Tests: `v2_parse.test.ts`, "dot — lone variable …".
+
+Claude Fable 5.1 (claude-fable-5-1).

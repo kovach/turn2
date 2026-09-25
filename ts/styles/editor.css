@@ -106,3 +106,41 @@
   overflow: hidden;
 }
 .editor-note .val { opacity: 0.7; }
+
+/* Right-click code-action menu (Editor enableContextMenu; rename.ts). Same
+ * palette fallbacks as the autocomplete box. */
+.editor-menu {
+  position: absolute;
+  z-index: 40;
+  display: none;
+  min-width: 180px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg, #ddd);
+  background: var(--editor-autocomplete-bg, var(--bg-2, #1e1e1e));
+  border: 1px solid var(--editor-autocomplete-border, var(--border, rgba(78, 201, 176, 0.5)));
+  border-radius: 4px;
+  padding: 3px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.editor-menu-item { padding: 3px 12px; cursor: pointer; white-space: pre; }
+.editor-menu-item:hover { background: var(--editor-autocomplete-sel, var(--hover, rgba(78, 201, 176, 0.18))); }
+.editor-menu-item.is-disabled { cursor: default; opacity: 0.55; }
+.editor-menu-item.is-disabled:hover { background: none; }
+.editor-menu-head { padding: 3px 10px; color: var(--fg-mute, #999); white-space: pre; }
+.editor-menu-input {
+  display: block;
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  margin: 2px 8px 4px;
+  padding: 2px 6px;
+  font: inherit;
+  color: var(--fg, #ddd);
+  background: var(--bg, #111);
+  border: 1px solid var(--border, #555);
+  outline: none;
+}
+.editor-menu-input:focus { border-color: var(--syn-pred, #007a5a); }
+.editor-menu-error { padding: 0 10px 2px; color: var(--err, #d33); white-space: pre-wrap; max-width: 360px; }
+.editor-menu-error:empty { display: none; }

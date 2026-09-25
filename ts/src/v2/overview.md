@@ -66,7 +66,7 @@ The v2 parser for the flat-syntax language: it tokenizes input line-by-line (com
 **Key terms:**
 - `parse` — top-level entry (tokenize → `parseProgram`); returns a `Program` or a `ParseError` (`{ line, message }`)
 - marker chars — `-~+^!?` map to a `Marker`
-- dot-notation desugaring — threads fresh anchor vars across atoms/subs
+- dot-notation desugaring — threads fresh anchor vars across atoms/subs. A lone variable on the left of a dot (`A.p X`, a bare `match` atom whose only term is a Variable — `loneVariable`) is the value to thread rather than an atom to match: the placeholder atom is dropped and `A` takes the place of the fresh var, so the right side reads `p A X` under any marker (plans/v2-dot-notation.md, addendum)
 - arity saturation — `saturateArity` pads each Symbol-headed atom with trailing wildcards up to its lexical arity (`:`-count + 1), run after dot-desugaring; over-arity atoms are left as-is (plans/v2-arity-auto-wildcard.md)
 - ask atoms `?[actor] V1 .. Vn` — an optional `[actor]` group glued directly after the `?` marker (tokenizer consumes it into the atom text; a spaced `[` stays bracket aggregation) selects the resolving actor (`you` default, `rng` random — plans/v2-choice-actors.md); the ask shape is validated to one-or-more distinct Variables (no symbols/compounds/`_`/duplicates/weight)
 - `!(...)` constrain blocks — parsed into compound `subAtoms`
@@ -135,6 +135,14 @@ js relations (`#js-def`, plans/v2-js-relations.md): mode selection and clause co
 - `resolveJsModes` — per-rule left-to-right binding analysis (Match/Emit bind everything they mention; Equal binds one side when the other is fully bound; JsCall/Max/Min bind `out`) + earliest-clause selection; sets `JsIterate.defIndex`
 - `compileJsRels` / `CompiledJsRel` — compile each clause's body once via the generator-function constructor with the `+` params as JS parameters; consumed by `evalJsIterate`
 - `JS_REL_YIELD_CAP` — per-call yield limit (no tuple is emitted between yields, so gas can't interrupt an infinite generator)
+
+# builtins.ts
+
+Built-in relations every program gets without a declaration. Today: the numeric comparisons `lt` / `gt` / `le` / `ge`, defined as js relations with one `+A +B` clause each, so they inherit js-relation semantics wholesale — timeless (no anchor effect), both arguments must be bound at the call site (`resolveJsModes` reports an unbound one as the usual mode error), legal as a `!(...)` option filter, and rejected as an emit head, an exception LHS, or a `[ ... ]` query item. The atom succeeds, yielding once and binding nothing, iff the comparison holds on the two decoded JS numbers; a non-numeric argument (a name, a compound, a Peano nat) is a runtime error naming the relation. `parseProgram` seeds `Program.jsRels` from `builtinJsRels()` and rejects any user declaration of the same name (`#js-def`, `#js`, `#acc`, `#agg`, `#reactive`, `#macro`) with a "built-in relation" error at the declaration's line; `renderProgram` (print-ir.ts) skips the seeded clauses via `JsRelDef.builtin`.
+
+**Key terms:**
+- `builtinJsRels` — a fresh `Map<string, JsRelDef[]>` of the seeded clauses per parse (user clauses are pushed into these arrays, so they must not be shared)
+- `isBuiltinRel` — membership test used by the parser's reserved-name checks
 
 # store.ts
 
@@ -339,6 +347,7 @@ A self-contained code-editor wrapper around a `<textarea>` that adds a line-numb
 - smart editing — indent/dedent, auto-indent on Enter, smart Home/Delete, all via `execCommand` so native undo works
 - `enableAutocomplete` — opt-in flag (on for index-v2, off for pres) for the completion overlay; logic lives in `autocomplete.ts`
 - caret mirror — off-screen div replicating textarea metrics to position the completion box at the cursor
+- `enableContextMenu` — opt-in flag (on for index-v2, off for pres) for the right-click code-action menu (`.editor-menu`); Shift+right-click falls through to the browser menu. Its one action today is rename (logic in `rename.ts`): it acts on the caret, which the browser has already moved to the click point on the right-button mousedown; the menu swaps to a name input showing the occurrence count and `renameError`, and Enter applies every occurrence as one `execCommand` edit spanning first..last, so a single undo reverts it
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
 - `highlightLine` / `highlightRange` / `clearHighlight` / `focusLine` / `caretLine` / `caretPos` — highlight overlay (full line, or a column range mapped col → px off a hidden monospace probe) and caret helpers used by `source-link.ts`
 - `setLineNotes` / `clearLineNotes` / `LineNote` — live-value notes (plans/v2-live-values-in-editor.md): faint `X *17` name/value pairs drawn just right of each annotated line's text in an `.editor-notes` overlay (per-row `.editor-note`, positioned off the gutter row and the tab-expanded line length × char width; clipped to the text viewport; re-laid on scroll; cleared on input since line numbers go stale)
@@ -365,6 +374,17 @@ The DOM-free core of the editor's symbol/variable completion (`editor.ts` owns t
 - `completions` — ranking: exact match suppresses; strict-prefix matches first, then subsequence matches; capped at 5
 - `collectProgramSymbols` — all Symbol tokens in the text (via the lexer; lenient fallback if even tokenizing fails); excludes `*`-headed internal symbols
 - `collectRuleVariables` — Variables of the rule whose source span contains a given line; `null` on parse failure
+- `partialTokenAt` — the token whose right end is at a text offset: the maximal run of non-separator chars to the left, with a leading marker char stripped at any column (`+item x, +fo` completes `fo`); `null` when the cursor is not at a token's right edge or only a bare marker precedes it
+
+# rename.ts
+
+The DOM-free core of the editor's rename code action. Works lexically on the source text (not the parse), so it still runs on a broken program and every occurrence has an exact offset. Identifiers are maximal runs of non-separator chars (`( ) , . ; [ ] { } |` and whitespace) with leading marker chars stripped (`-` only when not starting a negative number); `--` comments are skipped. Top-level definitions follow the offside rule, kept open across column-0 lines inside a multi-line `[ ... ]`.
+
+**Key terms:**
+- `renameTargetAt` — the Symbol/Variable at an offset (inside it or just past it); null on punctuation, comments, a `#def` rule name, or JS code
+- `renameOccurrences` — a Symbol: every whole-token use in the file (matches, emits under any marker, `!(...)`, dot chains, exceptions, aggregates, and `#acc`/`#agg`/`#reactive`/`#macro` names); in `#js`/`#js-def` blocks only the function/relation name. A Variable: its own definition (the rule's scope)
+- `renameError` — refuses an empty name, one the lexer would split, one of the other kind, or one already used in the target's scope (would merge relations / capture a variable)
+- `applyRename` — splice the new name into sorted, disjoint ranges
 
 # default-display.ts
 

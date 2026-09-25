@@ -82,6 +82,17 @@
     .workspace.editor-collapsed .editors,
     .workspace.editor-collapsed #splitter { display: none; }
     .db-pane .pane-label .label-left { display: flex; align-items: center; gap: 10px; }
+    .display-pane .pane-label .label-left { display: flex; align-items: center; gap: 10px; }
+    .display-pane.collapsed #display-help-btn { display: none; }
+    /* Display help: the relations the built-in display reads (default-display.ts). */
+    #display-help { flex: 0 1 auto; max-height: 60%; overflow: auto; padding: 10px 14px; font-size: 12px; line-height: 1.5; color: var(--fg-mute); background: var(--bg-2); border-bottom: 1px solid var(--border-2); }
+    #display-help h3 { font-size: 11px; font-weight: normal; letter-spacing: 1px; text-transform: uppercase; color: var(--fg-faint); margin: 10px 0 4px; }
+    #display-help h3:first-child { margin-top: 0; }
+    #display-help dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; }
+    #display-help dt { color: var(--syn-pred); white-space: nowrap; }
+    #display-help dd { color: var(--fg-mute); }
+    #display-help code { color: var(--fg); }
+    #display-help pre { color: var(--fg); background: var(--bg); border: 1px solid var(--border-2); padding: 6px 8px; margin-top: 4px; white-space: pre; overflow-x: auto; }
     /* Timeline rendered inline inside the db pane */
     #timeline-inline { flex: 1; overflow: auto; padding: 12px; min-width: 0; }
     .timeline-svg { display: block; color: var(--fg); }
@@ -125,7 +136,33 @@
     <div id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <div class="right-column">
       <div class="display-pane">
-        <div class="pane-label"><span class="pane-toggle" data-collapse="display">Display</span></div>
+        <div class="pane-label">
+          <span class="label-left">
+            <span class="pane-toggle" data-collapse="display">Display</span>
+            <button type="button" class="db-view-btn" id="display-help-btn" aria-expanded="false" aria-controls="display-help" title="Relations the display reads">Help</button>
+          </span>
+        </div>
+        <div id="display-help" class="hidden">
+          <h3>Built-in display</h3>
+          <p>Used unless the program starts with a <code>-- display: &lt;file&gt;</code> line. Assert these relations to draw icons.</p>
+          <dl>
+            <dt>icon T</dt><dd>Draw a box for the term <code>T</code>.</dd>
+            <dt>icon:name T N</dt><dd>Label icon <code>T</code> with <code>N</code> instead of <code>T</code> itself.</dd>
+            <dt>at X L</dt><dd>Nest icon <code>X</code> inside icon <code>L</code>. Both must be icons. An icon with several <code>at</code> parents appears in each one, and a cycle of <code>at</code>s is dropped with a warning. With <code>#agg at * -&gt; last</code>, only the latest location counts.</dd>
+            <dt>left:right A B</dt><dd>Put <code>A</code> in a column left of <code>B</code>. Both must share a parent (top-level icons count).</dd>
+            <dt>above:below A B</dt><dd>Put <code>A</code> in a row above <code>B</code>. Both must share a parent (top-level icons count).</dd>
+          </dl>
+          <h3>When rows show</h3>
+          <p>A row counts only if its interval contains the moment being viewed: the selected choice while one is pending, otherwise the end of the program. Use <code>^</code> or <code>~</code> for things that change over time, and <code>+</code> for things that last.</p>
+          <h3>Choices</h3>
+          <p>While a choice is pending, clicking an icon whose term is a valid option picks it. If it fits more than one slot, the icon turns dashed. Then click the slot you mean in the header.</p>
+          <h3>Example</h3>
+<pre>+ icon board, + icon hand
++ icon c1, + icon:name c1 ace, + at c1 hand
++ icon c2, + at c2 hand
++ left:right c1 c2
++ above:below board hand</pre>
+        </div>
         <div id="display"></div>
       </div>
       <div class="db-pane">
@@ -148,6 +185,17 @@
       </div>
     </div>
   </div>
+  <script>
+    (function() {
+      var btn = document.getElementById("display-help-btn");
+      var panel = document.getElementById("display-help");
+      btn.addEventListener("click", function() {
+        var open = panel.classList.toggle("hidden") === false;
+        btn.classList.toggle("active", open);
+        btn.setAttribute("aria-expanded", String(open));
+      });
+    })();
+  </script>
   <script>
     // Draggable editor/right-column split; width persisted as a percentage.
     (function() {

@@ -145,6 +145,7 @@ export function renderProgram(program: Program, opts: RenderOptions = {}): strin
   }
   for (const clauses of program.jsRels.values()) {
     for (const c of clauses) {
+      if (c.builtin) continue;
       parts.push(`#js-def ${c.name} ${c.params.map((p) => p.mode + p.name).join(" ")} { ... }`);
     }
   }

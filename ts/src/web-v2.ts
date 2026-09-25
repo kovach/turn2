@@ -668,7 +668,7 @@ document.addEventListener("selectionchange", () => {
 // Editor: Tab/Shift-Tab indent, Enter auto-indent, smart Home, smart Delete,
 // line-highlight overlay. saveBackend "none" — this file owns the run/save
 // lifecycle via its own input listener.
-const editor = new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true });
+const editor = new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true, enableContextMenu: true });
 const link = attachSourceLink(editor, [dbEl, timelineInlineEl], {
   getRun: () => (lastStore === null ? null : { store: lastStore, rules: lastRules }),
 });
