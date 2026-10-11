@@ -9,7 +9,7 @@
 //   - Pre-expand (parser output): `Atom` (with marker/weight/lLit/rLit),
 //     `Sub`, `Equal`. The marker enum drives anchor decomposition.
 //   - Post-expand (evaluator input): `Match`, `Emit`, `Le`, `AssertLt`,
-//     `Max`, `Min`, `Equal`. Anchor manipulation is now explicit IR; the
+//     `Equal` (whose rhs may be a computed `Expr`). Anchor manipulation is now explicit IR; the
 //     evaluator is a flat dispatch over these primitives.
 
 import type { Atom, Term, Span } from "./term.js";
@@ -21,6 +21,45 @@ import type { AccOp } from "./acc-ops.js";
 // positions before it are `"old"` (rows from earlier rounds), positions
 // after are `"any"` (no gen filter).
 export type MatchConstraint = "any" | "delta" | "old";
+
+// Right-hand side of an `Equal`. A plain `Term` unifies structurally against
+// `lhs`; the other forms are computed from their (ground) arguments and the
+// result unifies against `lhs`. Pre-expand `Equal`s only carry plain Terms —
+// decomposition introduces the computed forms.
+//   Max / Min — the larger / smaller of `a`, `b` under the current moment
+//               order. Incomparable args fail relationally (the evaluator
+//               backtracks past the atom); never throws.
+//   JsCall    — call a user-defined `#js` function (lowered from a `@js(...)`
+//               term; see plans/v2-user-js-functions.md). `args` are decoded
+//               to JS values, the compiled body runs, and its return is
+//               encoded.
+export type Expr =
+  | Term
+  | { tag: "Max"; a: Term; b: Term }
+  | { tag: "Min"; a: Term; b: Term }
+  | { tag: "JsCall"; func: string; args: Term[] };
+
+export const isTermExpr = (e: Expr): e is Term =>
+  e.tag !== "Max" && e.tag !== "Min" && e.tag !== "JsCall";
+
+// The Terms an `Expr` mentions: itself for a plain Term, else its arguments.
+export function exprTerms(e: Expr): Term[] {
+  switch (e.tag) {
+    case "Max":
+    case "Min": return [e.a, e.b];
+    case "JsCall": return e.args;
+    default: return [e];
+  }
+}
+
+export function mapExpr(e: Expr, f: (t: Term) => Term): Expr {
+  switch (e.tag) {
+    case "Max":
+    case "Min": return { ...e, a: f(e.a), b: f(e.b) };
+    case "JsCall": return { ...e, args: e.args.map(f) };
+    default: return f(e);
+  }
+}
 
 // Pre-expand source-side marker. Drives the desugaring rules in expand:
 //   match     -> Match + Le/Le/Max/Min (overlap with running anchor)
@@ -86,6 +125,13 @@ export type RuleAtom =
       // choice (`?[rng] C` sugar; absent = "you"). See
       // plans/v2-choice-actors.md.
       actor?: Actor;
+      // `>p` / `~>p` ("after"): the rule continues after `p` ends. On a match
+      // (`>p`), `p` is matched over `[right(p), top]` — the running anchor
+      // becomes `(max(XL, r_p), XR)` after checking `r_p ≤ XR`; `p` itself
+      // need not overlap the anchor. On an episode (`~>p`), `p` is asserted
+      // as usual and the anchor becomes `(r_p, XR)`. Only these two markers
+      // take it (the parser rejects the rest).
+      after?: boolean;
       span: Span;
     }
   // Parenthesised sub-rule. `sequence` is true when the closer was `);`.
@@ -132,24 +178,13 @@ export type RuleAtom =
     }
   // ----- Both phases -----
   //
-  // Equality / unification atom: `= <lhs> <rhs>`. Unifies two terms against
-  // the current substitution. Carries no marker, no anchor effect.
+  // Equality / unification atom: `= <lhs> <rhs>`. Unifies `lhs` against
+  // `rhs` (computed first when it is not a plain Term) under the current
+  // substitution. Carries no marker, no anchor effect.
   | {
       tag: "Equal";
       lhs: Term;
-      rhs: Term;
-      span: Span;
-    }
-  // Call a user-defined `#js` function. Produced by the anchor-decomposition
-  // pass when it lowers a `@js(...)` term (see plans/v2-user-js-functions.md).
-  // At eval, `args` are substituted (must be ground), decoded to JS values,
-  // the compiled body runs, and its return is encoded and unified with `out`
-  // (a fresh Variable). Treated like `Equal` by the remaining expand passes.
-  | {
-      tag: "JsCall";
-      func: string;
-      args: Term[];
-      out: Term;
+      rhs: Expr;
       span: Span;
     }
   // ----- Post-expand only -----
@@ -184,8 +219,8 @@ export type RuleAtom =
     }
   // Emit a stored tuple with the supplied (already ground) endpoints. No
   // marker variants — fact/episode/anchor/ask/constrain distinctions are
-  // decomposed by expand into the right combination of Equal / AssertLt /
-  // Max / Min around the Emit.
+  // decomposed by expand into the right combination of Equal / AssertLt
+  // around the Emit.
   | {
       tag: "Emit";
       atom: Atom;
@@ -207,17 +242,6 @@ export type RuleAtom =
       tag: "AssertLt";
       a: Term;
       b: Term;
-      span: Span;
-    }
-  // Bind `out` to the larger / smaller of `a` and `b` under the current
-  // moment order. `a`, `b` ground; `out` an unbound `Variable` (or `_`).
-  // Incomparable args fail relationally — the evaluator backtracks past
-  // the atom. Never throws.
-  | {
-      tag: "Max";
-      a: Term;
-      b: Term;
-      out: Term;
       span: Span;
     }
   // ----- Acc rules only (plans/v2-acc-relations.md) -----
@@ -244,13 +268,6 @@ export type RuleAtom =
       terms: Term[];
       moments: Term[];
       ids: Term[];
-      span: Span;
-    }
-  | {
-      tag: "Min";
-      a: Term;
-      b: Term;
-      out: Term;
       span: Span;
     };
 

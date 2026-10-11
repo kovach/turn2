@@ -13,7 +13,8 @@
 // still renders as an opaque `*n` handle, so nothing unfolds unboundedly.
 
 import type { Atom, Term } from "./term.js";
-import type { AccRule, Program, Rule, RuleAtom } from "./types.js";
+import type { AccRule, Expr, Program, Rule, RuleAtom } from "./types.js";
+import { prettyRule } from "./pretty-ir.js";
 
 export function renderTermRaw(term: Term): string {
   switch (term.tag) {
@@ -34,6 +35,15 @@ export function renderTermRaw(term: Term): string {
   }
 }
 
+function renderExprRaw(e: Expr): string {
+  switch (e.tag) {
+    case "Max": return `max(${renderTermRaw(e.a)}, ${renderTermRaw(e.b)})`;
+    case "Min": return `min(${renderTermRaw(e.a)}, ${renderTermRaw(e.b)})`;
+    case "JsCall": return `@js(${e.func} ${e.args.map(renderTermRaw).join(" ")})`;
+    default: return renderTermRaw(e);
+  }
+}
+
 function renderAtomRaw(atom: Atom): string {
   return atom.terms.map(renderTermRaw).join(" ");
 }
@@ -51,9 +61,9 @@ export function renderRuleAtom(atom: RuleAtom): string {
         return `Atom[constrain] !(${subs})`;
       }
       // Ask atoms show their actor annotation (plans/v2-choice-actors.md).
-      const marker = atom.marker === "ask" && atom.actor !== undefined
+      const marker = (atom.marker === "ask" && atom.actor !== undefined
         ? `ask[${atom.actor}]`
-        : atom.marker;
+        : atom.marker) + (atom.after ? ",after" : "");
       return `Atom[${marker}] ${renderAtomRaw(atom.atom)}${w}`;
     }
     case "AggComp": {
@@ -80,9 +90,7 @@ export function renderRuleAtom(atom: RuleAtom): string {
       return `Exception {${renderAtomRaw(atom.left)} => ${inner}}`;
     }
     case "Equal":
-      return `Equal ${renderTermRaw(atom.lhs)} = ${renderTermRaw(atom.rhs)}`;
-    case "JsCall":
-      return `JsCall ${renderTermRaw(atom.out)} = @js(${atom.func} ${atom.args.map(renderTermRaw).join(" ")})`;
+      return `Equal ${renderTermRaw(atom.lhs)} = ${renderExprRaw(atom.rhs)}`;
     case "JsIterate": {
       // `[clause k]` once resolveJsModes has run; `[clause ?]` on the
       // earlier stage dumps (decompose/split/filter).
@@ -104,10 +112,6 @@ export function renderRuleAtom(atom: RuleAtom): string {
       return `Le ${renderTermRaw(atom.a)} <= ${renderTermRaw(atom.b)}`;
     case "AssertLt":
       return `AssertLt ${renderTermRaw(atom.a)} < ${renderTermRaw(atom.b)}`;
-    case "Max":
-      return `Max ${renderTermRaw(atom.out)} = max(${renderTermRaw(atom.a)}, ${renderTermRaw(atom.b)})`;
-    case "Min":
-      return `Min ${renderTermRaw(atom.out)} = min(${renderTermRaw(atom.a)}, ${renderTermRaw(atom.b)})`;
   }
 }
 
@@ -115,6 +119,9 @@ export interface RenderOptions {
   // Prefix every atom (and the `#def` header) with its source line, e.g.
   // `L12`. Useful for mapping expanded output back to source.
   lines?: boolean;
+  // Render rules with `prettyRule` (pretty-ir.ts) instead of the structural
+  // dump.
+  pretty?: boolean;
 }
 
 export function renderRule(rule: Rule, opts: RenderOptions = {}): string {
@@ -131,7 +138,7 @@ export function renderRule(rule: Rule, opts: RenderOptions = {}): string {
 }
 
 // Fixed-width source-line tag so atom text stays column-aligned.
-function lineTag(line: number): string {
+export function lineTag(line: number): string {
   return `L${line}`.padEnd(5);
 }
 
@@ -156,7 +163,7 @@ export function renderProgram(program: Program, opts: RenderOptions = {}): strin
     parts.push(`#acc ${decl.relation} : ${cols.join(" ")}`);
   }
   if (parts.length > 0) parts.push("");
-  const ruleTexts = program.rules.map((r) => renderRule(r, opts));
+  const ruleTexts = program.rules.map((r) => (opts.pretty ? prettyRule(r, opts) : renderRule(r, opts)));
   for (const r of program.accRules) ruleTexts.push(renderAccRule(r, opts));
   parts.push(ruleTexts.join("\n\n"));
   return parts.join("\n");

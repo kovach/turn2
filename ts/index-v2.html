@@ -13,7 +13,7 @@
     header { padding: 8px 16px; background: var(--bg-3); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
     header h1 { font-size: 14px; font-weight: normal; color: var(--fg-mute2); letter-spacing: 2px; text-transform: uppercase; }
     #file-name { font-size: 13px; color: var(--fg-mute); }
-    #status-line { font-size: 12px; color: var(--fg-mute2); margin-left: auto; }
+    #status-line { font-size: 12px; color: var(--fg-mute2); margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #status-line.error { color: var(--err); }
     .gas-ctl { font-size: 11px; color: var(--fg-mute2); display: inline-flex; align-items: center; gap: 4px; }
     .gas-ctl input { width: 62px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 2px 4px; font-family: monospace; font-size: 11px; }
@@ -23,6 +23,11 @@
     /* Drag handle between the editor and the right column. */
     #splitter { cursor: col-resize; background: var(--border); }
     #splitter:hover, #splitter.dragging { background: var(--fg-faint); }
+    /* Drag handle between the display and result panes; hidden while either
+     * is collapsed, since a folded pane has no height to set. */
+    #splitter-v { flex: 0 0 5px; cursor: row-resize; background: var(--border); }
+    #splitter-v:hover, #splitter-v.dragging { background: var(--fg-faint); }
+    .right-column:has(> .collapsed) > #splitter-v { display: none; }
     .pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
     .pane-label { padding: 5px 12px; font-size: 11px; color: var(--fg-faint); background: var(--bg-2); border-bottom: 1px solid var(--border-2); letter-spacing: 1px; text-transform: uppercase; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
     /* Editor structural rules come from /styles/editor.css. Host overrides are
@@ -42,9 +47,9 @@
     }
     .editors { display: flex; flex-direction: column; border-right: 1px solid var(--border); min-height: 0; }
     .right-column { display: flex; flex-direction: column; min-height: 0; }
-    .display-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+    .display-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
     #display { flex: 1; overflow: auto; padding: 12px; display: flex; align-items: flex-start; justify-content: center; }
-    .db-pane { flex: 0 0 40%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+    .db-pane { flex: 0 0 var(--split-result, 40%); display: flex; flex-direction: column; min-height: 0; }
     #db { flex: 1; overflow: auto; padding: 8px 12px; font-size: 12px; line-height: 1.4; white-space: pre; color: var(--fg); font-family: monospace; }
     #db .head { color: var(--syn-head); }
     #db .interval { color: var(--syn-interval); }
@@ -53,11 +58,21 @@
     #db .pred { color: var(--syn-pred); }
     #db .var { color: var(--syn-var); }
     #db .group-heading { color: var(--syn-group); margin-top: 6px; }
-    .info-pane { flex: 0 0 200px; display: flex; flex-direction: column; min-height: 0; }
-    #info { flex: 1; overflow: auto; padding: 8px 12px; font-size: 12px; line-height: 1.4; white-space: pre-wrap; color: var(--fg-mute); }
-    #info .err { color: var(--err); }
-    #info .opt { color: var(--link); cursor: pointer; }
-    #info .opt:hover { background: var(--hover); }
+    /* Choices strip (web-v2.ts renderChoices): one row per pending choice
+     * component, above whichever display module is active. */
+    #choices { flex: 0 1 auto; max-height: 40%; overflow: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border-2); background: var(--bg-2); }
+    .choice-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 4px 6px; border: 2px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; background: var(--bg); }
+    .choice-row.selected { background: var(--hover); cursor: default; }
+    .choice-row.selected.singleton { border-color: var(--syn-head); cursor: pointer; }
+    .choice-row.selected.multi { border-color: var(--syn-ref); }
+    .choice-rules { color: var(--fg-mute2); }
+    .choice-slot { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .choice-chip { padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-2); color: var(--syn-var); }
+    .choice-chip.matchable { background: var(--bg-3); border-color: var(--syn-head); color: var(--syn-head); cursor: pointer; }
+    .choice-chip.rng { opacity: 0.6; font-style: italic; }
+    .choice-opt { color: var(--link); cursor: pointer; padding: 0 2px; }
+    .choice-opt:hover { background: var(--hover); }
+    .display-error { color: var(--err); font-size: 12px; line-height: 1.4; white-space: pre-wrap; width: 100%; }
     /* Db-pane view toggle (Database / Timeline) */
     .db-view-toggle { display: flex; gap: 4px; }
     .db-view-btn { background: transparent; color: var(--fg-mute2); border: 1px solid var(--border); padding: 2px 8px; font-family: monospace; font-size: 11px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; }
@@ -71,13 +86,11 @@
     .pane-toggle:hover { color: var(--fg); }
     .pane-toggle::before { content: "▾ "; font-size: 9px; opacity: 0.7; }
     .pane-toggle.collapsed::before { content: "▸ "; }
-    .display-pane.collapsed, .db-pane.collapsed, .info-pane.collapsed { flex: 0 0 auto; }
+    .display-pane.collapsed, .db-pane.collapsed { flex: 0 0 auto; }
     .display-pane.collapsed > :not(.pane-label),
-    .db-pane.collapsed > :not(.pane-label),
-    .info-pane.collapsed > :not(.pane-label) { display: none !important; }
-    /* Hand the freed vertical space to the first pane below that is still open. */
-    .display-pane.collapsed ~ .db-pane:not(.collapsed),
-    .display-pane.collapsed ~ .db-pane.collapsed ~ .info-pane:not(.collapsed) { flex: 1 1 auto; }
+    .db-pane.collapsed > :not(.pane-label) { display: none !important; }
+    /* Hand the freed vertical space to the result pane when it is still open. */
+    .display-pane.collapsed ~ .db-pane:not(.collapsed) { flex: 1 1 auto; }
     .workspace.editor-collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
     .workspace.editor-collapsed .editors,
     .workspace.editor-collapsed #splitter { display: none; }
@@ -155,7 +168,7 @@
           <h3>When rows show</h3>
           <p>A row counts only if its interval contains the moment being viewed: the selected choice while one is pending, otherwise the end of the program. Use <code>^</code> or <code>~</code> for things that change over time, and <code>+</code> for things that last.</p>
           <h3>Choices</h3>
-          <p>While a choice is pending, clicking an icon whose term is a valid option picks it. If it fits more than one slot, the icon turns dashed. Then click the slot you mean in the header.</p>
+          <p>While a choice is pending, the strip above the display lists each choice with its possible values; click a value to pick it. Clicking a row selects that choice, and the display is drawn at the moment it was asked. Clicking an icon whose term is a valid option for the selected choice also picks it. If it fits more than one slot, the icon turns dashed. Then click the slot you mean in the strip.</p>
           <h3>Example</h3>
 <pre>+ icon board, + icon hand
 + icon c1, + icon:name c1 ace, + at c1 hand
@@ -163,8 +176,10 @@
 + left:right c1 c2
 + above:below board hand</pre>
         </div>
+        <div id="choices" class="hidden"></div>
         <div id="display"></div>
       </div>
+      <div id="splitter-v" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div class="db-pane">
         <div class="pane-label">
           <span class="label-left">
@@ -178,10 +193,6 @@
         </div>
         <div id="db" class="hidden"></div>
         <div id="timeline-inline"></div>
-      </div>
-      <div class="info-pane">
-        <div class="pane-label"><span class="pane-toggle" data-collapse="info">Info</span></div>
-        <div id="info"></div>
       </div>
     </div>
   </div>
@@ -216,6 +227,40 @@
           var pct = Math.min(90, Math.max(10, ((e.clientX - r.left) / r.width) * 100));
           set(pct);
           try { localStorage.setItem("v2-split-left", String(pct)); } catch (e2) {}
+        };
+        var up = function() {
+          bar.classList.remove("dragging");
+          bar.removeEventListener("pointermove", move);
+          bar.removeEventListener("pointerup", up);
+          bar.removeEventListener("pointercancel", up);
+        };
+        bar.addEventListener("pointermove", move);
+        bar.addEventListener("pointerup", up);
+        bar.addEventListener("pointercancel", up);
+      });
+    })();
+  </script>
+  <script>
+    // Draggable display/result split; the result pane's height persisted as a
+    // percentage of the right column.
+    (function() {
+      var col = document.querySelector(".right-column");
+      var bar = document.getElementById("splitter-v");
+      function set(pct) { col.style.setProperty("--split-result", pct + "%"); }
+      try {
+        var saved = parseFloat(localStorage.getItem("v2-split-result"));
+        if (isFinite(saved)) set(saved);
+      } catch (e) {}
+      bar.addEventListener("pointerdown", function(ev) {
+        ev.preventDefault();
+        bar.setPointerCapture(ev.pointerId);
+        bar.classList.add("dragging");
+        var move = function(e) {
+          var r = col.getBoundingClientRect();
+          if (r.height <= 0) return;
+          var pct = Math.min(90, Math.max(10, ((r.bottom - e.clientY) / r.height) * 100));
+          set(pct);
+          try { localStorage.setItem("v2-split-result", String(pct)); } catch (e2) {}
         };
         var up = function() {
           bar.classList.remove("dragging");

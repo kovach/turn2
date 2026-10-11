@@ -6,7 +6,7 @@
 
 import type { Atom, Term, Span } from "./term.js";
 import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
-import { isActor } from "./types.js";
+import { exprTerms, isActor } from "./types.js";
 import { aggregators } from "./aggregators.js";
 import { accOp, UNIT, type AccOp } from "./acc-ops.js";
 import { builtinJsRels, isBuiltinRel } from "./builtins.js";
@@ -26,7 +26,7 @@ export interface ParseError {
 type Token =
   | { tag: "open"; line: number }
   | { tag: "close"; sequence: boolean; line: number }
-  | { tag: "atom"; marker: Marker; text: string; line: number; startCol: number; endCol: number }
+  | { tag: "atom"; marker: Marker; after: boolean; text: string; line: number; startCol: number; endCol: number }
   // Exception block `{...}` (plans/v2-exceptions.md). `text` is the inner
   // text, braces stripped and trimmed; `textStartCol` is the column of
   // `text`'s first char in the source line, so fragment-relative columns in
@@ -387,7 +387,10 @@ export function tokenize(input: string): Token[] | ParseError {
             marker = "match";
             body = text;
           }
-          tokens.push({ tag: "atom", marker, text: body, line: lineno, startCol, endCol });
+          // `>p` / `~>p`: continue after `p` (see `after` in types.ts).
+          const after = body.startsWith(">");
+          if (after) body = body.slice(1).trim();
+          tokens.push({ tag: "atom", marker, after, text: body, line: lineno, startCol, endCol });
         }
       }
       atomStart = false;
@@ -767,12 +770,12 @@ function buildAccRule(
   saturateArity(body);
   for (const a of body) {
     if (a.tag === "Equal") continue;
-    if (a.tag === "Atom" && (a.marker === "match" || a.marker === "aggregate") && a.subAtoms === undefined) continue;
+    if (a.tag === "Atom" && (a.marker === "match" || a.marker === "aggregate") && a.subAtoms === undefined && !a.after) continue;
     const what =
       a.tag === "Sub" ? "a sub-rule" :
       a.tag === "AggComp" ? "a '[...]' aggregation" :
       a.tag === "Exception" ? "an exception block" :
-      a.tag === "Atom" ? `a '${markerChar(a.marker)}' atom` : a.tag;
+      a.tag === "Atom" ? `a '${markerChar(a.marker)}${a.after ? ">" : ""}' atom` : a.tag;
     return { line: a.span.line, message: `acc rule bodies contain only matches and '=' (found ${what})` };
   }
   const headDesugared = desugarBody(headItems, usedNames, counter, undefined);
@@ -781,7 +784,7 @@ function buildAccRule(
     return { line: slashLine, message: "an acc rule head is exactly one atom after '/'" };
   }
   const h = headDesugared[0]!;
-  if (h.tag !== "Atom" || h.marker !== "match" || h.subAtoms !== undefined) {
+  if (h.tag !== "Atom" || h.marker !== "match" || h.subAtoms !== undefined || h.after) {
     return { line: h.span.line, message: "an acc rule head is a plain atom (no marker)" };
   }
   if (h.weight !== undefined) {
@@ -1080,6 +1083,12 @@ function parseBodyItems(
     }
     const parsed = parseAtomText(tok.text, tok.marker, tok.line, tok.startCol, tok.endCol);
     if ("message" in parsed) return parsed;
+    if (tok.after) {
+      if (parsed.tag !== "Atom" || (parsed.marker !== "match" && parsed.marker !== "episode")) {
+        return { line: tok.line, message: "'>' (continue after) applies only to a match ('>p') or an episode ('~>p')" };
+      }
+      parsed.after = true;
+    }
     top.items.push({ kind: "atom", atom: parsed });
     top.needsContent = false;
     pos.i++;
@@ -1105,7 +1114,7 @@ function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyIte
   if (c0 === "{") {
     return { line, message: "exception LHS may not contain an exception" };
   }
-  if (isMarkerChar(c0) || c0 === "=") {
+  if (isMarkerChar(c0) || c0 === "=" || c0 === ">") {
     return { line, message: "exception LHS cannot carry a marker" };
   }
   if (findTopArrow(lhsText) >= 0) {
@@ -1304,7 +1313,7 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
       if (a.rLit !== undefined) collectVarsInTerm(a.rLit, out);
     } else if (a.tag === "Equal") {
       collectVarsInTerm(a.lhs, out);
-      collectVarsInTerm(a.rhs, out);
+      for (const t of exprTerms(a.rhs)) collectVarsInTerm(t, out);
     }
   }
 }

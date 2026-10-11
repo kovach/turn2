@@ -52,8 +52,10 @@ export function trailPush(t: Trail, name: string, term: Term): void {
 }
 
 export function trailUnwind(t: Trail, mark: number): void {
-  t.names.length = mark;
-  t.terms.length = mark;
+  // pop rather than `length = mark`: unwinds are almost always a few
+  // entries, and shrinking via `length` makes V8 re-trim the backing store.
+  const names = t.names, terms = t.terms;
+  while (names.length > mark) { names.pop(); terms.pop(); }
 }
 
 export function trailLookup(t: Trail, name: string): Term | undefined {

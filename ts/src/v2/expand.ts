@@ -10,6 +10,7 @@
 
 import type { Atom, Span, Term } from "./term.js";
 import type { AccDecl, AccRule, JsDef, JsRelDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
+import { exprTerms } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 import { resolveJsModes } from "./js-rel.js";
 import { accOp, UNIT } from "./acc-ops.js";
@@ -606,7 +607,7 @@ function collectAtomVarsOrdered(a: RuleAtom, seen: Set<string>, out: string[]): 
     if (a.rLit !== undefined) push(a.rLit);
   } else if (a.tag === "Equal") {
     push(a.lhs);
-    push(a.rhs);
+    for (const t of exprTerms(a.rhs)) push(t);
   } else if (a.tag === "AggComp") {
     for (const it of a.body) collectAtomVarsOrdered(it, seen, out);
     // `out`'s variables are the ones the expression binds outward.
@@ -694,7 +695,7 @@ function collectProgramSymbols(program: Program): Set<string> {
         walk(a.right);
         continue;
       }
-      if (a.tag === "Equal") { term(a.lhs); term(a.rhs); continue; }
+      if (a.tag === "Equal") { term(a.lhs); exprTerms(a.rhs).forEach(term); continue; }
       if (a.tag === "AggComp") { walk(a.body); continue; }
       if (a.tag !== "Atom") continue;
       if (a.subAtoms !== undefined) {
@@ -943,7 +944,7 @@ export function decomposeAccRule(rule: AccRule, program: Program): Rule {
   for (const a of rule.body) {
     if (a.tag === "Equal") {
       collectVarsTerm(a.lhs, state);
-      collectVarsTerm(a.rhs, state);
+      for (const t of exprTerms(a.rhs)) collectVarsTerm(t, state);
       state.out.push(a);
       continue;
     }
@@ -1222,7 +1223,7 @@ function lowerJsCall(term: Term, state: DecState, lexPos: number, span: Span): T
   }
   const args = rawArgs.map((a) => lowerJsArg(a, state, lexPos, span, func));
   const V: Term = { tag: "Variable", name: `_js_${state.jsCounter++}` };
-  state.out.push({ tag: "JsCall", func, args, out: V, span });
+  state.out.push({ tag: "Equal", lhs: V, rhs: { tag: "JsCall", func, args }, span });
   return V;
 }
 
@@ -1297,7 +1298,7 @@ function decomposeBody(
   for (const a of body) {
     if (a.tag === "Equal") {
       collectVarsTerm(a.lhs, state);
-      collectVarsTerm(a.rhs, state);
+      for (const t of exprTerms(a.rhs)) collectVarsTerm(t, state);
       state.out.push(a);
       continue;
     }
@@ -1447,13 +1448,24 @@ function decomposeMatch(
     collectVarsTerm(a.rLit, state);
   }
 
+  // `>p`: intersect the anchor with `[r_p, top]` instead of `[l_p, r_p]`.
+  // The `XL ≤ top` half of the overlap check is trivial and the right end
+  // stays `XR` (= min(XR, top)), so only the left end moves.
+  if (a.after) {
+    state.out.push({ tag: "Le", a: rVar, b: XR, span: a.span });
+    const XLafter = freshAnchorVar(state, "xl");
+    state.out.push({ tag: "Equal", lhs: XLafter, rhs: { tag: "Max", a: XL, b: rVar }, span: a.span });
+    for (const t of a.atom.terms) collectVarsTerm(t, state);
+    return { XL: XLafter, XR };
+  }
+
   // Overlap check + anchor intersection.
   state.out.push({ tag: "Le", a: XL, b: rVar, span: a.span });
   state.out.push({ tag: "Le", a: lVar, b: XR, span: a.span });
   const XLnext = freshAnchorVar(state, "xl");
   const XRnext = freshAnchorVar(state, "xr");
-  state.out.push({ tag: "Max", a: XL, b: lVar, out: XLnext, span: a.span });
-  state.out.push({ tag: "Min", a: XR, b: rVar, out: XRnext, span: a.span });
+  state.out.push({ tag: "Equal", lhs: XLnext, rhs: { tag: "Max", a: XL, b: lVar }, span: a.span });
+  state.out.push({ tag: "Equal", lhs: XRnext, rhs: { tag: "Min", a: XR, b: rVar }, span: a.span });
 
   // Add user vars in the matched atom to chain.
   for (const t of a.atom.terms) collectVarsTerm(t, state);
@@ -2128,7 +2140,9 @@ function decomposeEmit(
   // (`^`) case emits no asserts and leaves the anchor untouched.
   switch (a.marker) {
     case "episode":
-      return { XL: lVar, XR: rVar };
+      // `~>p` continues after the episode: `max(XL, r)` is statically `r`
+      // (XL < l < r was just asserted), and the right end stays `XR`.
+      return a.after ? { XL: rVar, XR } : { XL: lVar, XR: rVar };
     case "ask":
     case "constrain":
     case "anchor":

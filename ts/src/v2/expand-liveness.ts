@@ -22,6 +22,7 @@
 
 import type { Term } from "./term.js";
 import type { Rule, RuleAtom } from "./types.js";
+import { exprTerms, mapExpr } from "./types.js";
 
 // Recursively rewrite a term: chain Variables inside any `*chain`-headed
 // Id sub-term that aren't essential or live get filtered out. `*`-headed
@@ -56,15 +57,10 @@ function rewriteAtom(a: RuleAtom, live: Set<string>, essential: Set<string>): Ru
     case "Emit":
       return { ...a, atom: { terms: a.atom.terms.map(rw) }, l: rw(a.l), r: rw(a.r) };
     case "Equal":
-      return { ...a, lhs: rw(a.lhs), rhs: rw(a.rhs) };
-    case "Max":
-    case "Min":
-      return { ...a, a: rw(a.a), b: rw(a.b), out: rw(a.out) };
+      return { ...a, lhs: rw(a.lhs), rhs: mapExpr(a.rhs, rw) };
     case "Le":
     case "AssertLt":
       return { ...a, a: rw(a.a), b: rw(a.b) };
-    case "JsCall":
-      return { ...a, args: a.args.map(rw), out: rw(a.out) };
     case "JsIterate":
       return { ...a, args: a.args.map(rw) };
     case "AccMatch":
@@ -88,19 +84,12 @@ function addUses(a: RuleAtom, live: Set<string>): void {
       collectVars(a.l, live); collectVars(a.r, live);
       break;
     case "Equal":
-      collectVars(a.lhs, live); collectVars(a.rhs, live);
-      break;
-    case "Max":
-    case "Min":
-      collectVars(a.a, live); collectVars(a.b, live); collectVars(a.out, live);
+      collectVars(a.lhs, live);
+      for (const t of exprTerms(a.rhs)) collectVars(t, live);
       break;
     case "Le":
     case "AssertLt":
       collectVars(a.a, live); collectVars(a.b, live);
-      break;
-    case "JsCall":
-      for (const t of a.args) collectVars(t, live);
-      collectVars(a.out, live);
       break;
     case "JsIterate":
       for (const t of a.args) collectVars(t, live);
@@ -122,19 +111,14 @@ function addUses(a: RuleAtom, live: Set<string>): void {
   }
 }
 
-// Max/Min `out` is freshly defined here; in decomposed output it's always
-// a non-essential anchor SSA Variable. If `out` isn't essential and not
-// live downstream, the atom is pure dead code. Equal is left alone (may
-// be a user constraint, not a binding).
+// A Max/Min `Equal`'s lhs is freshly defined here; in decomposed output
+// it's always a non-essential anchor SSA Variable. If it isn't essential and
+// not live downstream, the atom is pure dead code. Other Equals are left
+// alone (may be a user constraint, not a binding).
 function definedVar(a: RuleAtom, essential: Set<string>): string | null {
-  switch (a.tag) {
-    case "Max":
-    case "Min":
-      if (a.out.tag !== "Variable") return null;
-      return essential.has(a.out.name) ? null : a.out.name;
-    default:
-      return null;
-  }
+  if (a.tag !== "Equal" || (a.rhs.tag !== "Max" && a.rhs.tag !== "Min")) return null;
+  if (a.lhs.tag !== "Variable") return null;
+  return essential.has(a.lhs.name) ? null : a.lhs.name;
 }
 
 export function pruneChains(rule: Rule, essential: Set<string>): Rule {

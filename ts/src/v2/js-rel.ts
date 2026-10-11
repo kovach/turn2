@@ -19,6 +19,7 @@
 
 import type { Term } from "./term.js";
 import type { JsRelDef, Rule, RuleAtom } from "./types.js";
+import { isTermExpr } from "./types.js";
 
 // Safety net for runaway generators: with no tuple emitted between yields
 // there is no gas check to interrupt an infinite `for(;;) yield [..]`, which
@@ -113,6 +114,13 @@ function resolveRule(rule: Rule, jsRels: Map<string, JsRelDef[]>): Rule {
         add(a.r);
         return a;
       case "Equal": {
+        if (!isTermExpr(a.rhs)) {
+          // Computed rhs: its args are ground (JsCall args were checked
+          // bound at lowering; Max/Min read anchor Variables), so it binds
+          // lhs.
+          add(a.lhs);
+          return a;
+        }
         // A fully-bound side determines the other. Both-sides-partial
         // binds nothing (conservative: under-approximating boundness only
         // ever selects a more general `-` clause, never a wrong `+` one).
@@ -122,13 +130,6 @@ function resolveRule(rule: Rule, jsRels: Map<string, JsRelDef[]>): Rule {
         if (okL) add(a.rhs);
         return a;
       }
-      case "JsCall":
-        add(a.out); // args were checked bound at lowering
-        return a;
-      case "Max":
-      case "Min":
-        add(a.out);
-        return a;
       case "Le":
       case "AssertLt":
         return a;

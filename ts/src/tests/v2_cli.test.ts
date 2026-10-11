@@ -73,3 +73,30 @@ const OPTS: RunOptions = { ...DEFAULT_OPTIONS };
   assert.ok(out.includes("score"), `eval tuples mention emitted relation: ${out}`);
   console.log("PASS: eval stage renders store tuples");
 }
+
+// --- --pretty: folds identity steps, drops keywords, aliases repeated chains ---
+{
+  const out = runStage("expand", ok("a, b, ~c\n"), { ...OPTS, pretty: true });
+  const first = out.split("\n\n")[0]!;
+  assert.equal(first, [
+    "#def r1",
+    "  Δ a @ [l₁, r₁]",
+    "  b @ [l₂, r₂]",
+    "  l₁ ≤ r₂",
+    "  l₂ ≤ r₁",
+    "  xl₁ = max(l₁, l₂)",
+    "  xr₁ = min(r₁, r₂)",
+    "  κ₁ := ⟨l₁ r₁ l₂ r₂ xl₁ xr₁⟩",
+    "  l₃ = mom@3(κ₁).l",
+    "  r₃ = mom@3(κ₁).r",
+    "  + xl₁ < l₃",
+    "  + l₃ < r₃",
+    "  + r₃ < xr₁",
+    "  κ₂ := ⟨l₁ r₁ l₂ r₂⟩",
+    "  + c id@3(κ₂):_ id@3(κ₂):_emitId @ [l₃, r₃]",
+  ].join("\n"));
+  // Only compiler-fresh definitions fold; a user equality stays.
+  const user = runStage("expand", ok("a X, b Y, = X Y, ~c\n"), { ...OPTS, pretty: true });
+  assert.ok(user.includes("  X = Y\n"), user);
+  console.log("PASS: --pretty renders the readable IR");
+}

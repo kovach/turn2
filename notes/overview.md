@@ -1,13 +1,69 @@
+# `>p` / `~>p`: continue after something
+plan: none (designed in conversation)
+(implemented 26/10/08; `;` kept)
+
+- `>p` matches `p` over `[right(p), top]`: check `r_p ≤ XR`, then `XL := max(XL, r_p)`, `XR` unchanged. `p` need not overlap the current window, only end before it does
+- `~>p` asserts the episode `p` as usual, then continues with the window `(r_p, XR)` instead of `(l_p, r_p)`
+- only a plain match or an episode takes `>`; a fact, `^`, `?`, `!`, a weighted atom, an exception LHS, and acc rules are rejected at parse
+- `>fact` can never be followed by an emit: a fact ends at `top`, so `XL` becomes `top`. `AssertLt` now fails the firing on `top < x` / `x < bot` instead of recording a meaningless edge (no example program changes in either mode)
+- unlike `;`, the window only ever grows its start by `max` and shrinks its end by `min`, so it never produces a `min` on the left of an assert (no disjunctive asserts, in either mode)
+- not done: `>p` with checks *inside* `p` before moving past it (`>turn (done)`); for that, `( … );` is still the tool
+- tests: ts/src/tests/v2_after.test.ts; tutorial section "Continuing after something"
+
+# moment lattice: max/min of incomparable moments no longer fail
+plan: none (designed in conversation)
+(implemented 26/10/08, behind a flag: `runFixpoint(..., { lattice: true })`, `v2-cli --lattice`, `?lattice` in the web URL; default off, old fail-on-incomparable path kept for comparison)
+
+- motivation: facts from sibling firings never joined (`pin A, pin B, +pair A B` gave only `a a`, `b b`): the overlap checks passed but `max` of the two incomparable starts failed the match
+- creation-time ordering invariant (now documented on `addOrder` in store.ts and in ts/src/v2/overview.md): order edges are only asserted for a moment as it is created, inside a window already known to be non-empty, so the comparability of existing moments never changes
+- because of that, `max`/`min` of comparable moments can collapse to the larger/smaller one deterministically; incomparable ones build a canonical `(*max …)`/`(*min …)` moment (flattened, ⊥/⊤ units dropped, antichain, sorted by token)
+- each lattice node is wired into the order graph at creation (a join: edges from its elements and to their minimal common upper bounds; a meet: the dual), so the moment walk and timeline treat it as an ordinary moment
+- asserts stay conjunctive: `+ max < l` = after every element; `+ min < l` = after every common lower bound (weaker than "after one of them", which would be disjunctive)
+- consequence: any set of facts matched together now overlaps (window `[max of starts, ⊤]`); a fact and an episode, or two sibling episodes, still need their order to be known
+- all of data/v2 evaluates identically in both modes (those programs stop at their first choice before any incomparable window); compare with `ts/src/scratch/lattice-compare.ts`
+- considered, not done: replacing `( … );` with `>p` / `~>p`. It was needed to avoid disjunctive asserts from the sequence close under a "never collapse" design; with the lattice, it's optional syntax
+
 # attribute namespaces from a lightweight type system
 plan: plans/v2-attribute-namespaces.md
 
 - `foo X, X.:score S` should expand to `foo:score X S`; `foo.:hand.:card C` to `foo F, foo:hand F H, hand:card H C`
-- the parser gives every rule variable a set of types (namespace symbols): from unary atoms, from the first and last slots of `ns:attr` heads, from `#acc` column declarations, and through `=`
-- a head is a sequence of colon-separated segments, segment i pairing with argument i. an empty segment is filled from the type of its argument: `:attr` from the first slot, `foo:` from the last, `buy::` from both remaining slots. resolution depends only on the rule itself and `#acc` declarations, never on other rules; a gap whose variable has several types is an error, as is an unresolvable fragment — relations with empty segments go away
+- types are declared, strictly: `#is-type player card hand` lists the symbols that are types; nothing else is one
+- the parser gives every rule variable a set of types: evidence from unary atoms, from every non-empty segment of `ns:attr` heads (segment i types argument i), from `#acc`/`#type` columns, and through `=` and `is P X`, then filtered to the declared types. so filters like `active P` never make a variable ambiguous
+- `#acc`/`#type` columns may name undeclared symbols; those stay documentation and are not types when resolving fragments
+- a head is a sequence of colon-separated segments, segment i pairing with argument i. an empty segment is filled from the type of its argument: `:attr` from the first slot, `foo:` from the last, `buy::` from both remaining slots. resolution depends only on the rule itself and the `#is-type`/`#acc`/`#type` declarations, never on other rules; a gap whose variable has several types is an error, as is an unresolvable fragment — relations with empty segments go away
 - dot-fresh variables are typed like any other variable (positionally), so chains through fresh vars work with one rule
-- `#type card:owner card player` declares a relation's column types explicitly (the `#acc` column syntax without `@`), replacing the positional convention for that relation; the escape hatch when an attribute's name is not its value's type. several declarations can be indented under a bare `#type`
-- the standalone `:` between name and columns is dropped from `#acc` as well (`#acc at e @last`); it carried no information. corpus and tests migrate
+- `#type card:owner / card player` declares a relation's column types explicitly (the `#acc` column syntax without `@`), replacing the positional convention for that relation; the escape hatch when an attribute's name is not its value's type. several declarations can be indented under a bare `#type`
+- the name/columns separator becomes a standalone `/`, after Prolog's `name/arity` (`#acc at / e @last`, `#type card:owner / card player`); `:` there is an error. corpus and tests migrate
 - the corpus's existing `:actor`/`:it`-style relations are unimportant and get migrated
+- new `#set-option name value` command, file-scoped and position-free like `#acc`/`#agg`; the only option for now is `elaborator.fragment-expand true/false` (default true), which turns the whole feature off for a file. setting an option twice is an error
+
+# engine perf: per-moment relation index, cached order closures
+plan: none
+(implemented 26/10/10)
+
+- `byHeadL` in store.ts splits each relation's rows by start moment, so a match whose left endpoint is bound (every acc point read) scans only the rows at that moment
+- `lessThan` closures are cached as complete per moment (`momentSeq`/`ltClosedAt`); sound because of the creation-time ordering invariant from the moment lattice work
+- binding-trail unwind pops instead of truncating (term.ts)
+- bench/profiling scripts and two Spirit Island-derived cases in ts/src/scratch/perf/
+
+# formalizing Turn in Lean
+plan: turn-lean/PLAN.md
+(started 26/10/08–09; definitions and theorem statements only, all proofs `sorry`)
+
+- Lean 4 / Mathlib model of the v2 semantics under turn-lean/: subdivision order, matching, store, body semantics, chase, acc algebra, moment walk
+
+# `Equal` with computed right-hand sides; `--pretty` IR
+plan: none
+(implemented 26/10/08)
+
+- `Max`, `Min`, `JsCall` are no longer atoms; they are `Expr` forms on the rhs of an `Equal` (types.ts), computed by `evalExpr` in eval.ts
+- `v2-cli --pretty` (v2/pretty-ir.ts): readable IR with short var names, no atom keywords, folded identity steps, aliased `*chain`s
+
+# choices strip owned by the host page
+plan: none
+(implemented 26/09/28)
+
+- web-v2.ts draws the strip of pending choice components above the display; displays get `ctx.selectedIdx`/`ctx.pending` and call `DisplayApi.setPending` for ambiguous clicks, instead of each display drawing its own group headers
 
 # 26/09/24
 - misc UI fixes

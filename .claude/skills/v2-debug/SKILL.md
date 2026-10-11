@@ -37,12 +37,19 @@ Pipeline order: `parse · decompose · split · filter · delta · expand · eva
 - `--matches <sym>` — keep rules that match relation `<sym>` (its consumers).
 - `--lines` — prefix every atom and `#def` with its source line (`Lnn`), to map
   expanded output back to source.
+- `--pretty` — readable rendering (v2/pretty-ir.ts): short var names (`l₁`,
+  `xl₂`), `⊥`/`⊤`, no atom keywords (`a ≤ b`, `+ a < b`), compiler copies and
+  identity window steps folded, repeated `*chain`s aliased as `κₙ`. Prefer it
+  when showing IR to the user; drop it when you need the exact structure.
 
 ## Eval output (`--out`, eval stage only)
 
 `tuples` (default; shallow-rendered, safe on big stores) · `timeline`
 (`renderTimelineAscii`) · `debug` (share-aware `renderDebugDump` JSON).
 `--gas N` / `--tuple-gas N` bound the run (defaults 200 / 5000).
+`--lattice` evaluates with moment-lattice max/min (incomparable windows build
+`(*max …)`/`(*min …)` moments instead of failing; v2/store.ts "Moment lattice").
+Diff a program's eval with and without it to see what the semantics change does.
 
 ## Recipes
 

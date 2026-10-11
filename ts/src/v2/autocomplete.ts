@@ -7,6 +7,7 @@
 
 import type { Term } from "./term.js";
 import type { Program, Rule, RuleAtom } from "./types.js";
+import { exprTerms } from "./types.js";
 import { isSymbolToken, isVariableToken, parse, tokenize, tokenizeTermText } from "./parse.js";
 
 // --- candidate ranking ------------------------------------------------------
@@ -113,7 +114,7 @@ function collectVarsFromBody(body: RuleAtom[], out: Set<string>): void {
       collectVarsFromBody(a.right, out);
     } else if (a.tag === "Equal") {
       collectVarsFromTerm(a.lhs, out);
-      collectVarsFromTerm(a.rhs, out);
+      for (const t of exprTerms(a.rhs)) collectVarsFromTerm(t, out);
     }
     // No other tags occur pre-expand.
   }
@@ -167,6 +168,7 @@ export function partialTokenAt(value: string, pos: number): { text: string; star
   while (start > 0 && !AC_SEP.test(value[start - 1]!)) start--;
   if (start === pos) return null;
   if (isMarkerCh(value[start]!)) start++;
+  if (value[start] === ">") start++; // `>p` / `~>p`
   if (start >= pos) return null;
   return { text: value.slice(start, pos), start, end: pos };
 }

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../v2/parse.js";
 import type { Program, Rule, RuleAtom } from "../v2/types.js";
+import { exprTerms } from "../v2/types.js";
 import type { Term } from "../v2/term.js";
 
 // Alpha-equivalence over parser-output rule bodies: same structure
@@ -34,7 +35,9 @@ function walkRA(a: RuleAtom, b: RuleAtom, ab: Map<string, string>, ba: Map<strin
     return walkBody(a.body, b.body, ab, ba);
   }
   if (a.tag === "Equal" && b.tag === "Equal") {
-    return walkTerm(a.lhs, b.lhs, ab, ba) && walkTerm(a.rhs, b.rhs, ab, ba);
+    const ra = exprTerms(a.rhs), rb = exprTerms(b.rhs);
+    return a.rhs.tag === b.rhs.tag && ra.length === rb.length &&
+      walkTerm(a.lhs, b.lhs, ab, ba) && ra.every((t, i) => walkTerm(t, rb[i]!, ab, ba));
   }
   return false;
 }

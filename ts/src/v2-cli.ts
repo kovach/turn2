@@ -66,9 +66,12 @@ ${STAGE_HELP}
     --emits <sym>     keep rules that emit/assert relation <sym>
     --matches <sym>   keep rules that match relation <sym>
     --lines           annotate each atom with its source line
+    --pretty          readable rendering: short var names, folded identity steps, no keywords
   filters AND-combine; not valid with --stage eval.
 
-  --out applies to the eval stage only (default: tuples).`;
+  --out applies to the eval stage only (default: tuples).
+  --lattice (eval only): max/min of incomparable moments build lattice-node
+    moments instead of failing the match.`;
 
 export type EvalFormat = "tuples" | "timeline" | "debug";
 
@@ -82,6 +85,10 @@ export interface RunOptions {
   matches: string | undefined; // keep rules that match this head symbol
   // Annotate every rendered atom with its source line.
   lines: boolean;
+  // Render rules with the pretty printer (v2/pretty-ir.ts).
+  pretty: boolean;
+  // Eval with moment-lattice max/min (v2/store.ts "Moment lattice").
+  lattice: boolean;
 }
 
 export const DEFAULT_OPTIONS: RunOptions = {
@@ -92,6 +99,8 @@ export const DEFAULT_OPTIONS: RunOptions = {
   emits: undefined,
   matches: undefined,
   lines: false,
+  pretty: false,
+  lattice: false,
 };
 
 function isStage(s: string): s is Stage {
@@ -122,13 +131,13 @@ function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
 // print to stdout. `eval`'s run status is reported separately by the caller.
 export function runStage(stage: Stage, parsed: Program, opts: RunOptions): string {
   if (stage === "eval") {
-    const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas);
+    const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas, { lattice: opts.lattice });
     console.error(`status: ${describeErrorStatus(store, status) ?? status.kind}`);
     return renderStore(store, opts.out);
   }
   const rules = rulesForStage(stage, parsed).filter((r) => ruleMatches(r, opts));
   if (rules.length === 0 && hasFilter(opts)) console.error("(no rules matched filter)");
-  return renderProgram({ ...parsed, rules }, { lines: opts.lines });
+  return renderProgram({ ...parsed, rules }, { lines: opts.lines, pretty: opts.pretty });
 }
 
 // ----- rule filtering -----
@@ -242,6 +251,12 @@ function main(argv: string[]): void {
       case "--lines":
         opts.lines = true;
         break;
+      case "--pretty":
+        opts.pretty = true;
+        break;
+      case "--lattice":
+        opts.lattice = true;
+        break;
       case "-h":
       case "--help":
         console.log(USAGE);
@@ -253,8 +268,8 @@ function main(argv: string[]): void {
     }
   }
 
-  if (stage === "eval" && (hasFilter(opts) || opts.lines)) {
-    fail(`--rule/--emits/--matches/--lines apply to rule-list stages, not eval\n\n${USAGE}`);
+  if (stage === "eval" && (hasFilter(opts) || opts.lines || opts.pretty)) {
+    fail(`--rule/--emits/--matches/--lines/--pretty apply to rule-list stages, not eval\n\n${USAGE}`);
   }
 
   const source = file !== undefined ? readFileSync(file, "utf-8") : readFileSync(0, "utf-8");

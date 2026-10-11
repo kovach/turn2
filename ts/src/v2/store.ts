@@ -22,6 +22,19 @@ import { createTracker, getOrCreateHead, type StatsTracker } from "./stats.js";
 
 export interface Store {
   hash: HashconsState;
+  // Moment-lattice mode (`createStore({ lattice: true })`; see the "Moment
+  // lattice" section below). Off by default: `max` / `min` of incomparable
+  // moments fail relationally (the original semantics). On: they build a
+  // `(*max ...)` / `(*min ...)` lattice-node moment instead.
+  lattice: boolean;
+  // Lattice-node moments by token: the node's kind and its element tokens
+  // (an antichain, sorted by token). Empty unless `lattice`.
+  latticeNodes: Map<number, LatticeNode>;
+  // Memo for `latticeLe` (lattice mode only), same contract as
+  // `ltPos` / `ltNeg`: positives are permanent, negatives are cleared on
+  // every edge insert.
+  lePos: Map<number, Set<number>>;
+  leNeg: Map<number, Set<number>>;
   tuples: Tuple[];
   // Parallel to `tuples`: span of the source RuleAtom that emitted each
   // tuple. `undefined` for tuples whose origin has no span (e.g. test
@@ -32,6 +45,11 @@ export interface Store {
   tupleSource: (Span | undefined)[];
   // head-sym name -> tuple indices in `tuples` whose first term is that sym
   byHead: Map<string, number[]>;
+  // head-sym name -> left-endpoint token -> tuple indices: the same buckets
+  // split by start moment, so a match whose left endpoint is already bound
+  // (every acc point read, `[l, l]`) visits only the rows at that moment
+  // instead of every row the relation has had at every moment.
+  byHeadL: Map<string, Map<number, number[]>>;
   // Forward adjacency on the moment-order relation. Keyed and valued by
   // hashcons token (NodeId from tokenOfId). Closure is computed lazily by
   // BFS in `lessThan`.
@@ -53,6 +71,14 @@ export interface Store {
   // `addOrder` since a new edge can flip a previous `false` to `true`.
   ltPos: Map<number, Set<number>>;
   ltNeg: Map<number, Set<number>>;
+  // Creation sequence number of each moment token (the order in which
+  // `momentTerms` first saw it), and, per token `a`, the sequence number at
+  // which `ltPos[a]` was last made complete by an exhaustive DFS. By the
+  // creation-time ordering invariant (see `addOrder`) the order between two
+  // existing moments never changes, so a complete closure answers every
+  // query about a moment that existed when it was computed.
+  momentSeq: Map<number, number>;
+  ltClosedAt: Map<number, number>;
   // Eager-strategy state. Populated only when ORDER_STRATEGY === "eager".
   // `gt[a]` is the full forward closure { b | a < b }.
   gt: Map<number, Set<number>>;
@@ -116,13 +142,26 @@ export interface Store {
   stats: StatsTracker;
 }
 
+export interface LatticeNode {
+  kind: "max" | "min";
+  elems: number[];
+}
+
+export interface StoreOptions {
+  // Moment-lattice semantics for `max` / `min` (see `latticeMax`).
+  lattice?: boolean;
+}
+
 // Sentinel thrown by `addTuple` when `tupleGas` is exhausted. Caught by
 // `runFixpoint` so deeply nested CPS evaluator state can unwind cleanly.
 export class GasError extends Error {
   constructor() { super("v2: tupleGas exhausted"); }
 }
 
-export function createStore(): Store {
+export function createStore(opts: StoreOptions = {}): Store {
+  if (opts.lattice && ORDER_STRATEGY !== "old") {
+    throw new Error("v2: lattice mode requires ORDER_STRATEGY 'old'");
+  }
   const hash = createHashcons();
   const bot = hashconsTerm({ tag: "Symbol", name: "bot" }, hash);
   const top = hashconsTerm({ tag: "Symbol", name: "top" }, hash);
@@ -131,9 +170,14 @@ export function createStore(): Store {
   const momentTerms = new Map<number, Term>([[botTok, bot], [topTok, top]]);
   return {
     hash,
+    lattice: opts.lattice ?? false,
+    latticeNodes: new Map(),
+    lePos: new Map(),
+    leNeg: new Map(),
     tuples: [],
     tupleSource: [],
     byHead: new Map(),
+    byHeadL: new Map(),
     orderFwd: new Map(),
     bot,
     top,
@@ -143,6 +187,8 @@ export function createStore(): Store {
     edgeSet: new Set(),
     ltPos: new Map(),
     ltNeg: new Map(),
+    momentSeq: new Map(),
+    ltClosedAt: new Map(),
     gt: new Map(),
     orderBwd: new Map(),
     resolved: new Set(),
@@ -187,8 +233,8 @@ export function addTuple(
   const atomTok = tokenOfId(atomRef, store.hash);
   const lTok = tokenOf(store, l);
   const rTok = tokenOf(store, r);
-  if (!store.momentTerms.has(lTok)) store.momentTerms.set(lTok, l);
-  if (!store.momentTerms.has(rTok)) store.momentTerms.set(rTok, r);
+  if (!store.momentTerms.has(lTok)) { store.momentTerms.set(lTok, l); store.momentSeq.set(lTok, store.momentSeq.size); }
+  if (!store.momentTerms.has(rTok)) { store.momentTerms.set(rTok, r); store.momentSeq.set(rTok, store.momentSeq.size); }
   const key = `${atomTok},${lTok},${rTok}`;
   if (store.tupleSet.has(key)) {
     store.tupleDupes++;
@@ -215,6 +261,11 @@ export function addTuple(
       store.byHead.set(head.name, bucket);
     }
     bucket.push(idx);
+    let byL = store.byHeadL.get(head.name);
+    if (byL === undefined) { byL = new Map(); store.byHeadL.set(head.name, byL); }
+    const lBucket = byL.get(lTok);
+    if (lBucket === undefined) byL.set(lTok, [idx]);
+    else lBucket.push(idx);
     store.currHeads.add(head.name);
     const hs = getOrCreateHead(store.stats, head.name);
     hs.bucketSize = bucket.length;
@@ -229,11 +280,23 @@ export function addTuple(
 
 // Assert lt < gt. No-op if already known. Bot/top edges are implicit and
 // not stored.
+//
+// Creation-time ordering invariant: the evaluator only ever asserts order
+// edges that involve a moment *as it is created* — an emit places its fresh
+// `l` / `r` inside the current window (`XL < l < r < XR`), and that window is
+// already known to be non-empty (`XL ≤ XR`, checked by the match `Le`s). So
+// an edge never orders two pre-existing moments that were not already
+// ordered: once both of two moments exist, whether they are comparable is
+// fixed for the rest of the run. (The scheduler / comp-aggregate
+// `addOrder(blocked.l, blocked.r)` calls are always already implied or
+// bot/top no-ops.) Lattice mode depends on this — it is what makes collapsing
+// `max(a, b)` to `b` when `a ≤ b` deterministic, and lets a lattice node be
+// wired to its covers once, at creation. Not enforced here.
 export function addOrder(store: Store, lt: Term, gt: Term): void {
   const ltTok = tokenOf(store, lt);
   const gtTok = tokenOf(store, gt);
-  if (!store.momentTerms.has(ltTok)) store.momentTerms.set(ltTok, lt);
-  if (!store.momentTerms.has(gtTok)) store.momentTerms.set(gtTok, gt);
+  if (!store.momentTerms.has(ltTok)) { store.momentTerms.set(ltTok, lt); store.momentSeq.set(ltTok, store.momentSeq.size); }
+  if (!store.momentTerms.has(gtTok)) { store.momentTerms.set(gtTok, gt); store.momentSeq.set(gtTok, store.momentSeq.size); }
   if (ltTok === gtTok) return;
   if (ltTok === store.botTok || gtTok === store.topTok) return;
   if (ORDER_STRATEGY === "old") {
@@ -243,6 +306,7 @@ export function addOrder(store: Store, lt: Term, gt: Term): void {
     // A new edge can convert previously-false reachability into true; ltPos
     // remains valid (monotone), but ltNeg must be discarded.
     store.ltNeg.clear();
+    store.leNeg.clear();
     let succs = store.orderFwd.get(ltTok);
     if (succs === undefined) {
       succs = new Set();
@@ -309,6 +373,7 @@ export function lessThan(store: Store, a: Term, b: Term): boolean {
 
 function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
   if (aTok === bTok) return false;
+  if (store.lattice) return latticeLe(store, aTok, bTok) && !latticeLe(store, bTok, aTok);
   if (aTok === store.topTok) return false;
   if (bTok === store.botTok) return false;
   if (aTok === store.botTok) return true;
@@ -320,6 +385,12 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
   if (pos !== undefined && pos.has(bTok)) return true;
   const neg = store.ltNeg.get(aTok);
   if (neg !== undefined && neg.has(bTok)) return false;
+  // A complete closure of aTok computed after bTok existed decides the query.
+  const closedAt = store.ltClosedAt.get(aTok);
+  if (closedAt !== undefined) {
+    const bSeq = store.momentSeq.get(bTok);
+    if (bSeq !== undefined && bSeq < closedAt) return false;
+  }
   // DFS closure search. Every node we reach from aTok satisfies aTok < node,
   // so cache it as we go — even on early-return for the queried bTok the
   // partial walk leaves useful positive facts behind for future queries.
@@ -327,6 +398,9 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
   if (posCache === undefined) { posCache = new Set(); store.ltPos.set(aTok, posCache); }
   const stack = [aTok];
   const seen = new Set<number>([aTok]);
+  // Exhaustive (no early exit): the visited set becomes aTok's complete
+  // closure, which answers all later queries from aTok in O(1).
+  let found = false;
   while (stack.length > 0) {
     const cur = stack.pop()!;
     const succs = store.orderFwd.get(cur);
@@ -335,10 +409,12 @@ function lessThanTok(store: Store, aTok: number, bTok: number): boolean {
       if (seen.has(s)) continue;
       seen.add(s);
       posCache.add(s);
-      if (s === bTok) return true;
+      if (s === bTok) found = true;
       stack.push(s);
     }
   }
+  store.ltClosedAt.set(aTok, store.momentSeq.size);
+  if (found) return true;
   let negCache = store.ltNeg.get(aTok);
   if (negCache === undefined) { negCache = new Set(); store.ltNeg.set(aTok, negCache); }
   negCache.add(bTok);
@@ -392,6 +468,17 @@ export function intervalContains(
 // in `tuples` so callers can iterate without copying.
 export function candidatesByHead(store: Store, head: string): readonly number[] {
   return store.byHead.get(head) ?? [];
+}
+
+const NO_CANDIDATES: readonly number[] = [];
+
+// Candidates with the given head whose left endpoint is the moment `l`, when
+// `l` is ground (a Ref or Symbol); otherwise every candidate with the head.
+// A ground endpoint unifies only with a token-equal stored endpoint, so the
+// narrowing never drops a tuple `candidatesByHead` would have matched.
+export function candidatesByHeadAt(store: Store, head: string, l: Term): readonly number[] {
+  if (l.tag !== "Ref" && l.tag !== "Symbol") return candidatesByHead(store, head);
+  return store.byHeadL.get(head)?.get(tokenOf(store, l)) ?? NO_CANDIDATES;
 }
 
 // Least upper bound (join) of a finite set of moments under the moment-
@@ -460,4 +547,183 @@ function upperSetTok(store: Store, t: number): Set<number> {
     for (const y of succ) if (!out.has(y)) { out.add(y); stack.push(y); }
   }
   return out;
+}
+
+// ===== Moment lattice (lattice mode only) =====
+//
+// With `store.lattice` set, `max` / `min` never fail (eval.ts `evalExpr`).
+// The join / meet of two moments is:
+//   - the larger / smaller argument when the two are comparable (this
+//     collapse is deterministic by the creation-time ordering invariant on
+//     `addOrder`: comparability of existing moments never changes);
+//   - otherwise a lattice-node moment `(*max e1 .. en)` / `(*min e1 .. en)`.
+//     Its elements are flattened (no `*max` directly inside a `*max`),
+//     stripped of the unit (`bot` for max, `top` for min; the other sentinel
+//     absorbs), reduced to an antichain, and sorted by token, so equal
+//     joins / meets hashcons to the same token.
+//
+// A node is wired into the order graph when it is created, so the moment
+// walk, the timeline and `lessThan`'s reachability see it as an ordinary
+// moment: a join gets edges from its elements and to the minimal common
+// upper bounds of its elements; a meet gets edges to its elements and from
+// the maximal common lower bounds. Later moments are ordered against it by
+// the edges asserted when *they* are created (e.g. `+ (*max ..) < l`), which
+// stay conjunctive: asserting `+ j < l` for a join `j` means "l after every
+// element of j", and `+ m < l` for a meet `m` means "l after every common
+// lower bound of m's elements" — weaker than "after one of them", which
+// would be a disjunction.
+//
+// `latticeLe` decides `≤` exactly over this structure: a join is below `b`
+// iff all its elements are; `a` is below a meet iff it is below all its
+// elements; everything else is reachability over the wired graph.
+
+export function latticeMax(store: Store, a: Term, b: Term): Term {
+  return latticeOp(store, "max", a, b);
+}
+
+export function latticeMin(store: Store, a: Term, b: Term): Term {
+  return latticeOp(store, "min", a, b);
+}
+
+const LATTICE_HEAD: Record<LatticeNode["kind"], Term> = {
+  max: { tag: "Symbol", name: "*max" },
+  min: { tag: "Symbol", name: "*min" },
+};
+
+function momentTermOf(store: Store, tok: number): Term {
+  const t = store.momentTerms.get(tok);
+  if (t === undefined) throw new Error(`internal: moment token ${tok} has no term`);
+  return t;
+}
+
+function latticeOp(store: Store, kind: LatticeNode["kind"], a: Term, b: Term): Term {
+  const unit = kind === "max" ? store.botTok : store.topTok;
+  const absorb = kind === "max" ? store.topTok : store.botTok;
+  const toks = new Set<number>();
+  for (const t of [a, b]) {
+    const tok = tokenOf(store, t);
+    if (!store.momentTerms.has(tok)) store.momentTerms.set(tok, t);
+    const node = store.latticeNodes.get(tok);
+    if (node !== undefined && node.kind === kind) for (const e of node.elems) toks.add(e);
+    else toks.add(tok);
+  }
+  if (toks.has(absorb)) return momentTermOf(store, absorb);
+  toks.delete(unit);
+  // x is dropped when some other element is at least as extreme; between
+  // mutually-≤ distinct tokens, the smaller token survives.
+  const below = (x: number, y: number) => kind === "max" ? latticeLe(store, x, y) : latticeLe(store, y, x);
+  const cand = [...toks].sort((x, y) => x - y);
+  const elems = cand.filter((x) => !cand.some((y) => y !== x && below(x, y) && (!below(y, x) || y < x)));
+  if (elems.length === 0) return momentTermOf(store, unit);
+  if (elems.length === 1) return momentTermOf(store, elems[0]!);
+  const term = intern(store, {
+    tag: "Id",
+    atom: { terms: [LATTICE_HEAD[kind], ...elems.map((e) => momentTermOf(store, e))] },
+  });
+  const tok = tokenOf(store, term);
+  if (!store.latticeNodes.has(tok)) {
+    store.momentTerms.set(tok, term);
+    store.latticeNodes.set(tok, { kind, elems });
+    wireLatticeNode(store, tok, kind, elems);
+  }
+  return term;
+}
+
+function addEdgeTok(store: Store, a: number, b: number): void {
+  addOrder(store, momentTermOf(store, a), momentTermOf(store, b));
+}
+
+// Edges from / to a new node's covers. See the section comment.
+function wireLatticeNode(store: Store, n: number, kind: LatticeNode["kind"], elems: number[]): void {
+  const up = kind === "max";
+  // Structural side: the elements, plus older same-kind nodes related to n
+  // only through the all-elements rule (a join below n whose elements are
+  // spread over several of n's), filtered to the covers.
+  for (const e of elems) up ? addEdgeTok(store, e, n) : addEdgeTok(store, n, e);
+  const related: number[] = [];
+  for (const [y, yn] of store.latticeNodes) {
+    if (y === n || yn.kind !== kind || elems.includes(y)) continue;
+    const rel = up ? latticeLe(store, y, n) && !latticeLe(store, n, y) : latticeLe(store, n, y) && !latticeLe(store, y, n);
+    if (rel) related.push(y);
+  }
+  for (const y of related) {
+    const covered = related.some((z) => z !== y && (up ? latticeLe(store, y, z) : latticeLe(store, z, y)));
+    if (!covered) up ? addEdgeTok(store, y, n) : addEdgeTok(store, n, y);
+  }
+  // Other side: the extreme elements of the common upper (join) / lower
+  // (meet) set of the elements. That set is closed under reachability, so an
+  // element is extreme iff none of its immediate neighbours toward the
+  // elements is in the set.
+  const adjOut = up ? store.orderFwd : store.orderBwd;
+  const adjIn = up ? store.orderBwd : store.orderFwd;
+  let common: Set<number> | null = null;
+  for (const e of elems) {
+    const reach = closure(adjOut, e);
+    if (common === null) common = reach;
+    else for (const x of common) if (!reach.has(x)) common.delete(x);
+  }
+  if (common === null) return;
+  common.delete(n);
+  common.delete(store.topTok);
+  common.delete(store.botTok);
+  for (const x of common) {
+    const ins = adjIn.get(x);
+    let extreme = true;
+    if (ins !== undefined) for (const p of ins) if (p !== n && common.has(p)) { extreme = false; break; }
+    if (extreme) up ? addEdgeTok(store, n, x) : addEdgeTok(store, x, n);
+  }
+}
+
+// Strict closure of `start` over `adj` (excluding `start` unless on a cycle).
+function closure(adj: Map<number, Set<number>>, start: number): Set<number> {
+  const out = new Set<number>();
+  const stack = [start];
+  while (stack.length > 0) {
+    const x = stack.pop()!;
+    const next = adj.get(x);
+    if (next === undefined) continue;
+    for (const y of next) if (!out.has(y)) { out.add(y); stack.push(y); }
+  }
+  return out;
+}
+
+// `a ≤ b` in lattice mode. Recursion depth is at most two: node elements
+// are never nodes of the same kind.
+function latticeLe(store: Store, a: number, b: number): boolean {
+  if (a === b || a === store.botTok || b === store.topTok) return true;
+  if (a === store.topTok || b === store.botTok) return false;
+  if (store.lePos.get(a)?.has(b)) return true;
+  if (store.leNeg.get(a)?.has(b)) return false;
+  let res: boolean;
+  const na = store.latticeNodes.get(a);
+  const nb = store.latticeNodes.get(b);
+  if (na?.kind === "max") res = na.elems.every((s) => latticeLe(store, s, b));
+  else if (nb?.kind === "min") res = nb.elems.every((t) => latticeLe(store, a, t));
+  else res = reachTok(store, a, b);
+  const memo = res ? store.lePos : store.leNeg;
+  let set = memo.get(a);
+  if (set === undefined) { set = new Set(); memo.set(a, set); }
+  set.add(b);
+  return res;
+}
+
+// Reachability over asserted edges, caching every visited node as `a ≤ x`.
+function reachTok(store: Store, a: number, b: number): boolean {
+  let pos = store.lePos.get(a);
+  if (pos === undefined) { pos = new Set(); store.lePos.set(a, pos); }
+  const stack = [a];
+  const seen = new Set<number>([a]);
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const succs = store.orderFwd.get(cur);
+    if (succs === undefined) continue;
+    for (const s of succs) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      pos.add(s);
+      if (s === b) return true;
+      stack.push(s);
+    }
+  }
+  return false;
 }

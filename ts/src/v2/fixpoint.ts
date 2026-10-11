@@ -48,7 +48,9 @@ export function runFixpoint(
   program: Program,
   gas = 200,
   tupleGas = 5000,
-  options?: { stats?: boolean; random?: () => number },
+  // `lattice`: moment-lattice semantics for max/min (store.ts "Moment
+  // lattice"); off = the original fail-on-incomparable semantics.
+  options?: { stats?: boolean; random?: () => number; lattice?: boolean },
 ): FixpointResult {
   // Expand aggregation-synonym macros first, so exception rewriting sees the
   // relation reads their bodies perform and `computeAggStrata` below never
@@ -74,7 +76,7 @@ export function runFixpoint(
     // once a moment's other handlers have settled.
     accHandler(compileAcc(expanded), expanded.schema, jsFuncs, jsRelFuncs),
   ];
-  const store = createStore();
+  const store = createStore({ lattice: options?.lattice ?? false });
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
   attachRules(store.stats, expanded.rules.map((r) => r.name));

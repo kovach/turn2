@@ -1,0 +1,169 @@
+--- a/ts/src/v2/store.ts
++++ b/ts/src/v2/store.ts
+@@ -45,6 +45,11 @@
+   tupleSource: (Span | undefined)[];
+   // head-sym name -> tuple indices in `tuples` whose first term is that sym
+   byHead: Map<string, number[]>;
++  // head-sym name -> left-endpoint token -> tuple indices: the same buckets
++  // split by start moment, so a match whose left endpoint is already bound
++  // (every acc point read, `[l, l]`) visits only the rows at that moment
++  // instead of every row the relation has had at every moment.
++  byHeadL: Map<string, Map<number, number[]>>;
+   // Forward adjacency on the moment-order relation. Keyed and valued by
+   // hashcons token (NodeId from tokenOfId). Closure is computed lazily by
+   // BFS in `lessThan`.
+@@ -66,6 +71,14 @@
+   // `addOrder` since a new edge can flip a previous `false` to `true`.
+   ltPos: Map<number, Set<number>>;
+   ltNeg: Map<number, Set<number>>;
++  // Creation sequence number of each moment token (the order in which
++  // `momentTerms` first saw it), and, per token `a`, the sequence number at
++  // which `ltPos[a]` was last made complete by an exhaustive DFS. By the
++  // creation-time ordering invariant (see `addOrder`) the order between two
++  // existing moments never changes, so a complete closure answers every
++  // query about a moment that existed when it was computed.
++  momentSeq: Map<number, number>;
++  ltClosedAt: Map<number, number>;
+   // Eager-strategy state. Populated only when ORDER_STRATEGY === "eager".
+   // `gt[a]` is the full forward closure { b | a < b }.
+   gt: Map<number, Set<number>>;
+@@ -164,6 +177,7 @@
+     tuples: [],
+     tupleSource: [],
+     byHead: new Map(),
++    byHeadL: new Map(),
+     orderFwd: new Map(),
+     bot,
+     top,
+@@ -173,6 +187,8 @@
+     edgeSet: new Set(),
+     ltPos: new Map(),
+     ltNeg: new Map(),
++    momentSeq: new Map(),
++    ltClosedAt: new Map(),
+     gt: new Map(),
+     orderBwd: new Map(),
+     resolved: new Set(),
+@@ -217,8 +233,8 @@
+   const atomTok = tokenOfId(atomRef, store.hash);
+   const lTok = tokenOf(store, l);
+   const rTok = tokenOf(store, r);
+-  if (!store.momentTerms.has(lTok)) store.momentTerms.set(lTok, l);
+-  if (!store.momentTerms.has(rTok)) store.momentTerms.set(rTok, r);
++  if (!store.momentTerms.has(lTok)) { store.momentTerms.set(lTok, l); store.momentSeq.set(lTok, store.momentSeq.size); }
++  if (!store.momentTerms.has(rTok)) { store.momentTerms.set(rTok, r); store.momentSeq.set(rTok, store.momentSeq.size); }
+   const key = `${atomTok},${lTok},${rTok}`;
+   if (store.tupleSet.has(key)) {
+     store.tupleDupes++;
+@@ -245,6 +261,11 @@
+       store.byHead.set(head.name, bucket);
+     }
+     bucket.push(idx);
++    let byL = store.byHeadL.get(head.name);
++    if (byL === undefined) { byL = new Map(); store.byHeadL.set(head.name, byL); }
++    const lBucket = byL.get(lTok);
++    if (lBucket === undefined) byL.set(lTok, [idx]);
++    else lBucket.push(idx);
+     store.currHeads.add(head.name);
+     const hs = getOrCreateHead(store.stats, head.name);
+     hs.bucketSize = bucket.length;
+@@ -274,8 +295,8 @@
+ export function addOrder(store: Store, lt: Term, gt: Term): void {
+   const ltTok = tokenOf(store, lt);
+   const gtTok = tokenOf(store, gt);
+-  if (!store.momentTerms.has(ltTok)) store.momentTerms.set(ltTok, lt);
+-  if (!store.momentTerms.has(gtTok)) store.momentTerms.set(gtTok, gt);
++  if (!store.momentTerms.has(ltTok)) { store.momentTerms.set(ltTok, lt); store.momentSeq.set(ltTok, store.momentSeq.size); }
++  if (!store.momentTerms.has(gtTok)) { store.momentTerms.set(gtTok, gt); store.momentSeq.set(gtTok, store.momentSeq.size); }
+   if (ltTok === gtTok) return;
+   if (ltTok === store.botTok || gtTok === store.topTok) return;
+   if (ORDER_STRATEGY === "old") {
+@@ -364,6 +385,12 @@
+   if (pos !== undefined && pos.has(bTok)) return true;
+   const neg = store.ltNeg.get(aTok);
+   if (neg !== undefined && neg.has(bTok)) return false;
++  // A complete closure of aTok computed after bTok existed decides the query.
++  const closedAt = store.ltClosedAt.get(aTok);
++  if (closedAt !== undefined) {
++    const bSeq = store.momentSeq.get(bTok);
++    if (bSeq !== undefined && bSeq < closedAt) return false;
++  }
+   // DFS closure search. Every node we reach from aTok satisfies aTok < node,
+   // so cache it as we go — even on early-return for the queried bTok the
+   // partial walk leaves useful positive facts behind for future queries.
+@@ -371,6 +398,9 @@
+   if (posCache === undefined) { posCache = new Set(); store.ltPos.set(aTok, posCache); }
+   const stack = [aTok];
+   const seen = new Set<number>([aTok]);
++  // Exhaustive (no early exit): the visited set becomes aTok's complete
++  // closure, which answers all later queries from aTok in O(1).
++  let found = false;
+   while (stack.length > 0) {
+     const cur = stack.pop()!;
+     const succs = store.orderFwd.get(cur);
+@@ -379,10 +409,12 @@
+       if (seen.has(s)) continue;
+       seen.add(s);
+       posCache.add(s);
+-      if (s === bTok) return true;
++      if (s === bTok) found = true;
+       stack.push(s);
+     }
+   }
++  store.ltClosedAt.set(aTok, store.momentSeq.size);
++  if (found) return true;
+   let negCache = store.ltNeg.get(aTok);
+   if (negCache === undefined) { negCache = new Set(); store.ltNeg.set(aTok, negCache); }
+   negCache.add(bTok);
+@@ -438,6 +470,17 @@
+   return store.byHead.get(head) ?? [];
+ }
+ 
++const NO_CANDIDATES: readonly number[] = [];
++
++// Candidates with the given head whose left endpoint is the moment `l`, when
++// `l` is ground (a Ref or Symbol); otherwise every candidate with the head.
++// A ground endpoint unifies only with a token-equal stored endpoint, so the
++// narrowing never drops a tuple `candidatesByHead` would have matched.
++export function candidatesByHeadAt(store: Store, head: string, l: Term): readonly number[] {
++  if (l.tag !== "Ref" && l.tag !== "Symbol") return candidatesByHead(store, head);
++  return store.byHeadL.get(head)?.get(tokenOf(store, l)) ?? NO_CANDIDATES;
++}
++
+ // Least upper bound (join) of a finite set of moments under the moment-
+ // order partial order. Empty input returns `bot` (the join of {}).
+ // Singleton returns its element. Otherwise folds `lubPair`; returns null
+--- a/ts/src/v2/eval.ts
++++ b/ts/src/v2/eval.ts
+@@ -20,6 +20,7 @@
+   addOrder,
+   addTuple,
+   candidatesByHead,
++  candidatesByHeadAt,
+   comparable,
+   internAtom,
+   leastUpperBound,
+@@ -324,7 +325,7 @@
+       seen.add(tokenOf(ctx.store, at));
+     }
+   }
+-  for (const idx of candidatesByHead(ctx.store, head)) {
++  for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+     if (rs !== undefined) rs.candScanned++;
+     const gen = ctx.store.gens[idx]!;
+     if (constraint === "delta") {
+--- a/ts/src/v2/term.ts
++++ b/ts/src/v2/term.ts
+@@ -52,8 +52,10 @@
+ }
+ 
+ export function trailUnwind(t: Trail, mark: number): void {
+-  t.names.length = mark;
+-  t.terms.length = mark;
++  // pop rather than `length = mark`: unwinds are almost always a few
++  // entries, and shrinking via `length` makes V8 re-trim the backing store.
++  const names = t.names, terms = t.terms;
++  while (names.length > mark) { names.pop(); terms.pop(); }
+ }
+ 
+ export function trailLookup(t: Trail, name: string): Term | undefined {

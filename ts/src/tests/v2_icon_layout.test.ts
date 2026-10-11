@@ -221,10 +221,13 @@ setup
     renderTerm,
     tokensEq,
     commit: () => {},
+    setPending: () => {},
   };
   const out = createDefaultDisplay(api)!.render(store, {
     components: [],
     schema: parsed.schema,
+    selectedIdx: 0,
+    pending: null,
   });
   assert.ok(out, "display should render something");
   const root = out.element as unknown as El;

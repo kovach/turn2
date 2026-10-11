@@ -18,6 +18,7 @@
 // the caret into that atom.
 
 import type { Rule, RuleAtom } from "./types.js";
+import { exprTerms } from "./types.js";
 import { spanKey, type Span, type Term } from "./term.js";
 import type { Editor, LineNote } from "./editor.js";
 import type { Store } from "./store.js";
@@ -92,7 +93,7 @@ export function collectVarLines(rules: Rule[]): Map<string, Map<string, { line: 
         case "Sub": walk(into, a.body); break;
         case "AggComp": walk(into, a.body); note(into, a.reduce.out, a.span); break;
         case "Exception": for (const t of a.left.terms) note(into, t, a.span); walk(into, a.right); break;
-        case "Equal": note(into, a.lhs, a.span); note(into, a.rhs, a.span); break;
+        case "Equal": note(into, a.lhs, a.span); for (const t of exprTerms(a.rhs)) note(into, t, a.span); break;
         default: break;
       }
     }

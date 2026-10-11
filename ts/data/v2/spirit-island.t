@@ -80,5 +80,3 @@ target-power .(:actor S)
 turn T,
   ( activate .(it is entwined-power) .(target You) )
   ^ entwined 
-
-  

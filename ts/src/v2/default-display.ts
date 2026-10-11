@@ -9,15 +9,17 @@
 // sibling icons on a grid (see icon-layout.ts); a container with no such
 // constraints renders as a plain wrapping row, as it always has.
 //
-// Interaction: when active choice components are present, render group
-// headers above the icon tree; one is "selected" and drives both the
-// moment filter and the candidate computation. Clicking an icon whose
-// term is a valid value for exactly one slot of the selected component
-// commits the choice; ambiguous clicks enter a pending state cleared by
-// clicking a header chip.
+// Interaction: the host (web-v2.ts) owns the choices strip above the
+// display and passes its state in: `ctx.selectedIdx` names the selected
+// component, which drives both the moment filter and the candidate
+// computation. Clicking an icon whose term is a valid value for exactly one
+// slot of the selected component commits the choice; an ambiguous click
+// hands the term to the host as pending (`DisplayApi.setPending`), which
+// re-renders with `ctx.pending` set and lets the user pick the slot in the
+// strip.
 //
 // All click handlers commit via DisplayApi.commit; the returned `clicks`
-// map is empty since the module rebuilds its own DOM on internal events.
+// map is empty.
 
 import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
@@ -37,11 +39,14 @@ interface DisplayApi {
   renderTerm: (store: Store, t: Term) => string;
   tokensEq: (a: Term, b: Term, store: Store) => boolean;
   commit: (intent: ClickIntent) => void;
+  setPending: (term: Term | null) => void;
 }
 
 interface DisplayCallContext {
   components: ComponentOptions[];
   schema: Map<string, string>;
+  selectedIdx: number;
+  pending: Term | null;
 }
 
 interface DisplayModule {
@@ -53,15 +58,6 @@ interface DisplayModule {
 
 const CSS = `
 .dd-root { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 8px; }
-.dd-groups { display: flex; flex-direction: column; gap: 4px; }
-.dd-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 6px; border: 2px solid var(--border); border-radius: 4px; cursor: pointer; font-size: 12px; }
-.dd-group.selected { background: var(--hover); }
-.dd-group.selected.singleton { border-color: var(--syn-head); }
-.dd-group.selected.multi { border-color: var(--syn-ref); }
-.dd-group-label { color: var(--fg-mute2); }
-.dd-chip { padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-2); font-family: monospace; color: var(--syn-var); }
-.dd-chip.matchable { background: var(--bg-3); border-color: var(--syn-head); color: var(--syn-head); cursor: pointer; }
-.dd-chip.rng { opacity: 0.6; font-style: italic; }
 .dd-icons { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px dashed var(--border); border-radius: 4px; min-width: 200px; font-size: 16px; }
 .dd-icon { padding: 6px 10px; border: 2px solid var(--border); border-radius: 4px; background: var(--bg-2); font-family: monospace; font-size: 16px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
 .dd-icon-children { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 6px; }
@@ -110,45 +106,8 @@ interface LayoutCtx {
   warn: LayoutWarnings;
 }
 
-interface RenderState {
-  selectedIdx: number;
-  // tokenKey of the pending icon term, or null. Pending state belongs to
-  // the currently selected component.
-  pending: number | null;
-}
-
 export function createDefaultDisplay(api: DisplayApi): DisplayModule {
   api.addStyles(CSS);
-
-  // Module-local state, reset on every fresh render() call (= every
-  // fixpoint re-run). Internal re-renders preserve it.
-  let state: RenderState = { selectedIdx: 0, pending: null };
-
-  // Rule names from a component's active terms. Each active term is a
-  // `(*id rule lexPos (*chain ...) :varName)` template emitted by expand;
-  // `terms[1]` is the rule-name Symbol. Dedups, preserves first-seen
-  // order. The shape isn't expressible in the type system, so we assert
-  // it and throw on violation.
-  function ruleNamesOf(comp: ComponentOptions, store: Store): string {
-    const seen = new Set<string>();
-    const names: string[] = [];
-    for (const at of comp.activeTerms) {
-      const a = api.peek(at, store);
-      if (a === null) throw new Error("ruleNamesOf: active term has no atom body");
-      const head = a.terms[0];
-      const rule = a.terms[1];
-      if (head?.tag !== "Symbol" || (head.name !== "*id" && head.name !== "*choose")) {
-        throw new Error(`ruleNamesOf: unexpected active-term head ${JSON.stringify(head)}`);
-      }
-      if (rule?.tag !== "Symbol") {
-        throw new Error(`ruleNamesOf: active-term rule slot is not a Symbol: ${JSON.stringify(rule)}`);
-      }
-      if (seen.has(rule.name)) continue;
-      seen.add(rule.name);
-      names.push(rule.name);
-    }
-    return names.join(", ");
-  }
 
   // The moment at which to interpret `icon` / `at` rows. While choices are
   // active, this is the selected component's choice-component moment.
@@ -156,7 +115,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
   // it contains every interval, so the filter is effectively "everything
   // visible at the end of the program".
   function renderMoment(ctx: DisplayCallContext, store: Store): Term {
-    const c = ctx.components[state.selectedIdx];
+    const c = ctx.components[ctx.selectedIdx];
     return c ? c.moment : store.top;
   }
 
@@ -430,7 +389,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     childrenOf: Map<number, IconNode[]>,
     comp: ComponentOptions | null,
     store: Store,
-    rerender: () => void,
+    pending: Term | null,
     lay: LayoutCtx,
   ): HTMLElement {
     const el = document.createElement("div");
@@ -446,7 +405,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     if (isTrivialLayout(layout)) {
       el.className = baseClass;
       for (const m of members) {
-        el.appendChild(renderIcon(m, childrenOf, comp, store, rerender, lay));
+        el.appendChild(renderIcon(m, childrenOf, comp, store, pending, lay));
       }
       return el;
     }
@@ -465,7 +424,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         cells.set(cellKey, cell);
         el.appendChild(cell);
       }
-      cell.appendChild(renderIcon(members[i]!, childrenOf, comp, store, rerender, lay));
+      cell.appendChild(renderIcon(members[i]!, childrenOf, comp, store, pending, lay));
     }
     return el;
   }
@@ -475,7 +434,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     childrenOf: Map<number, IconNode[]>,
     comp: ComponentOptions | null,
     store: Store,
-    rerender: () => void,
+    pending: Term | null,
     lay: LayoutCtx,
   ): HTMLElement {
     const el = document.createElement("div");
@@ -489,14 +448,14 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     if (kids && kids.length > 0) {
       el.appendChild(renderContainer(
         icon.termKey, kids, "dd-icon-children",
-        childrenOf, comp, store, rerender, lay,
+        childrenOf, comp, store, pending, lay,
       ));
       el.classList.add("dd-icon-container");
     }
 
     if (comp !== null) {
       const cands = candidatesFor(icon.term, comp, store);
-      const isPending = state.pending === icon.termKey;
+      const isPending = pending !== null && api.tokensEq(pending, icon.term, store);
       if (cands.length === 0) {
         // no listener
       } else if (cands.length === 1) {
@@ -514,111 +473,17 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         attachHotHandlers(el);
         el.addEventListener("click", (e) => {
           e.stopPropagation();
-          state.pending = state.pending === icon.termKey ? null : icon.termKey;
-          rerender();
+          api.setPending(isPending ? null : icon.term);
         });
       }
     }
     return el;
   }
 
-  function renderGroups(
-    ctx: DisplayCallContext,
-    store: Store,
-    rerender: () => void,
-  ): HTMLElement | null {
-    if (ctx.components.length === 0) return null;
-    const wrap = document.createElement("div");
-    wrap.className = "dd-groups";
-    // For pending state, find which chips are matchable.
-    const sel = ctx.components[state.selectedIdx]!;
-    let matchableSlots: Set<number> | null = null;
-    if (state.pending !== null) {
-      matchableSlots = new Set();
-      for (const row of sel.options) {
-        for (let i = 0; i < row.length; i++) {
-          if (sel.actors[i] === "rng") continue;
-          if (tokenOf(store, row[i]!) === state.pending) matchableSlots.add(i);
-        }
-      }
-    }
-    for (let i = 0; i < ctx.components.length; i++) {
-      const comp = ctx.components[i]!;
-      const row = document.createElement("div");
-      const isSelected = i === state.selectedIdx;
-      const isSingleton = comp.options.length === 1;
-      const classes = ["dd-group"];
-      if (isSelected) {
-        classes.push("selected");
-        classes.push(isSingleton ? "singleton" : "multi");
-      }
-      row.className = classes.join(" ");
-      const lab = document.createElement("span");
-      lab.className = "dd-group-label";
-      lab.textContent = `${ruleNamesOf(comp, store)} |`;
-      row.appendChild(lab);
-      for (let j = 0; j < comp.activeTerms.length; j++) {
-        const chip = document.createElement("span");
-        chip.className = "dd-chip";
-        if (comp.actors[j] === "rng") {
-          chip.classList.add("rng");
-          chip.title = "resolved automatically (rng)";
-        }
-        chip.textContent = api.renderTerm(store, comp.activeTerms[j]!);
-        if (i === state.selectedIdx && matchableSlots !== null && matchableSlots.has(j)) {
-          chip.classList.add("matchable");
-          chip.addEventListener("click", (ev) => {
-            ev.stopPropagation();
-            if (state.pending === null) return;
-            // Recover the pending icon's term from the current icon set.
-            const pendingKey = state.pending;
-            for (const idx of candidatesByHead(store, "icon")) {
-              const t = store.tuples[idx]!;
-              const ts = t.atom.terms;
-              if (ts.length !== 3) continue;
-              const term = ts[1]!;
-              if (tokenOf(store, term) !== pendingKey) continue;
-              const intent = commitSlot(comp, j, term, store);
-              if (intent) api.commit(intent);
-              return;
-            }
-          });
-        }
-        row.appendChild(chip);
-      }
-      if (!isSelected) {
-        row.addEventListener("click", () => {
-          state.selectedIdx = i;
-          state.pending = null;
-          rerender();
-        });
-      } else if (isSingleton) {
-        // Selected group with exactly one option row: click commits the
-        // row's `you` slots at once. rng slots are left to the scheduler
-        // (with one option it lands on the same values, but the binding
-        // stays attributed to rng — plans/v2-choice-actors.md).
-        row.addEventListener("click", () => {
-          const youIdx: number[] = [];
-          for (let k = 0; k < comp.activeTerms.length; k++) {
-            if (comp.actors[k] !== "rng") youIdx.push(k);
-          }
-          if (youIdx.length === 0) return;
-          api.commit({
-            activeTerms: youIdx.map((k) => comp.activeTerms[k]!),
-            optionTuple: youIdx.map((k) => comp.options[0]![k]!),
-          });
-        });
-      }
-      wrap.appendChild(row);
-    }
-    return wrap;
-  }
-
   function renderInner(
     container: HTMLElement,
     store: Store,
     ctx: DisplayCallContext,
-    rerender: () => void,
   ): void {
     container.innerHTML = "";
     const M = renderMoment(ctx, store);
@@ -637,12 +502,9 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       warn: { hCycle: false, vCycle: false },
     };
 
-    const groups = renderGroups(ctx, store, rerender);
-    if (groups) container.appendChild(groups);
-
-    const comp = ctx.components[state.selectedIdx] ?? null;
+    const comp = ctx.components[ctx.selectedIdx] ?? null;
     container.appendChild(renderContainer(
-      ROOT_KEY, roots, "dd-icons", childrenOf, comp, store, rerender, lay,
+      ROOT_KEY, roots, "dd-icons", childrenOf, comp, store, ctx.pending, lay,
     ));
 
     if (cycleWarning) {
@@ -673,16 +535,9 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
   return {
     render(store, ctx) {
-      // Reset state on every fresh render. Clamp selectedIdx in case the
-      // component count shrank.
-      state = { selectedIdx: 0, pending: null };
-      if (ctx.components.length === 0) state.selectedIdx = 0;
-      else if (state.selectedIdx >= ctx.components.length) state.selectedIdx = 0;
-
       const root = document.createElement("div");
       root.className = "dd-root";
-      const rerender = (): void => renderInner(root, store, ctx, rerender);
-      rerender();
+      renderInner(root, store, ctx);
       return { element: root, clicks: new Map() };
     },
   };

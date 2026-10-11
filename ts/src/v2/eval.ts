@@ -14,16 +14,20 @@ import type { Atom, Term, Trail } from "./term.js";
 import { newTrail, trailLength, trailUnwind } from "./term.js";
 import { substAtom, substTerm, unifyAtoms, unifyTerms } from "./unify.js";
 import { hashconsTerm, type HashconsState } from "./hashcons.js";
-import type { JsDef, Rule, RuleAtom } from "./types.js";
+import type { Expr, JsDef, Rule, RuleAtom } from "./types.js";
+import { isTermExpr } from "./types.js";
 import {
   addOrder,
   addTuple,
   candidatesByHead,
+  candidatesByHeadAt,
   comparable,
   internAtom,
   leastUpperBound,
   lessEq,
   lessThan,
+  latticeMax,
+  latticeMin,
   tokenOf,
   type Store,
 } from "./store.js";
@@ -116,9 +120,6 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
     case "Emit":       evalEmit(a, ctx, next); return;
     case "Le":         evalLe(a, ctx, next); return;
     case "AssertLt":   evalAssertLt(a, ctx, next); return;
-    case "Max":        evalMaxMin(a, ctx, next, true); return;
-    case "Min":        evalMaxMin(a, ctx, next, false); return;
-    case "JsCall":     evalJsCall(a, ctx, next); return;
     case "JsIterate":  evalJsIterate(a, ctx, next); return;
     case "AccMatch":   evalAccMatch(a, ctx, next); return;
     case "AccContribute": evalAccContribute(a, ctx, next); return;
@@ -249,24 +250,40 @@ function evalAccContribute(
 // to the moment being resolved).
 export const ACC_MOMENT_VAR = "_acc_m";
 
-function evalJsCall(
-  a: Extract<RuleAtom, { tag: "JsCall" }>,
-  ctx: Ctx,
-  next: () => void,
-): void {
-  const args = a.args.map((t) => substTerm(t, ctx.trail)); // may contain Refs
-  const fn = ctx.jsFuncs.get(a.func);
-  if (fn === undefined) throw new Error(`@js(${a.func} ...): undefined #js function`);
-  let term: Term;
-  try {
-    term = fn(ctx.store.hash, args);
-  } catch (e) {
-    throw new Error(`@js(${a.func} ...) threw: ${(e as Error).message}`);
+// Compute a non-Term `Expr` to a Term, or `null` for relational failure
+// (incomparable Max/Min args).
+function evalExpr(e: Exclude<Expr, Term>, ctx: Ctx): Term | null {
+  switch (e.tag) {
+    case "JsCall": {
+      const args = e.args.map((t) => substTerm(t, ctx.trail)); // may contain Refs
+      const fn = ctx.jsFuncs.get(e.func);
+      if (fn === undefined) throw new Error(`@js(${e.func} ...): undefined #js function`);
+      try {
+        return fn(ctx.store.hash, args);
+      } catch (err) {
+        throw new Error(`@js(${e.func} ...) threw: ${(err as Error).message}`);
+      }
+    }
+    case "Max":
+    case "Min": {
+      const aT = substTerm(e.a, ctx.trail);
+      const bT = substTerm(e.b, ctx.trail);
+      // Lattice mode (store.ts "Moment lattice"): never fails — the join /
+      // meet is a lattice-node moment when the args are incomparable.
+      if (ctx.store.lattice) {
+        return e.tag === "Max" ? latticeMax(ctx.store, aT, bT) : latticeMin(ctx.store, aT, bT);
+      }
+      // Incomparable args: relational failure (matches today's incomparable-
+      // anchor → failed-overlap behavior). The next iteration of the outer
+      // loop reaches a different candidate combination.
+      if (!comparable(ctx.store, aT, bT)) return null;
+      // Equal args (by hashcons token) trivially: pick aT.
+      const isMax = e.tag === "Max";
+      if (lessThan(ctx.store, aT, bT)) return isMax ? bT : aT;
+      // aT >= bT. (lessThan(b,a) or equal.)
+      return isMax ? aT : bT;
+    }
   }
-  const mark = trailLength(ctx.trail);
-  // unifyTerms/bindable hashconses `term` when binding `out`.
-  if (unifyTerms(a.out, term, ctx.trail, ctx.store.hash)) next();
-  trailUnwind(ctx.trail, mark);
 }
 
 function evalEqual(
@@ -274,8 +291,11 @@ function evalEqual(
   ctx: Ctx,
   next: () => void,
 ): void {
+  const rhs = isTermExpr(a.rhs) ? a.rhs : evalExpr(a.rhs, ctx);
+  if (rhs === null) return;
   const mark = trailLength(ctx.trail);
-  if (unifyTerms(a.lhs, a.rhs, ctx.trail, ctx.store.hash)) {
+  // unifyTerms/bindable hashconses a computed `rhs` when binding `lhs`.
+  if (unifyTerms(a.lhs, rhs, ctx.trail, ctx.store.hash)) {
     next();
   }
   trailUnwind(ctx.trail, mark);
@@ -305,7 +325,7 @@ function evalMatch(
       seen.add(tokenOf(ctx.store, at));
     }
   }
-  for (const idx of candidatesByHead(ctx.store, head)) {
+  for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
     if (rs !== undefined) rs.candScanned++;
     const gen = ctx.store.gens[idx]!;
     if (constraint === "delta") {
@@ -376,35 +396,14 @@ function evalAssertLt(
 ): void {
   const aT = substTerm(a.a, ctx.trail);
   const bT = substTerm(a.b, ctx.trail);
+  // `top < x` / `x < bot` can never hold: the firing fails. Reached when the
+  // anchor's left end is `top` — e.g. after `>p` on a fact, whose interval
+  // never ends — and an emit tries to place a moment after it.
+  const aTok = tokenOf(ctx.store, aT);
+  const bTok = tokenOf(ctx.store, bT);
+  if (aTok === ctx.store.topTok || bTok === ctx.store.botTok) return;
   addOrder(ctx.store, aT, bT);
   next();
-}
-
-function evalMaxMin(
-  a: Extract<RuleAtom, { tag: "Max" | "Min" }>,
-  ctx: Ctx,
-  next: () => void,
-  isMax: boolean,
-): void {
-  const aT = substTerm(a.a, ctx.trail);
-  const bT = substTerm(a.b, ctx.trail);
-  // Incomparable args: relational failure (matches today's incomparable-
-  // anchor → failed-overlap behavior). The next iteration of the outer
-  // loop reaches a different candidate combination.
-  if (!comparable(ctx.store, aT, bT)) return;
-  // Equal args (by hashcons token) trivially: pick aT.
-  let pick: Term;
-  if (lessThan(ctx.store, aT, bT)) {
-    pick = isMax ? bT : aT;
-  } else {
-    // aT >= bT. (lessThan(b,a) or equal.)
-    pick = isMax ? aT : bT;
-  }
-  const mark = trailLength(ctx.trail);
-  if (unifyTerms(a.out, pick, ctx.trail, ctx.store.hash)) {
-    next();
-  }
-  trailUnwind(ctx.trail, mark);
 }
 
 function headSymOf(atom: Atom): string | null {

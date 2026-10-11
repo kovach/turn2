@@ -1,5 +1,5 @@
 // v2 editor page. Owns: textarea source, parse/run loop, display-module
-// dispatch, error/status panel. Choice resolutions are appended directly to
+// dispatch, the choices strip, status line. Choice resolutions are appended directly to
 // the source textarea as `= V… (…)` shared bindings + `^ is L R` rows; no
 // side-channel buffer.
 
@@ -25,6 +25,11 @@ interface ClickIntent {
 interface DisplayCallContext {
   components: ComponentOptions[];
   schema: Map<string, string>;
+  // Choices-strip state (see renderChoices): the selected component, whose
+  // moment the display should render at, and the term an ambiguous click
+  // parked for the user to place in a slot.
+  selectedIdx: number;
+  pending: Term | null;
 }
 
 interface DisplayApi {
@@ -38,6 +43,9 @@ interface DisplayApi {
   // `clicks` map, since post-construction wiring can't reach newly built
   // nodes.
   commit: (intent: ClickIntent) => void;
+  // Park `term` (or clear it) as the pending value: the strip highlights the
+  // selected component's slots it fits, and clicking one commits it there.
+  setPending: (term: Term | null) => void;
 }
 
 interface DisplayModule {
@@ -51,7 +59,7 @@ const sourceEl = document.getElementById("source") as HTMLTextAreaElement;
 const sourceCursorLineEl = document.getElementById("source-cursor-line") as HTMLSpanElement;
 const displayEl = document.getElementById("display") as HTMLDivElement;
 const dbEl = document.getElementById("db") as HTMLDivElement;
-const infoEl = document.getElementById("info") as HTMLDivElement;
+const choicesEl = document.getElementById("choices") as HTMLDivElement;
 const statusEl = document.getElementById("status-line") as HTMLSpanElement;
 const fileNameEl = document.getElementById("file-name") as HTMLSpanElement;
 const hideInternalEl = document.getElementById("hide-internal") as HTMLInputElement;
@@ -108,7 +116,6 @@ const collapsePanes: Record<string, HTMLElement> = {
   editor: document.querySelector(".editors") as HTMLElement,
   display: document.querySelector(".display-pane") as HTMLElement,
   db: document.querySelector(".db-pane") as HTMLElement,
-  info: document.querySelector(".info-pane") as HTMLElement,
 };
 const workspaceEl = document.querySelector(".workspace") as HTMLElement;
 const collapsed = new Set<string>();
@@ -153,12 +160,6 @@ let lastStore: Store | null = null;
 // Expanded rules of the last run — needed to decode per-tuple bindings for
 // the editor's live-value notes (plans/v2-live-values-in-editor.md).
 let lastRules: Rule[] = [];
-
-// Per-render lookup of click intents for option-list `<span class="opt">`
-// nodes. Cleared at the start of each `run()`; entries' lifetime matches
-// the DOM nodes they're keyed against.
-const clickIntents = new Map<string, ClickIntent>();
-let clickIdCounter = 0;
 
 // Server-sync state. `loadedFile` is non-null after `bootstrap` successfully
 // fetches a file from the server; subsequent edits are written back to it
@@ -247,7 +248,13 @@ function peek(term: Term, store: Store): Atom | null {
   return null;
 }
 
-const displayApi: DisplayApi = { addStyles, peek, renderTerm, tokensEq, commit: handleClick };
+const displayApi: DisplayApi = {
+  addStyles, peek, renderTerm, tokensEq, commit: handleClick,
+  setPending(term) {
+    choiceState.pending = term;
+    renderView();
+  },
+};
 
 // `-- display: <file>` from the leading `--`-only block, mirroring v1's
 // `/ display: <file>` frontmatter convention.
@@ -259,6 +266,21 @@ function parseDisplayDirective(source: string): string | null {
     if (!t.startsWith("--")) break;
     const m = line.match(/^\s*--\s*display:\s*(\S+)\s*$/);
     if (m) return m[1] ?? null;
+  }
+  return null;
+}
+
+// `-- gas: <iterations> [<tuples>]` in the same leading block: a program that
+// is known to need more than the session defaults (e.g. a whole game replayed
+// on every click) raises the limits for itself. The header fields still win
+// when they are set higher.
+function parseGasDirective(source: string): { gas: number; tupleGas: number | null } | null {
+  for (const line of source.split("\n")) {
+    const t = line.trimStart();
+    if (t === "") continue;
+    if (!t.startsWith("--")) break;
+    const m = line.match(/^\s*--\s*gas:\s*(\d+)(?:\s+(\d+))?\s*$/);
+    if (m) return { gas: Number(m[1]), tupleGas: m[2] ? Number(m[2]) : null };
   }
   return null;
 }
@@ -286,6 +308,8 @@ async function loadDisplay(name: string | null): Promise<DisplayModule | null> {
 
 function setStatus(text: string, isError: boolean): void {
   statusEl.textContent = text;
+  // The line truncates long errors; the full text is on hover.
+  statusEl.title = text;
   statusEl.classList.toggle("error", isError);
 }
 
@@ -307,12 +331,209 @@ function updateFileNameDisplay(displayName: string | null): void {
   fileNameEl.textContent = parts.join("  ");
 }
 
-function setInfo(html: string): void {
-  infoEl.innerHTML = html;
+// --- Choices strip + display ---
+//
+// While choices are pending, a strip above the display lists one row per
+// component: the rules that asked, then each active term with its distinct
+// candidate values as clickable links. The strip belongs to the page rather
+// than to a display module, so every display (bundled or `-- display:`) gets
+// the same chooser, and the value links are the fallback for values no
+// display draws. One row is selected; the display renders at its moment
+// (`ctx.selectedIdx`). An ambiguous icon click parks its term as `pending`
+// (DisplayApi.setPending), the strip marks the selected row's slots it fits,
+// and clicking one commits it there.
+
+interface ChoiceState {
+  selectedIdx: number;
+  pending: Term | null;
+}
+let choiceState: ChoiceState = { selectedIdx: 0, pending: null };
+
+// What the last successful run left for the strip and display. Choice-state
+// changes re-render both from it without re-running the program. `null`
+// after a parse or evaluation error.
+interface View {
+  store: Store;
+  components: ComponentOptions[];
+  schema: Map<string, string>;
+  display: DisplayModule | null;
+}
+let view: View | null = null;
+
+// Rule names from a component's active terms. Each active term is a
+// `(*id rule lexPos (*chain ...) :varName)` template emitted by expand;
+// `terms[1]` is the rule-name Symbol. Dedups, preserves first-seen
+// order. The shape isn't expressible in the type system, so we assert
+// it and throw on violation.
+function ruleNamesOf(comp: ComponentOptions, store: Store): string {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const at of comp.activeTerms) {
+    const a = peek(at, store);
+    if (a === null) throw new Error("ruleNamesOf: active term has no atom body");
+    const head = a.terms[0];
+    const rule = a.terms[1];
+    if (head?.tag !== "Symbol" || (head.name !== "*id" && head.name !== "*choose")) {
+      throw new Error(`ruleNamesOf: unexpected active-term head ${JSON.stringify(head)}`);
+    }
+    if (rule?.tag !== "Symbol") {
+      throw new Error(`ruleNamesOf: active-term rule slot is not a Symbol: ${JSON.stringify(rule)}`);
+    }
+    if (seen.has(rule.name)) continue;
+    seen.add(rule.name);
+    names.push(rule.name);
+  }
+  return names.join(", ");
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// Chip text for an active term: the asked variable's name (the `:varName`
+// slot of its `*id` template), falling back to the rendered term.
+function activeTermLabel(term: Term, store: Store): string {
+  const v = peek(term, store)?.terms[4];
+  if (v?.tag === "Symbol" && v.name.startsWith(":")) return v.name.slice(1);
+  return renderTerm(store, term);
+}
+
+// Distinct values slot `j` takes across the component's option tuples, in
+// first-seen order.
+function slotValues(comp: ComponentOptions, j: number, store: Store): Term[] {
+  const seen = new Set<number>();
+  const out: Term[] = [];
+  for (const row of comp.options) {
+    const v = row[j];
+    if (v === undefined) continue;
+    const tok = tokenOf(store, v);
+    if (seen.has(tok)) continue;
+    seen.add(tok);
+    out.push(v);
+  }
+  return out;
+}
+
+function span(className: string, text: string): HTMLSpanElement {
+  const el = document.createElement("span");
+  el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+function renderChoices(v: View | null): void {
+  choicesEl.innerHTML = "";
+  const comps = v?.components ?? [];
+  choicesEl.classList.toggle("hidden", comps.length === 0);
+  if (v === null) return;
+  const { store } = v;
+  const pending = choiceState.pending;
+  for (let i = 0; i < comps.length; i++) {
+    const comp = comps[i]!;
+    const isSelected = i === choiceState.selectedIdx;
+    const isSingleton = comp.options.length === 1;
+    const row = document.createElement("div");
+    row.className = "choice-row";
+    if (isSelected) row.classList.add("selected", isSingleton ? "singleton" : "multi");
+    row.title = `asked at ${renderTermShallow(store, comp.moment)}`;
+    row.appendChild(span("choice-rules", ruleNamesOf(comp, store)));
+    for (let j = 0; j < comp.activeTerms.length; j++) {
+      const term = comp.activeTerms[j]!;
+      const slot = span("choice-slot", "");
+      const chip = span("choice-chip", activeTermLabel(term, store));
+      chip.title = renderTerm(store, term);
+      slot.appendChild(chip);
+      row.appendChild(slot);
+      // rng slots resolve automatically once the `you` terms are committed
+      // (plans/v2-choice-actors.md); they are shown but never offered.
+      if (comp.actors[j] === "rng") {
+        chip.classList.add("rng");
+        chip.title = "resolved automatically (rng)";
+        continue;
+      }
+      const values = slotValues(comp, j, store);
+      if (isSelected && pending !== null && values.some((val) => tokensEq(val, pending, store))) {
+        chip.classList.add("matchable");
+        chip.title = `place ${renderTerm(store, pending)} here`;
+        chip.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          handleClick({ activeTerms: [term], optionTuple: [pending] });
+        });
+      }
+      for (const val of values) {
+        const opt = span("choice-opt", renderTerm(store, val));
+        opt.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          handleClick({ activeTerms: [term], optionTuple: [val] });
+        });
+        slot.appendChild(opt);
+      }
+    }
+    if (!isSelected) {
+      row.addEventListener("click", () => {
+        choiceState = { selectedIdx: i, pending: null };
+        renderView();
+      });
+    } else if (isSingleton) {
+      // Selected component with exactly one option row: clicking the row
+      // commits all its `you` slots at once. rng slots are left to the
+      // scheduler (with one option it lands on the same values, but the
+      // binding stays attributed to rng — plans/v2-choice-actors.md).
+      row.addEventListener("click", () => {
+        const youIdx: number[] = [];
+        for (let k = 0; k < comp.activeTerms.length; k++) {
+          if (comp.actors[k] !== "rng") youIdx.push(k);
+        }
+        if (youIdx.length === 0) return;
+        handleClick({
+          activeTerms: youIdx.map((k) => comp.activeTerms[k]!),
+          optionTuple: youIdx.map((k) => comp.options[0]![k]!),
+        });
+      });
+    }
+    choicesEl.appendChild(row);
+  }
+}
+
+function renderDisplay(v: View): void {
+  displayEl.innerHTML = "";
+  if (v.display === null) return;
+  const ctx: DisplayCallContext = {
+    components: v.components,
+    schema: v.schema,
+    selectedIdx: choiceState.selectedIdx,
+    pending: choiceState.pending,
+  };
+  try {
+    const out = v.display.render(v.store, ctx);
+    if (out) {
+      displayEl.appendChild(out.element);
+      for (const [el, intent] of out.clicks) {
+        el.addEventListener("click", () => handleClick(intent));
+      }
+    }
+  } catch (e) {
+    showDisplayError(`display error: ${e}`);
+  }
+}
+
+function renderView(): void {
+  if (view === null) return;
+  renderChoices(view);
+  renderDisplay(view);
+}
+
+function showDisplayError(text: string): void {
+  const err = document.createElement("div");
+  err.className = "display-error";
+  err.textContent = text;
+  displayEl.appendChild(err);
+}
+
+// A run that produced nothing to display: clear the strip and show the
+// error, in full, where the display would be. The status line carries the
+// same text but may be truncated.
+function showRunError(text: string): void {
+  view = null;
+  renderChoices(null);
+  displayEl.innerHTML = "";
+  showDisplayError(text);
 }
 
 // The db pane toggles between the tuple database and an inline timeline
@@ -468,7 +689,15 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
   const prevEnd = sourceEl.selectionEnd;
   sourceEl.focus();
   sourceEl.setSelectionRange(sourceEl.value.length, sourceEl.value.length);
+  const before = sourceEl.value;
   document.execCommand("insertText", false, text);
+  // execCommand needs an editable, focused textarea; when the editor pane is
+  // collapsed (or the page lacks focus) it does nothing, so append directly
+  // and fire the same "input" listener (this path skips the undo history).
+  if (sourceEl.value === before) {
+    sourceEl.value = before + text;
+    sourceEl.dispatchEvent(new Event("input"));
+  }
   // Restore the caret to where it was; the insert was at the end, so the
   // original offsets are unaffected.
   sourceEl.setSelectionRange(prevStart, prevEnd);
@@ -485,28 +714,29 @@ function handleClick(intent: ClickIntent): void {
 
 async function run(): Promise<void> {
   const userSource = sourceEl.value;
-  clickIntents.clear();
-  clickIdCounter = 0;
-
   const parsed = parse(userSource);
   if ("message" in parsed) {
-    setStatus(`parse error line ${parsed.line}: ${parsed.message}`, true);
-    displayEl.innerHTML = "";
-    setInfo("");
+    const msg = `parse error line ${parsed.line}: ${parsed.message}`;
+    setStatus(msg, true);
+    showRunError(msg);
     link.update([]);
     return;
   }
 
-  const { gas, tupleGas } = gasLimits();
+  const limits = gasLimits();
+  const directive = parseGasDirective(userSource);
+  const gas = Math.max(limits.gas, directive?.gas ?? 0);
+  const tupleGas = Math.max(limits.tupleGas, directive?.tupleGas ?? 0);
   let result;
   try {
-    result = runFixpoint(parsed, gas, tupleGas);
+    // `?lattice` in the page URL: moment-lattice max/min (v2/store.ts).
+    const lattice = new URLSearchParams(location.search).has("lattice");
+    result = runFixpoint(parsed, gas, tupleGas, { lattice });
   } catch (e) {
     // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
     // other evaluation failure — show it rather than swallowing it.
     setStatus((e as Error).message, true);
-    displayEl.innerHTML = "";
-    setInfo("");
+    showRunError((e as Error).message);
     link.update([]);
     return;
   }
@@ -555,76 +785,24 @@ async function run(): Promise<void> {
       break;
   }
 
-  // Info panel: list components/options + status detail.
-  const infoLines: string[] = [];
-  if (status.kind === "active-choices") {
-    // One-at-a-time choice UI (plans/v2-choice-actors.md): one row per
-    // active term. `you` terms list their distinct candidate values (column
-    // dedup over the option tuples), each committing a single length-1
-    // binding; committing narrows the remaining terms' options on the
-    // re-run. rng terms render inert — they resolve automatically once the
-    // `you` terms are committed.
-    for (let i = 0; i < status.components.length; i++) {
-      const comp = status.components[i]!;
-      infoLines.push(`<b>component ${i + 1}</b> @ ${escapeHtml(renderTermShallow(store, comp.moment))}`);
-      for (let j = 0; j < comp.activeTerms.length; j++) {
-        const termLabel = escapeHtml(renderTermShallow(store, comp.activeTerms[j]!));
-        if (comp.actors[j] === "rng") {
-          infoLines.push(`  ${termLabel} <i>(rng)</i>`);
-          continue;
-        }
-        const seenVals = new Set<number>();
-        const parts: string[] = [];
-        for (const opt of comp.options) {
-          const v = opt[j]!;
-          const tok = tokenOf(store, v);
-          if (seenVals.has(tok)) continue;
-          seenVals.add(tok);
-          const id = `c${clickIdCounter++}`;
-          clickIntents.set(id, { activeTerms: [comp.activeTerms[j]!], optionTuple: [v] });
-          parts.push(`<span class="opt" data-click-id="${id}">${escapeHtml(renderTermShallow(store, v))}</span>`);
-        }
-        infoLines.push(`  ${termLabel}: ${parts.join(" ")}`);
-      }
-    }
-  } else if (status.kind === "empty-fringe-error" || status.kind === "late-constraint-error") {
-    infoLines.push(`<span class="err">${escapeHtml(describeErrorStatus(store, status) ?? status.kind)}</span>`);
-  }
-  setInfo(infoLines.join("\n"));
-  infoEl.querySelectorAll(".opt").forEach((el) => {
-    el.addEventListener("click", () => {
-      const id = el.getAttribute("data-click-id");
-      if (!id) return;
-      const intent = clickIntents.get(id);
-      if (intent) handleClick(intent);
-    });
-  });
-
   // Display module + file/save indicator.
   const displayName = parseDisplayDirective(userSource);
   updateFileNameDisplay(displayName);
   const display = await loadDisplay(displayName);
-  displayEl.innerHTML = "";
-  if (display && status.kind !== "empty-fringe-error" && status.kind !== "late-constraint-error") {
-    const ctx: DisplayCallContext = {
-      components: status.kind === "active-choices" ? status.components : [],
-      schema: parsed.schema,
-    };
-    try {
-      const out = display.render(store, ctx);
-      if (out) {
-        displayEl.appendChild(out.element);
-        for (const [el, intent] of out.clicks) {
-          el.addEventListener("click", () => handleClick(intent));
-        }
-      }
-    } catch (e) {
-      const err = document.createElement("div");
-      err.style.color = "#f87171";
-      err.textContent = `display error: ${e}`;
-      displayEl.appendChild(err);
-    }
+  if (status.kind === "empty-fringe-error" || status.kind === "late-constraint-error") {
+    showRunError(describeErrorStatus(store, status) ?? status.kind);
+    return;
   }
+  // Every run starts from the first component with nothing pending: the
+  // components are recomputed, so old indices and terms may not survive.
+  choiceState = { selectedIdx: 0, pending: null };
+  view = {
+    store,
+    components: status.kind === "active-choices" ? status.components : [],
+    schema: parsed.schema,
+    display,
+  };
+  renderView();
 }
 
 // Debounced input handler.
