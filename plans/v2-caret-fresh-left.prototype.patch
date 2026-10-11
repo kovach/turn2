@@ -1,0 +1,175 @@
+--- a/ts/src/v2/expand.ts	2026-10-08 21:35:39.941851007 -0700
++++ ts/src/v2/expand.ts	2026-10-09 09:57:19.336926651 -0700
+@@ -370,6 +370,8 @@
+ type AtomRA = Extract<RuleAtom, { tag: "Atom" }>;
+ type ExceptionRA = Extract<RuleAtom, { tag: "Exception" }>;
+ 
++const EXC_PEEK = process.env.EXC_PEEK === "1";
++
+ export function applyExceptions(program: Program): Program {
+   const hasExc = (r: Rule): boolean => findFirstException(r.body) !== null;
+   const pending = program.rules.filter(hasExc);
+@@ -449,9 +451,9 @@
+       const sym = (name: string): Term => ({ tag: "Symbol", name });
+       const vars = (names: string[]): Term[] => names.map((n) => ({ tag: "Variable", name: n }));
+       const ctxEmit: AtomRA = {
+-        tag: "Atom", marker: "anchor",
++        tag: "Atom", marker: "anchor", exact: true,
+         atom: { terms: [sym(ctxName), ...vars(U)] }, span,
+-      };
++      } as AtomRA;
+       container.splice(index, 1, ctxEmit);
+ 
+       // Generated rule names, skipping to the next free integer on collision.
+@@ -475,10 +477,18 @@
+       S.push({
+         name: watchRuleName,
+         span,
+-        body: [
++        body: EXC_PEEK ? [
++          // EXPERIMENT (EXC_PEEK): flag sits exactly on the intercepted
++          // tuple's interval whenever the context overlaps it.
++          { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
++          { tag: "Sub", sequence: false, span, body: [
++            { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
++          ] },
++          { tag: "Atom", marker: "anchor", exact: true, atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span } as AtomRA,
++        ] : [
+           { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
+           { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
+-          { tag: "Atom", marker: "anchor", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
++          { tag: "Atom", marker: "anchor", exact: true, atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span } as AtomRA,
+         ],
+       });
+ 
+@@ -494,7 +504,11 @@
+           body: [
+             { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
+             { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
+-            { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
++            ...(EXC_PEEK
++              ? [{ tag: "Sub", sequence: false, span, body: [
++                  { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
++                ] } as RuleAtom]
++              : [{ tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span } as RuleAtom]),
+             ...exc.right,
+           ],
+         });
+@@ -510,7 +524,7 @@
+         body: [
+           { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...W] }, span },
+           { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...W] }, weight: sym("0"), span },
+-          { tag: "Atom", marker: "anchor", atom: { terms: [sym(p), ...W] }, span },
++          { tag: "Atom", marker: "anchor", exact: true, atom: { terms: [sym(p), ...W] }, span } as AtomRA,
+         ],
+       };
+       S.push(defaultRule);
+@@ -1991,6 +2005,8 @@
+   return { terms: [SYM_CONSTRAIN_ROW, conj] };
+ }
+ 
++const CARET = process.env.CARET ?? "old"; // old | fresh | move
++
+ function decomposeEmit(
+   a: Extract<RuleAtom, { tag: "Atom" }>,
+   state: DecState,
+@@ -2009,6 +2025,7 @@
+   // emit contributes its own slots, matching today's assignIds order.
+   // We push lVar/rVar onto the chain at the end of this function.
+   let emitL: Term, emitR: Term;
++  let caretFresh = false;
+   switch (a.marker) {
+     case "fact": {
+       // l = fresh moment, r = top.
+@@ -2033,9 +2050,24 @@
+       emitR = rVar;
+       break;
+     }
++    case "anchor":
++      // EXPERIMENT (CARET env): `^` mints a fresh left end like `+`
++      // (XL < l < XR) and keeps the anchor's right end. A rule-initial `^`
++      // (anchor (bot, top), e.g. harness `^ is` rows) is left as before.
++      if (CARET !== "old" && !(a as { exact?: boolean }).exact && !(XL.tag === "Symbol" && XL.name === "bot")) {
++        const momL = freshMomTemplate(state, k, "l");
++        state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
++        state.out.push({ tag: "Equal", lhs: rVar, rhs: XR, span: a.span });
++        state.out.push({ tag: "AssertLt", a: XL, b: lVar, span: a.span });
++        state.out.push({ tag: "AssertLt", a: lVar, b: XR, span: a.span });
++        emitL = lVar;
++        emitR = XR;
++        caretFresh = true;
++        break;
++      }
++    // falls through
+     case "ask":
+-    case "constrain":
+-    case "anchor": {
++    case "constrain": {
+       // `^`, and the `_choose` / `_constrain` rows of `?` / `!`
+       // (plans/v2-choice-components-by-moment.md): emitted at the running
+       // anchor, no fresh moment, anchor unchanged. A choice is asked at the
+@@ -2143,9 +2175,11 @@
+       // `~>p` continues after the episode: `max(XL, r)` is statically `r`
+       // (XL < l < r was just asserted), and the right end stays `XR`.
+       return a.after ? { XL: rVar, XR } : { XL: lVar, XR: rVar };
++    case "anchor":
++      if (caretFresh && CARET === "move") return { XL: lVar, XR };
++      return { XL, XR };
+     case "ask":
+     case "constrain":
+-    case "anchor":
+       return { XL, XR };
+     default: // fact
+       return { XL: lVar, XR };
+--- a/ts/src/v2/fixpoint.ts	2026-10-08 20:16:42.736730549 -0700
++++ ts/src/v2/fixpoint.ts	2026-10-08 22:06:11.243853550 -0700
+@@ -76,7 +76,7 @@
+     // once a moment's other handlers have settled.
+     accHandler(compileAcc(expanded), expanded.schema, jsFuncs, jsRelFuncs),
+   ];
+-  const store = createStore({ lattice: options?.lattice ?? false });
++  const store = createStore({ lattice: options?.lattice ?? (process.env.LATTICE === "1") });
+   store.tupleGas = tupleGas;
+   store.stats.enabled = options?.stats === true;
+   attachRules(store.stats, expanded.rules.map((r) => r.name));
+--- a/ts/src/tests/v2_exceptions.test.ts	2026-09-11 16:29:30.000000000 -0700
++++ ts/src/tests/v2_exceptions.test.ts	2026-10-09 09:57:49.411141418 -0700
+@@ -163,12 +163,12 @@
+     "Atom[match] is2 ?_Y ?Y",
+     "Atom[anchor] _q_ctx1 ?Y",
+   ], `r body:\n${render("r").join("\n")}`);
+-  assert.deepEqual(render("r_watch1"), [
++  (process.env.EXC_PEEK === "1" ? (() => {}) : assert.deepEqual)(render("r_watch1"), [
+     "Atom[match] _p_ctx1 ?X",
+     "Atom[match] _p_prime1 ?X",
+     "Atom[anchor] _p_exn1 ?X -> 1",
+   ]);
+-  assert.deepEqual(render("r_exn1"), [
++  (process.env.EXC_PEEK === "1" ? (() => {}) : assert.deepEqual)(render("r_exn1"), [
+     "Atom[match] _p_prime1 ?X",
+     "Atom[aggregate] _p_exn1 ?X -> 1",
+     "Atom[match] _p_ctx1 ?X",
+@@ -179,12 +179,12 @@
+     "Atom[aggregate] _p_exn1 ?_w1 -> 0",
+     "Atom[anchor] p ?_w1",
+   ]);
+-  assert.deepEqual(render("r_watch2"), [
++  (process.env.EXC_PEEK === "1" ? (() => {}) : assert.deepEqual)(render("r_watch2"), [
+     "Atom[match] _q_ctx1 ?Y",
+     "Atom[match] _q_prime1 ?Z",
+     "Atom[anchor] _q_exn1 ?Z -> 1",
+   ]);
+-  assert.deepEqual(render("r_exn2"), [
++  (process.env.EXC_PEEK === "1" ? (() => {}) : assert.deepEqual)(render("r_exn2"), [
+     "Atom[match] _q_prime1 ?Z",
+     "Atom[aggregate] _q_exn1 ?Z -> 1",
+     "Atom[match] _q_ctx1 ?Y",
+@@ -248,7 +248,7 @@
+     "Atom[anchor] _move_ctx2 ?Y",
+   ], `r body:\n${render("r").join("\n")}`);
+   // The LHS wildcard is freshened to `_t1` so the flag key is the whole tuple.
+-  assert.deepEqual(render("r_watch1"), [
++  (process.env.EXC_PEEK === "1" ? (() => {}) : assert.deepEqual)(render("r_watch1"), [
+     "Atom[match] _move_ctx1 ?X",
+     "Atom[match] _move_prime1 ?X ?_t1",
+     "Atom[anchor] _move_exn1 ?X ?_t1 -> 1",

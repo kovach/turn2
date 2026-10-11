@@ -17,11 +17,13 @@ const SOURCE = `
   ( ~step there );
   ( ~look );
 
-#agg at * -> last
+#acc at : e (@last loc)
 
-step L, +at me -> L
+step L, +put me L
 
-look, at me -> L, ^print L
+put X L / at X L
+
+look, at me L, ^print L
 `;
 
 const parsed = parse(SOURCE);
@@ -36,11 +38,17 @@ const opts: TimelineOpts = { ...DEFAULT_OPTS, laneMode: "tree" };
 // want the test to run headless without a canvas.
 const layout = layoutTimeline(store, opts, () => 0);
 
+// `at` is an `#acc` relation now: its merged bars go to the acc band, stacked
+// above the episode lanes (plans/v2-acc-timeline-display.md).
+const episodeLanes = new Set(layout.bars.filter((b) => b.acc === undefined).map((b) => b.lane));
 assert.equal(
-  layout.laneCount, 3,
-  `game/step/look/print in tree mode should fit in 3 lanes; got ${layout.laneCount}\n` +
+  episodeLanes.size, 3,
+  `game/step/look/print in tree mode should fit in 3 lanes; got ${episodeLanes.size}\n` +
   `lanes per bar: ${layout.bars.map(b => `${b.label}=${b.lane}`).join(", ")}`,
 );
+for (const b of layout.bars) {
+  if (b.acc !== undefined) assert.ok(b.lane >= 3, `acc bar ${b.label} should sit in the band above the episodes`);
+}
 
 // game on lane 0, the four steps/looks on lane 1, the prints on lane 2.
 // Key by head token: `~game` etc. auto-fill to arity 1, so labels now carry a
@@ -197,8 +205,11 @@ console.log("PASS: moves stay adjacent to setup; lane invariants hold");
 
 // --- Source provenance (plans/v2-source-timeline-link.md) ---
 // Every bar/fact tupleIndex must round-trip to a recorded source line so the
-// renderer can stamp data-source-span for source ↔ output linking.
+// renderer can stamp data-source-span for source ↔ output linking. Merged
+// `#acc` bars are exempt: their rows are computed by the acc handler from `/`
+// rules, not emitted at one source atom.
 for (const b of layout.bars) {
+  if (b.acc !== undefined) continue;
   const span = store.tupleSource[b.tupleIndex];
   assert.ok(
     span !== undefined && span.line >= 1,
@@ -215,10 +226,27 @@ for (const f of layout.facts) {
 }
 console.log("PASS: bars/facts carry source-line provenance");
 
-// Sidebar rows (is/constrain tuples) carry the source line too.
-const sidebarSrc = `
-~is choice value
+// Sidebar rows (is/constrain tuples) carry the source line too. `is` rows can
+// only come from the choice harness's appended `^ is C V` (a rule cannot emit
+// `is`), so resolve a real choice: run once, append the harness row, rerun.
+const sidebarBase = `
++ opt a
+  ~ t
+t, ?C, !opt C
 `;
+const sidebarPhase1 = parse(sidebarBase);
+if ("message" in sidebarPhase1) {
+  throw new Error(`sidebar parse error line ${sidebarPhase1.line}: ${sidebarPhase1.message}`);
+}
+const sidebarR1 = runFixpoint(sidebarPhase1, 200, 5000);
+assert.equal(sidebarR1.status.kind, "active-choices", "sidebar fixture should ask a choice");
+if (sidebarR1.status.kind !== "active-choices") throw new Error("unreachable");
+const sidebarIs = compressRefs(
+  [sidebarR1.status.choices[0]!.activeTerms[0]!, { tag: "Symbol", name: "a" }],
+  sidebarR1.store,
+);
+const sidebarIsLines = [...sidebarIs.bindings, `^ is ${sidebarIs.results[0]} ${sidebarIs.results[1]}`];
+const sidebarSrc = sidebarBase + "\n" + sidebarIsLines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n") + "\n";
 const sidebarParsed = parse(sidebarSrc);
 if ("message" in sidebarParsed) {
   throw new Error(`sidebar parse error line ${sidebarParsed.line}: ${sidebarParsed.message}`);
@@ -229,6 +257,10 @@ const sidebarLayout = layoutTimeline(
   () => 0,
 );
 assert.ok(sidebarLayout.sidebar.length > 0, "expected an `is` sidebar section");
+assert.ok(
+  sidebarLayout.sidebar.some((sec) => sec.rows.some((r) => r.label.includes("↦"))),
+  "expected the installed `is` row in the sidebar",
+);
 for (const section of sidebarLayout.sidebar) {
   for (const row of section.rows) {
     assert.ok(
@@ -324,15 +356,20 @@ console.log("PASS: collapsed intervals hide contained episodes and interior fact
 // as a unit: collapsing either folds both into one stand-in, which is labeled
 // with the episode that was collapsed and carries its tuple, so right-clicking
 // it expands them all again.
+//
+// Built by hand: the source form `~a, ^b` no longer makes `b` co-extensive
+// with `a` (a non-initial `^` mints a fresh left end —
+// plans/v2-caret-fresh-left.md §2), and no surface form does any more.
 {
-  const dupSrc = `
-~a, ^b
-
-a, ~c
-`;
-  const dupParsed = parse(dupSrc);
-  if ("message" in dupParsed) throw new Error(`dup parse error: ${dupParsed.message}`);
-  const dupStore = runFixpoint(dupParsed, 200, 5000).store;
+  const dupStore = createStore();
+  const dsym = (name: string): Term => ({ tag: "Symbol", name });
+  const [d1, d2, d3, d4] = ["d1", "d2", "d3", "d4"].map((n) => intern(dupStore, dsym(n))) as [Term, Term, Term, Term];
+  addOrder(dupStore, d1, d2);
+  addOrder(dupStore, d2, d3);
+  addOrder(dupStore, d3, d4);
+  addTuple(dupStore, { terms: [dsym("a"), dsym("ida")] }, d1, d4);
+  addTuple(dupStore, { terms: [dsym("b"), dsym("idb")] }, d1, d4);
+  addTuple(dupStore, { terms: [dsym("c"), dsym("idc")] }, d2, d3);
   const base = layoutTimeline(dupStore, { ...DEFAULT_OPTS, laneMode: "tree" }, () => 0);
   const bBar = base.bars.find((x) => x.label.startsWith("b"))!;
   const aBar = base.bars.find((x) => x.label.startsWith("a"))!;

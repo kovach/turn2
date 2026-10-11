@@ -18,16 +18,15 @@
 --                   that the host environment is expected to fill.
 --   : name        — (label-only in old syntax; dropped)
 
--- aggregate decls
-#agg fills -> count
+-- acc relations (computed at each moment)
+#acc taken : cell
+was-filled Cell / taken Cell
 
-#agg turn-counter -> count
+#acc turn-counter : @count
+turn _ / turn-counter ()
 
 turn
-  + turn-counter -> x
-
-turn
-  turn-counter -> N
+  turn-counter N
   ~ foo N
 
 -- start: assert game with setup and turn (and initial actor o).
@@ -54,31 +53,31 @@ setup
   n C
   + cell R C
 
--- a cell is eligible for a turn if it hasn't been filled in this game
+-- a cell is eligible if it hasn't been filled yet (an acc view, so it is
+-- readable at the moment the choice is asked)
 turn
   ( ~ el-check );
   ~ do-choice
 
-turn
-  ( el-check, cell R C, fills (cell R C) -> z )
-  ^ eligible (cell R C)
+#acc eligible : cell
+cell R C, not taken (cell R C) / eligible (cell R C)
 
 do-choice
   ? C
-  ^ choice C
   ! eligible C
+  ^ choice C
 
 
 -- mark the chosen cell as filled. The cell-choice tuple carries the
 -- resolved Cell value once the harness writes the corresponding `is` row.
 turn
-  actor P
+  (actor P)
   choice A
   is A Cell
   ~ filled Cell P
 
--- a filled counts toward the per-turn filleds aggregate
-filled Cell _, + fills Cell -> 1
+-- a filled cell stays taken
+filled Cell _, + was-filled Cell
 
 -- turn-complete: a turn with at least one filled is finished
 turn
@@ -87,7 +86,7 @@ turn
 
 -- after turn is complete, the other player's turn begins
 game, other P Op
-  ( turn, (actor P, turn-complete) );
+  ( turn, (actor P), (turn-complete) );
   ( ~ turn, ^ actor Op )
 
 -- 4 win-condition rules

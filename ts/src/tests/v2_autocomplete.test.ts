@@ -79,24 +79,26 @@ import {
 
 {
   // `*`-headed compiler-internal symbols excluded; commands not offered.
-  const text = "#agg p -> count\n+ p (a b)";
+  const text = "#acc p : e @count\n+ q (a b)";
   const syms = collectProgramSymbols(text);
   assert.ok(syms.has("p"));
+  assert.ok(syms.has("q"));
   assert.ok(syms.has("a"));
   for (const s of [...syms]) assert.ok(!s.startsWith("*"), `unexpected internal ${s}`);
   console.log("PASS: internal/command symbols excluded");
 }
 
 {
-  // `#agg` contributes its head relation name even when the relation is never
-  // otherwise written; the aggregator and `#def`/`#js` names are not mined.
-  const text = "#agg lonely -> count\n#def helper\n#js (jsfn x) { return x }";
+  // `#acc` contributes its head relation name even when the relation is never
+  // otherwise written; its column types and `#def`/`#js` names are not mined.
+  const text = "#acc lonely : place @count\n#def helper\n#js (jsfn x) { return x }";
   const syms = collectProgramSymbols(text);
-  assert.ok(syms.has("lonely"), "agg head relation collected");
-  assert.ok(!syms.has("count"), "aggregator not collected");
+  assert.ok(syms.has("lonely"), "acc head relation collected");
+  assert.ok(!syms.has("count"), "op not collected");
+  assert.ok(!syms.has("place"), "column type not collected");
   assert.ok(!syms.has("helper"), "#def name not collected");
   assert.ok(!syms.has("jsfn"), "#js name not collected");
-  console.log("PASS: agg head relation collected");
+  console.log("PASS: acc head relation collected");
 }
 
 // --- variable extraction scoped to the rule ---------------------------------

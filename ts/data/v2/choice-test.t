@@ -1,4 +1,6 @@
-#agg at * -> last
+-- where each item is: the latest `put`, as of a moment
+#acc at : item (@last slot)
+put It To / at It To
 
 ~game, ( ~setup; ~turn )
 
@@ -8,8 +10,8 @@ setup
   ~mk-slot there
   ~mk-slot else
   ~link here there; ~link there else
-  +at a -> here
-  +at b -> there
+  +put a here
+  +put b there
   -- ~mk-slot in-play
 
 link A B
@@ -25,7 +27,7 @@ turn
 
 push
   ? It To
-  !(at It -> X, adjacent X To)
+  !(at It X, adjacent X To)
   is It I
   is To T
   ~move I T
@@ -37,12 +39,10 @@ game
 game
   turn;
   ~look;
-  locations X -> Y, ~count X Y
+  locations X Y, ~count X Y
 
-#agg locations * -> count
-
-look
-  at X -> Y, +locations X -> ()
+#acc locations : item @count
+at X _ / locations X ()
 
 move It To
-  +at It -> To
+  +put It To

@@ -19,7 +19,7 @@
 // Scopes:
 //   - A Symbol (relation or constant) is renamed everywhere in the file:
 //     matches, emits, `!(...)`, exceptions, aggregates, dot chains, and the
-//     `#acc` / `#agg` / `#reactive` / `#macro` / `#js-def` / `#js` names.
+//     `#acc` / `#js-def` / `#js` names.
 //     Two exclusions: the `#def <name>` rule name (a separate namespace), and
 //     `#js` / `#js-def` bodies and parameters (JS code), of which only the
 //     relation/function name is renamed.

@@ -1,13 +1,13 @@
 // v2 scheduler: the non-monotone part of a program, packaged as moment
 // handlers for the moment walk (moment-walk.ts, plans/v2-moment-walk.md).
-// Reads store contents at outer-loop quiescence to find blocked do-agg /
-// choose rows and to fold reactive aggregates; the walk decides *when* each
-// handler runs (at the minimal unresolved moments). Knows nothing about rule
-// continuations — paused work lives entirely in the store.
+// Reads store contents at outer-loop quiescence to find blocked choose rows
+// and unanswered exception checks; the walk decides *when* each handler runs
+// (at the minimal unresolved moments). `#acc` relations have their own
+// handler (acc.ts). Knows nothing about rule continuations — paused work
+// lives entirely in the store.
 
-import type { Atom, Term } from "./term.js";
+import type { Atom, Span, Term } from "./term.js";
 import { hashconsTerm, refTagOf } from "./hashcons.js";
-import { getAggregator } from "./aggregators.js";
 import {
   addOrder,
   addTuple,
@@ -20,49 +20,8 @@ import {
 } from "./store.js";
 import type { Actor, BlockedChoose, ComponentOptions, Rule, RuleAtom } from "./types.js";
 import { isActor } from "./types.js";
-import { closeDoAggC, collectBlockedDoAggCs, SYM_AGG_EMPTY } from "./comp-aggregate.js";
 import type { MomentHandler } from "./moment-walk.js";
 
-const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
-const SYM_AGGVAL_ID: Term = { tag: "Symbol", name: "*aggval-id" };
-const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
-
-// A do-agg row whose matching agg-result row does not yet exist.
-export interface BlockedDoAgg {
-  rowIndex: number;
-  // Universal trailing id slot — also serves as the do-agg ↔ agg-result
-  // correlation key (one identifier suffices).
-  id: Term;
-  idTok: number;
-  wrappedAtom: Atom;          // unwrapped from terms[1]
-  l: Term;
-  r: Term;
-}
-
-// Scan store for do-agg rows lacking matching agg-result rows. The id at
-// the trailing slot of each row is the correlation key.
-export function collectBlockedDoAggs(store: Store): BlockedDoAgg[] {
-  const resolved = new Set<number>();
-  for (const idx of candidatesByHead(store, "_agg-result")) {
-    const t = store.tuples[idx]!;
-    const idTerm = t.atom.terms[t.atom.terms.length - 1];
-    if (idTerm === undefined) continue;
-    resolved.add(tokenOf(store, idTerm));
-  }
-  const out: BlockedDoAgg[] = [];
-  for (const idx of candidatesByHead(store, "_do-agg")) {
-    const t = store.tuples[idx]!;
-    const wrappedTerm = t.atom.terms[1];
-    const idTerm = t.atom.terms[2];
-    if (wrappedTerm === undefined || idTerm === undefined) continue;
-    const idTok = tokenOf(store, idTerm);
-    if (resolved.has(idTok)) continue;
-    const wrappedAtom = unwrapAtom(wrappedTerm, store);
-    if (wrappedAtom === null) continue;
-    out.push({ rowIndex: idx, id: idTerm, idTok, wrappedAtom, l: t.l, r: t.r });
-  }
-  return out;
-}
 
 // Dead-choice marker head: `_dead-choice <activeTerm>`, emitted by the
 // fixpoint loop when an earliest-tier choice component has zero option
@@ -172,13 +131,11 @@ export function programSeededRandom(store: Store): (() => number) | null {
 // Auto-resolve one all-`rng` choice component: pick one of its option tuples
 // uniformly at random (options are deduped joint assignments — the
 // distribution is uniform over joint assignments, not per-column marginals)
-// and commit every active term at once by asserting `is <term> <value>` rows
-// at `(bot, top)` — the same span the UI's appended `^ is X V` rows get,
-// which is what lets nested `is C M` blocks match under any anchor. Each row
-// carries a `(*rng <activeTerm>)` trailing id so arity-saturated user
-// matches (`is C M` ⇒ stored width 4) see it. Returns the commits made, or
-// null when the component has no options (the caller falls back to
-// surfacing it as an active choice).
+// and commit every active term at once with `installIs`, exactly like a
+// harness-supplied `^ is X V` row. Each row carries a `(*rng <activeTerm>)`
+// trailing id so arity-saturated user matches (`is C M` ⇒ stored width 4)
+// see it. Returns the commits made, or null when the component has no
+// options (the caller falls back to surfacing it as an active choice).
 export function resolveRngChoice(
   store: Store,
   comp: ComponentOptions,
@@ -194,7 +151,9 @@ export function resolveRngChoice(
     const activeTerm = comp.activeTerms[i]!;
     const value = row[i]!;
     const commitId: Term = { tag: "Id", atom: { terms: [idHead, activeTerm] } };
-    addTuple(store, { terms: [isSym, activeTerm, value, commitId] }, store.bot, store.top);
+    if (!installIs(store, activeTerm, value, commitId)) {
+      throw new Error("internal: rng commit for a choice term with no '_choose' row");
+    }
     commits.push({ activeTerm, value });
   }
   return commits;
@@ -238,37 +197,161 @@ function expandRef(term: Term, store: Store): Term | null {
   return { tag, atom: a };
 }
 
-// ----- Moment handlers (plans/v2-moment-walk.md) -----
+// ----- Choice inputs: `is` rows anchored at their choice -----
+//
+// A choice's resolution `is T V` lives on `[l, top]`, where `l` is the ask
+// moment — the left end of `T`'s `_choose` row (plans/v2-caret-fresh-left.md
+// §6.3). A rule reading `is T V` therefore narrows to start at or after the
+// ask moment: the asking rule's continuation (`?C, …, is C M`) and any rule
+// that reached `C` after the ask (`cell-choice C, is C V`) overlap and
+// proceed, while a rule anchored on an episode that ended before the ask
+// cannot read the value and place a consequence in the past. (A fresh moment
+// strictly after the ask was tried and rejected: it is incomparable to the
+// ask's other consequences, so `cell-choice C, is C V` could not join.) The harness's appended `^ is T V` source rows reach the store as
+// `_is-input T V` (expand.ts); `isInputHandler` installs them, and rng
+// commits go through the same `installIs`.
 
-// Demand aggregates: `_do-agg` (schema reads `rel k -> V`) and `_do-aggc`
-// (bracket `[ Q | ... ]`) rows are closed when the walk reaches their left
-// endpoint, with today's fold semantics (containment of the producer's
-// `[l, r]`, `*agg-empty` sentinel) untouched. A row whose moment is already
-// resolved — late work through a same-moment `^` chain — is `demanded` and
-// closed on the next round without waiting for the frontier.
-export function demandAggHandler(schema: Map<string, string>): MomentHandler {
+export const SYM_IS_INPUT: Term = { tag: "Symbol", name: "_is-input" };
+const SYM_IS: Term = { tag: "Symbol", name: "is" };
+
+// The anchor of the `_choose` row that asked each choice term (by token).
+function askAnchors(store: Store): Map<number, { l: Term; r: Term }> {
+  const out = new Map<number, { l: Term; r: Term }>();
+  for (const idx of candidatesByHead(store, "_choose")) {
+    const t = store.tuples[idx]!;
+    const wrapped = t.atom.terms[2];
+    if (wrapped === undefined) continue;
+    const atom = unwrapAtom(wrapped, store);
+    if (atom === null) continue;
+    const terms: Term[] = [];
+    collectActiveTerms(atom, store, new Set(), terms);
+    for (const term of terms) out.set(tokenOf(store, term), { l: t.l, r: t.r });
+  }
+  return out;
+}
+
+// Assert `is term value <id>` from `term`'s ask moment on. False when the
+// term has no `_choose` row (yet). `span` is the harness row's source line
+// (none for an rng commit).
+export function installIs(store: Store, term: Term, value: Term, id: Term, span?: Span): boolean {
+  const anchor = askAnchors(store).get(tokenOf(store, term));
+  if (anchor === undefined) return false;
+  addTuple(store, { terms: [SYM_IS, term, value, id] }, anchor.l, store.top, span);
+  return true;
+}
+
+interface IsInput { term: Term; value: Term; id: Term; askL: Term; span?: Span }
+
+function pendingIsInputs(store: Store): IsInput[] {
+  const installed = new Set<number>();
+  for (const idx of candidatesByHead(store, "is")) {
+    const T = store.tuples[idx]!.atom.terms[1];
+    if (T !== undefined) installed.add(tokenOf(store, T));
+  }
+  const anchors = askAnchors(store);
+  const out: IsInput[] = [];
+  for (const idx of candidatesByHead(store, "_is-input")) {
+    const t = store.tuples[idx]!;
+    const [, term, value, id] = t.atom.terms;
+    if (term === undefined || value === undefined || id === undefined) continue;
+    if (installed.has(tokenOf(store, term))) continue;
+    const anchor = anchors.get(tokenOf(store, term));
+    if (anchor === undefined) continue; // asked later (or never)
+    const span = store.tupleSource[idx];
+    out.push(span === undefined ? { term, value, id, askL: anchor.l } : { term, value, id, askL: anchor.l, span });
+  }
+  return out;
+}
+
+// Installs each pending `_is-input` when the walk reaches its ask moment (a
+// choice there blocks the moment until then).
+export function isInputHandler(): MomentHandler {
   return {
-    name: "demand-agg",
+    name: "is-input",
     run(store, m) {
       const mTok = tokenOf(store, m);
       let progress = false;
-      for (const a of collectBlockedDoAggs(store)) {
-        if (tokenOf(store, a.l) !== mTok) continue;
-        if (closeDoAgg(store, a, schema)) progress = true;
-      }
-      for (const c of collectBlockedDoAggCs(store)) {
-        if (tokenOf(store, c.l) !== mTok) continue;
-        if (closeDoAggC(store, c)) progress = true;
+      for (const inp of pendingIsInputs(store)) {
+        if (tokenOf(store, inp.askL) !== mTok) continue;
+        if (installIs(store, inp.term, inp.value, inp.id, inp.span)) progress = true;
       }
       return { progress, blocked: false };
     },
     demanded(store) {
       const out = new Set<number>();
-      for (const a of collectBlockedDoAggs(store)) out.add(tokenOf(store, a.l));
-      for (const c of collectBlockedDoAggCs(store)) out.add(tokenOf(store, c.l));
+      for (const inp of pendingIsInputs(store)) out.add(tokenOf(store, inp.askL));
       return out;
     },
   };
+}
+
+// ----- Moment handlers (plans/v2-moment-walk.md) -----
+
+// Exception default checks (expand.ts decomposeExnCheck): each `_exn-wait
+// (flag pat) id` row at `[l, r]` is answered once, with `_exn-clear` when no
+// `flag pat` tuple is alive at `l` and `_exn-held` otherwise. Handlers run
+// only after the inner loop is quiet, so every watcher that can flag the
+// tuple has fired. A wait row at an already-settled moment (a chained
+// exception's default re-emitting at the tuple's own start) is `demanded`.
+export function exceptionCheckHandler(): MomentHandler {
+  return {
+    name: "exception-check",
+    run(store, m) {
+      const mTok = tokenOf(store, m);
+      let progress = false;
+      for (const w of pendingExnWaits(store)) {
+        if (tokenOf(store, w.l) !== mTok) continue;
+        if (answerExnWait(store, w)) progress = true;
+      }
+      return { progress, blocked: false };
+    },
+    demanded(store) {
+      const out = new Set<number>();
+      for (const w of pendingExnWaits(store)) out.add(tokenOf(store, w.l));
+      return out;
+    },
+  };
+}
+
+interface ExnWait { pattern: Term; id: Term; l: Term; r: Term }
+
+function pendingExnWaits(store: Store): ExnWait[] {
+  const answered = new Set<number>();
+  for (const head of ["_exn-clear", "_exn-held"]) {
+    for (const idx of candidatesByHead(store, head)) {
+      const id = store.tuples[idx]!.atom.terms[2];
+      if (id !== undefined) answered.add(tokenOf(store, id));
+    }
+  }
+  const out: ExnWait[] = [];
+  for (const idx of candidatesByHead(store, "_exn-wait")) {
+    const t = store.tuples[idx]!;
+    const pattern = t.atom.terms[1];
+    const id = t.atom.terms[2];
+    if (pattern === undefined || id === undefined) continue;
+    if (answered.has(tokenOf(store, id))) continue;
+    out.push({ pattern, id, l: t.l, r: t.r });
+  }
+  return out;
+}
+
+function answerExnWait(store: Store, w: ExnWait): boolean {
+  const pat = expandRef(w.pattern, store);
+  if (pat === null || pat.tag !== "Atom") return false;
+  const [head, ...args] = pat.atom.terms;
+  if (head === undefined || head.tag !== "Symbol") return false;
+  const argToks = args.map((a) => tokenOf(store, a));
+  let flagged = false;
+  for (const idx of candidatesByHead(store, head.name)) {
+    const c = store.tuples[idx]!;
+    if (c.atom.terms.length !== args.length + 2) continue; // head, args, id
+    if (!argToks.every((tok, i) => tokenOf(store, c.atom.terms[i + 1]!) === tok)) continue;
+    if (!intervalContains(store, c.l, c.r, w.l, w.l)) continue;
+    flagged = true;
+    break;
+  }
+  const answer: Term = { tag: "Symbol", name: flagged ? "_exn-held" : "_exn-clear" };
+  return addTuple(store, { terms: [answer, w.pattern, w.id] }, w.l, w.r);
 }
 
 // Choices: a moment with an unresolved `_choose` row is blocked. Surfacing,
@@ -289,483 +372,4 @@ export function choiceHandler(): MomentHandler {
       return out;
     },
   };
-}
-
-// Close one do-agg row by computing its aggregate and emitting agg-result.
-// Always returns true: count/sum emit a result, `last` may legitimately have
-// nothing to emit, and that case is closed with the `*agg-empty` sentinel so
-// the producer stops blocking the outer loop (see SYM_AGG_EMPTY).
-export function closeDoAgg(
-  store: Store,
-  blocked: BlockedDoAgg,
-  schema: Map<string, string>,
-): boolean {
-  const wrapped = blocked.wrappedAtom;
-  const results = aggregateOver(store, wrapped, blocked.l, blocked.r, schema);
-  let any = false;
-  for (const r of results) {
-    if (emitAggResultRow(store, blocked, wrapped, r.rep, r.weight)) any = true;
-  }
-  if (!any) {
-    const sym: Term = { tag: "Symbol", name: "_agg-result" };
-    const atom: Atom = { terms: [sym, SYM_AGG_EMPTY, blocked.id] };
-    if (addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex])) {
-      addOrder(store, blocked.l, blocked.r);
-      any = true;
-    }
-  }
-  return any;
-}
-
-// Generic aggregation over candidates inside `[l, r]` matching the
-// `_do-agg`-style wrapped pattern `[head, k1..kK, weight]`. Returns one
-// result per group (sum/count) or one per maximal candidate per group
-// (last). Each result carries the `filledTerms` for the wrapped-pattern
-// positions (with free positions substituted by the representative
-// candidate's actual values) plus the aggregated `weight`. Empty input:
-// `last` -> []; sum/count with no free key positions -> one zero row;
-// sum/count with free key positions -> [].
-export interface AggregateResult {
-  // Wrapped-pattern positions 0..arity-2 substituted with rep values where
-  // the position contained `_free`. Length arity-1 (head + keys, no weight).
-  filledTerms: Term[];
-  // Aggregated weight (sum/count) or candidate weight (last).
-  weight: Term;
-  // Representative candidate (group's first; for `last`, the maximal
-  // candidate this result corresponds to). null only for the zero-row case
-  // with no free key positions and no contributions.
-  rep: { terms: readonly Term[] } | null;
-}
-
-export function aggregateOver(
-  store: Store,
-  wrapped: Atom,
-  l: Term,
-  r: Term,
-  schema: Map<string, string>,
-): AggregateResult[] {
-  const headTerm = wrapped.terms[0];
-  if (headTerm === undefined || headTerm.tag !== "Symbol") return [];
-  const aggName = schema.get(headTerm.name);
-  if (aggName === undefined) {
-    throw new Error(`weighted query '${headTerm.name}' has no schema declaration`);
-  }
-  const aggregator = getAggregator(aggName);
-
-  // wrapped.terms layout: [headSym, k1, ..., kK, weight]. The reserved
-  // Symbol `_free` acts as a wildcard, *recursively* — `(cell _free _free)`
-  // at a top-level position means that position takes any cell value and
-  // contributes the cell to the group key. A position is "free" if it
-  // contains `_free` at any depth; otherwise its candidate value must match
-  // the wrapped pattern by recursive token unification.
-  const arity = wrapped.terms.length;
-  if (arity < 2) return [];
-
-  // Candidates: tuples with same head sym + arity, interval contains
-  // [l, r], and each non-free wrapped position structurally matches the
-  // candidate's term.
-  type Cand = { idx: number; terms: readonly Term[] };
-  const candidates: Cand[] = [];
-  for (const idx of candidatesByHead(store, headTerm.name)) {
-    const t = store.tuples[idx]!;
-    // Stored candidates carry the universal trailing id slot; the wrapped
-    // pattern doesn't (it's user-pattern + weight). Skip the id when
-    // checking arity / matching positions.
-    if (t.atom.terms.length !== arity + 1) continue;
-    if (!intervalContains(store, t.l, t.r, l, r)) continue;
-    let ok = true;
-    for (let i = 0; i < arity; i++) {
-      if (!matchFreePattern(wrapped.terms[i]!, t.atom.terms[i]!, store)) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok) continue;
-    candidates.push({ idx, terms: t.atom.terms });
-  }
-
-  // Group by positions whose wrapped term contains `_free` anywhere
-  // (positions 1..arity-2; the weight position is excluded). Key signature
-  // is a `|`-joined string of the candidate's full-position hashcons tokens.
-  const keyPositions: number[] = [];
-  for (let i = 1; i < arity - 1; i++) {
-    if (containsFree(wrapped.terms[i]!, store)) keyPositions.push(i);
-  }
-  const groups = new Map<string, Cand[]>();
-  for (const c of candidates) {
-    const sig = keyPositions.map((p) => tokenOf(store, c.terms[p]!)).join("|");
-    let bucket = groups.get(sig);
-    if (bucket === undefined) { bucket = []; groups.set(sig, bucket); }
-    bucket.push(c);
-  }
-
-  const out: AggregateResult[] = [];
-  if (groups.size === 0) {
-    // No contributions:
-    //   - last: no result.
-    //   - sum/count with free key positions: no groups -> no result.
-    //   - sum/count with no free key positions: one zero-row result.
-    if (aggName === "last") return out;
-    if (keyPositions.length > 0) return out;
-    out.push({ filledTerms: buildFilledTerms(wrapped, null, store), weight: aggregator.zero, rep: null });
-    return out;
-  }
-  for (const group of groups.values()) {
-    if (aggName === "last") {
-      // `c` is dominated by `d` iff c started strictly before d (comparing
-      // left endpoints). Right endpoints are unsuitable because `+` facts
-      // extend to SYM_TOP, so c.r <= d.l is never true for persistent
-      // facts even when c was emitted strictly before d.
-      const maximal = group.filter((c) => {
-        const ci = store.tuples[c.idx]!;
-        for (const d of group) {
-          if (d === c) continue;
-          const di = store.tuples[d.idx]!;
-          if (!comparable(store, ci.l, di.l)) continue;
-          if (lessEq(store, ci.l, di.l) && !lessEq(store, di.l, ci.l)) return false;
-        }
-        return true;
-      });
-      for (const c of maximal) {
-        out.push({ filledTerms: buildFilledTerms(wrapped, c, store), weight: c.terms[arity - 1]!, rep: c });
-      }
-      continue;
-    }
-    let acc = aggregator.zero;
-    for (const c of group) {
-      try { acc = aggregator.fold(acc, c.terms[arity - 1]!); } catch { /* skip */ }
-    }
-    const rep = group[0]!;
-    out.push({ filledTerms: buildFilledTerms(wrapped, rep, store), weight: acc, rep });
-  }
-  return out;
-}
-
-// Fill the wrapped pattern's positions 0..arity-2 (head + keys, no weight):
-// each free-containing position is replaced by the representative candidate's
-// actual value at that index. Non-free positions are kept as-is.
-function buildFilledTerms(
-  wrapped: Atom,
-  rep: { terms: readonly Term[] } | null,
-  store: Store,
-): Term[] {
-  const arity = wrapped.terms.length;
-  const filled: Term[] = [];
-  for (let i = 0; i < arity - 1; i++) {
-    const w = wrapped.terms[i]!;
-    if (containsFree(w, store)) {
-      if (rep === null) filled.push(w);
-      else filled.push(rep.terms[i]!);
-    } else {
-      filled.push(w);
-    }
-  }
-  return filled;
-}
-
-// Construct an agg-result row. Its 3rd term mirrors the wrapped pattern's
-// shape: head + key positions + weight, where each free key position is
-// replaced by the representative candidate's actual value at that index.
-// `weight` is the aggregated value (sum/count) or candidate's weight (last).
-function emitAggResultRow(
-  store: Store,
-  blocked: BlockedDoAgg,
-  wrapped: Atom,
-  rep: { terms: readonly Term[] } | null,
-  weight: Term,
-): boolean {
-  const filledTerms = buildFilledTerms(wrapped, rep, store);
-  filledTerms.push(weight);
-  const inner: Term = { tag: "Atom", atom: { terms: filledTerms.map((t) => hashconsTerm(t, store.hash)) } };
-  const internedInner = hashconsTerm(inner, store.hash);
-  const sym: Term = { tag: "Symbol", name: "_agg-result" };
-  // Copy the source _do-agg's trailing id over so the consumer Match's
-  // structural unification on idTpl finds this row.
-  const atom: Atom = { terms: [sym, internedInner, blocked.id] };
-  const inserted = addTuple(store, atom, blocked.l, blocked.r, store.tupleSource[blocked.rowIndex]);
-  if (inserted) {
-    addOrder(store, blocked.l, blocked.r);
-  }
-  return inserted;
-}
-
-// Recursive structural match where the reserved Symbol `_free` in `pat`
-// stands for any value. Both `pat` and `val` are ground (no Variables).
-// Returns true iff every non-`_free` position in `pat` matches `val` by
-// hashcons-token equality, descending through Atom-tagged Refs / literal
-// Atoms. `Id`-tagged terms are opaque per notes/v2-design.md — they're
-// compared by token only.
-function matchFreePattern(pat: Term, val: Term, store: Store): boolean {
-  if (pat.tag === "Symbol" && pat.name === "_free") return true;
-  if (tokenOf(store, pat) === tokenOf(store, val)) return true;
-  const pTerms = atomChildren(pat, store);
-  const vTerms = atomChildren(val, store);
-  if (pTerms === null || vTerms === null) return false;
-  if (pTerms.length !== vTerms.length) return false;
-  for (let i = 0; i < pTerms.length; i++) {
-    if (!matchFreePattern(pTerms[i]!, vTerms[i]!, store)) return false;
-  }
-  return true;
-}
-
-// True iff `t` contains the reserved Symbol `_free` at any depth, walking
-// only through Atom-tagged compound structure (Id terms are opaque).
-function containsFree(t: Term, store: Store): boolean {
-  if (t.tag === "Symbol") return t.name === "_free";
-  const children = atomChildren(t, store);
-  if (children === null) return false;
-  for (const c of children) if (containsFree(c, store)) return true;
-  return false;
-}
-
-// Children of an Atom-tagged compound, or null for non-compound / Id terms.
-function atomChildren(term: Term, store: Store): readonly Term[] | null {
-  if (term.tag === "Atom") return term.atom.terms;
-  if (term.tag === "Ref") {
-    if (refTagOf(store.hash, term.id) !== "Atom") return null;
-    const a = store.hash.refToAtom.get(term.id);
-    return a ? a.terms : null;
-  }
-  return null;
-}
-
-// ----- Reactive aggregates (recomputed at every moment) -----
-//
-// See plans/v2-moment-walk.md. A `#reactive` relation's value is a function
-// of moments; the reactive handler materializes it at every moment the walk
-// visits as point rows
-//
-//   _aggval head key... value <id>     at [m, m]
-//
-// folded by `aggregateOver` over the contributors alive at the point `m`. A
-// reactive read (`decomposeReactiveRead` in expand.ts) matches the row at
-// exactly its anchor's left endpoint, so it samples the value there and is
-// blocked — has no candidate — until the walk resolves that moment. No
-// breakpoints, join-closure or residual detection: every moment gets its
-// rows, and re-folding at a moment is idempotent (deterministic ids).
-//
-// Same-moment ordering keeps the static strata (`computeAggStrata`): within
-// a moment the handler folds the lowest stratum first and returns as soon as
-// a stratum adds rows, so a consumer (`count` of a same-moment transitive
-// closure) is folded only in a round where every lower stratum re-folded
-// with nothing new — i.e. has settled at `m`.
-
-// Fold every group of reactive relation `foo` alive at the point `m` and
-// emit the rows; returns true iff a new row was added. Contributors are
-// bucketed by stored width first (`SchemaDecl` records no arity, and the
-// `*` in `#reactive at * -> last` is not one), so each width is folded with
-// a matching `_free` pattern. A relation with no contributors at all is
-// folded keyless (width 3: head, weight, id) so a keyless `sum`/`count`/
-// `bool` still gets its zero row; keyed relations produce nothing for
-// absent groups, per `aggregateOver`'s zero-row policy.
-export function foldReactiveAt(
-  store: Store,
-  foo: string,
-  m: Term,
-  schema: Map<string, string>,
-): boolean {
-  const head: Term = { tag: "Symbol", name: foo };
-  const widths = new Set<number>();
-  for (const idx of candidatesByHead(store, foo)) widths.add(store.tuples[idx]!.atom.terms.length);
-  if (widths.size === 0) widths.add(3);
-  let any = false;
-  for (const w of widths) {
-    // Stored `[head, key..., weight, id]` → wrapped `[head, _free..., _free]`
-    // of length `w - 1`: every key position free (group by all of them),
-    // weight folded.
-    const arity = w - 1;
-    if (arity < 2) continue;
-    const wrapped: Atom = { terms: [head, ...Array.from({ length: arity - 1 }, () => SYM_FREE)] };
-    for (const res of aggregateOver(store, wrapped, m, m, schema)) {
-      if (emitAggValRow(store, res.filledTerms, res.weight, m)) any = true;
-    }
-  }
-  return any;
-}
-
-// The reactive moment handler. `strata` is `computeAggStrata`'s map; relations
-// it does not mention are stratum 0. Never blocked.
-export function reactiveHandler(
-  reactive: Set<string>,
-  schema: Map<string, string>,
-  strata: Map<string, number>,
-): MomentHandler {
-  // Relations grouped by stratum, ascending.
-  const byStratum = new Map<number, string[]>();
-  for (const foo of reactive) {
-    const s = strata.get(foo) ?? 0;
-    let bucket = byStratum.get(s);
-    if (bucket === undefined) { bucket = []; byStratum.set(s, bucket); }
-    bucket.push(foo);
-  }
-  const levels = [...byStratum.keys()].sort((a, b) => a - b);
-  return {
-    name: "reactive",
-    run(store, m) {
-      for (const s of levels) {
-        let progress = false;
-        for (const foo of byStratum.get(s)!) {
-          if (foldReactiveAt(store, foo, m, schema)) progress = true;
-        }
-        // A stratum that added rows must settle (the monotone part may derive
-        // new contributors from them) before any higher stratum is folded.
-        if (progress) return { progress: true, blocked: false };
-      }
-      return { progress: false, blocked: false };
-    },
-  };
-}
-
-// Static aggregate dependency strata over the `#reactive` relations, computed
-// from the TIME-MARKED dependency graph (plans/v2-stratification-analysis.md).
-//
-// For each rule, link every READ head (a `match`/`aggregate` body atom) to every
-// PRODUCED head, marking the edge by how the produce places its moment relative
-// to the anchor:
-//   - `^h`   (anchor):           no fresh moment, `h` at the anchor   -> `=`
-//   - `+h`/`~h`/`?h` (fact/episode/ask): fresh, strictly-later moment -> `<`
-// A consumer depends on a producer AT ONE MOMENT iff there is an all-`=` path
-// between them; any `<` edge means the producer is at a strictly earlier moment,
-// which the moment-primary scheduler already orders (no stratum needed). So the
-// stratum graph keeps `=` edges ONLY — `<` producers are dropped here.
-//
-// Edges span ALL relations (not just reactive), so an all-`=` dependency can
-// chain through intermediate plain relations: `A -> …, ^c …` then `c …, ^B -> …`
-// gives `A =→ c =→ B`. SCCs of the reactive `=`-subgraph are the strata; the
-// returned map gives each reactive relation a stratum index strictly greater
-// than every relation it `=`-depends on (one SCC — incl. a same-moment self-loop
-// like transitive closure `p =→ p` — shares an index). The outer loop finalizes
-// the lowest stratum present at a moment first, so a consumer aggregate is never
-// folded against a not-yet-settled same-moment source.
-//
-// NOTE: the `=` mark is a heuristic over-approximation — `^h` is marked `=`
-// against every read though it only truly coincides with the anchor (latest)
-// read (open question 2 of the plan). It is sound (only ever adds within-moment
-// ordering) but may over-serialize, or treat a time-stratified loop as an
-// all-`=` cycle.
-export function computeAggStrata(rules: Rule[], reactive: Set<string>): Map<string, number> {
-  const READ = new Set<string>(["match", "aggregate"]);
-  // `=` producers only: `anchor` (`^`) emits at the anchor, the same moment as
-  // its reads. `fact`/`episode`/`ask` (`+`/`~`/`?`) mint a fresh, strictly-later
-  // moment (`<`) and are intentionally NOT edges in the stratum graph — the
-  // moment order handles those dependencies.
-  const EQ_PRODUCE = new Set<string>(["anchor"]);
-  // General `=`-edge graph: read-head =→ produce-head, over ALL relations.
-  const gsucc = new Map<string, Set<string>>();
-  const addEdge = (r: string, h: string): void => {
-    let s = gsucc.get(r);
-    if (s === undefined) { s = new Set(); gsucc.set(r, s); }
-    s.add(h);
-  };
-  const collect = (atoms: RuleAtom[], reads: string[], produces: string[]): void => {
-    for (const a of atoms) {
-      if (a.tag === "Sub") { collect(a.body, reads, produces); continue; }
-      if (a.tag === "AggComp") {
-        // Every atom head inside a bracket aggregation is a read.
-        collectAggCompReads(a.body, reads);
-        continue;
-      }
-      if (a.tag !== "Atom") continue;
-      const head = a.atom.terms[0];
-      if (head === undefined || head.tag !== "Symbol") continue;
-      if (READ.has(a.marker)) reads.push(head.name);
-      else if (EQ_PRODUCE.has(a.marker)) produces.push(head.name);
-    }
-  };
-  for (const rule of rules) {
-    const reads: string[] = [];
-    const produces: string[] = [];
-    collect(rule.body, reads, produces);
-    for (const r of reads) for (const h of produces) addEdge(r, h);
-  }
-
-  function collectAggCompReads(body: RuleAtom[], reads: string[]): void {
-    for (const b of body) {
-      if (b.tag === "AggComp") { collectAggCompReads(b.body, reads); continue; }
-      if (b.tag !== "Atom") continue;
-      const head = b.atom.terms[0];
-      if (head !== undefined && head.tag === "Symbol") reads.push(head.name);
-    }
-  }
-  // Transitive reachability over the general graph.
-  const allNodes = new Set<string>(reactive);
-  for (const [r, hs] of gsucc) { allNodes.add(r); for (const h of hs) allNodes.add(h); }
-  const greach = new Map<string, Set<string>>();
-  for (const n of allNodes) greach.set(n, new Set(gsucc.get(n) ?? []));
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const n of allNodes) {
-      const rn = greach.get(n)!;
-      for (const m of [...rn]) {
-        for (const w of gsucc.get(m) ?? []) {
-          if (!rn.has(w)) { rn.add(w); changed = true; }
-        }
-      }
-    }
-  }
-  // Reactive subgraph from general reachability: `succ` (excl. self) feeds the
-  // level computation, `reaches` (incl. self) feeds the SCC test.
-  const nodes = [...reactive];
-  const succ = new Map<string, Set<string>>();
-  const reaches = new Map<string, Set<string>>();
-  for (const A of nodes) {
-    const ga = greach.get(A) ?? new Set<string>();
-    const s = new Set<string>();
-    const rset = new Set<string>([A]);
-    for (const B of nodes) {
-      if (!ga.has(B)) continue;
-      rset.add(B);
-      if (B !== A) s.add(B);
-    }
-    succ.set(A, s);
-    reaches.set(A, rset);
-  }
-  // SCC id by mutual reachability.
-  const sccId = new Map<string, number>();
-  let nextScc = 0;
-  for (const n of nodes) {
-    if (sccId.has(n)) continue;
-    const id = nextScc++;
-    sccId.set(n, id);
-    for (const m of nodes) {
-      if (sccId.has(m)) continue;
-      if (reaches.get(n)!.has(m) && reaches.get(m)!.has(n)) sccId.set(m, id);
-    }
-  }
-  // Longest-path level over the condensation DAG (A→B ⇒ level(B) > level(A)).
-  const level = new Map<number, number>();
-  for (let i = 0; i < nextScc; i++) level.set(i, 0);
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const u of nodes) {
-      const su = sccId.get(u)!;
-      for (const v of succ.get(u) ?? []) {
-        const sv = sccId.get(v)!;
-        if (su === sv) continue;
-        if (level.get(sv)! < level.get(su)! + 1) { level.set(sv, level.get(su)! + 1); changed = true; }
-      }
-    }
-  }
-  const strata = new Map<string, number>();
-  for (const n of nodes) strata.set(n, level.get(sccId.get(n)!)!);
-  return strata;
-}
-
-// Emit `_aggval head key... value <id>` at the point `[m, m]`. The id is a
-// deterministic Id over the row contents + moment so re-folding the same
-// moment dedups. `filledTerms` is `[head, key...]` from `aggregateOver`.
-function emitAggValRow(
-  store: Store,
-  filledTerms: Term[],
-  weight: Term,
-  m: Term,
-): boolean {
-  const userTerms = [SYM_AGGVAL, ...filledTerms, weight].map((t) => hashconsTerm(t, store.hash));
-  const idInner: Term = {
-    tag: "Id",
-    atom: { terms: [SYM_AGGVAL_ID, ...filledTerms, weight, m].map((t) => hashconsTerm(t, store.hash)) },
-  };
-  const id = hashconsTerm(idInner, store.hash);
-  const atom: Atom = { terms: [...userTerms, id] };
-  return addTuple(store, atom, m, m);
 }

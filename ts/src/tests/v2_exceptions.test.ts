@@ -159,44 +159,47 @@ ctx, ^p a
     byName.get(name)!.body.map(renderRuleAtom);
   assert.deepEqual(render("r"), [
     "Atom[match] is1 ?_X ?X",
-    "Atom[anchor] _p_ctx1 ?X",
+    "Atom[anchor,exact] _p_ctx1 ?X",
     "Atom[match] is2 ?_Y ?Y",
-    "Atom[anchor] _q_ctx1 ?Y",
+    "Atom[anchor,exact] _q_ctx1 ?Y",
   ], `r body:\n${render("r").join("\n")}`);
+  // The context is peeked; the flag lands exactly on the intercepted tuple,
+  // and the default waits on a handler-answered check
+  // (plans/v2-caret-fresh-left.md §5.2).
   assert.deepEqual(render("r_watch1"), [
-    "Atom[match] _p_ctx1 ?X",
     "Atom[match] _p_prime1 ?X",
-    "Atom[anchor] _p_exn1 ?X -> 1",
+    "Sub (Atom[match] _p_ctx1 ?X)",
+    "Atom[anchor,exact] _p_exn1 ?X",
   ]);
   assert.deepEqual(render("r_exn1"), [
     "Atom[match] _p_prime1 ?X",
-    "Atom[aggregate] _p_exn1 ?X -> 1",
-    "Atom[match] _p_ctx1 ?X",
+    "Atom[match] _p_exn1 ?X",
+    "Sub (Atom[match] _p_ctx1 ?X)",
     "Atom[anchor] e1 ?X",
   ]);
   assert.deepEqual(render("r_default1"), [
     "Atom[match] _p_prime1 ?_w1",
-    "Atom[aggregate] _p_exn1 ?_w1 -> 0",
-    "Atom[anchor] p ?_w1",
+    "Atom[match,check] _p_exn1 ?_w1",
+    "Atom[anchor,exact] p ?_w1",
   ]);
   assert.deepEqual(render("r_watch2"), [
-    "Atom[match] _q_ctx1 ?Y",
     "Atom[match] _q_prime1 ?Z",
-    "Atom[anchor] _q_exn1 ?Z -> 1",
+    "Sub (Atom[match] _q_ctx1 ?Y)",
+    "Atom[anchor,exact] _q_exn1 ?Z",
   ]);
   assert.deepEqual(render("r_exn2"), [
     "Atom[match] _q_prime1 ?Z",
-    "Atom[aggregate] _q_exn1 ?Z -> 1",
-    "Atom[match] _q_ctx1 ?Y",
+    "Atom[match] _q_exn1 ?Z",
+    "Sub (Atom[match] _q_ctx1 ?Y)",
     "Atom[anchor] e2 ?Y ?Z",
   ]);
   assert.deepEqual(render("r_default2"), [
     "Atom[match] _q_prime1 ?_w1",
-    "Atom[aggregate] _q_exn1 ?_w1 -> 0",
-    "Atom[anchor] q ?_w1",
+    "Atom[match,check] _q_exn1 ?_w1",
+    "Atom[anchor,exact] q ?_w1",
   ]);
-  assert.equal(out.schema.get("_p_exn1"), "bool");
-  assert.equal(out.schema.get("_q_exn1"), "bool");
+  // The flags are plain internal tuples; no aggregate declarations remain.
+  assert.equal(out.accDecls.size, 0);
   console.log("PASS: watcher structural (worked example 1)");
 }
 
@@ -243,25 +246,25 @@ ctx, ^q zv
     byName.get(name)!.body.map(renderRuleAtom);
   assert.deepEqual(render("r"), [
     "Atom[match] is1 ?_X ?X",
-    "Atom[anchor] _move_ctx1 ?X",
+    "Atom[anchor,exact] _move_ctx1 ?X",
     "Atom[match] is2 ?_Y ?Y",
-    "Atom[anchor] _move_ctx2 ?Y",
+    "Atom[anchor,exact] _move_ctx2 ?Y",
   ], `r body:\n${render("r").join("\n")}`);
   // The LHS wildcard is freshened to `_t1` so the flag key is the whole tuple.
   assert.deepEqual(render("r_watch1"), [
-    "Atom[match] _move_ctx1 ?X",
     "Atom[match] _move_prime1 ?X ?_t1",
-    "Atom[anchor] _move_exn1 ?X ?_t1 -> 1",
+    "Sub (Atom[match] _move_ctx1 ?X)",
+    "Atom[anchor,exact] _move_exn1 ?X ?_t1",
   ]);
   assert.deepEqual(render("r_default1"), [
     "Atom[match] _move_prime1 ?_w1 ?_w2",
-    "Atom[aggregate] _move_exn1 ?_w1 ?_w2 -> 0",
-    "Atom[anchor] _move_prime2 ?_w1 ?_w2", // rewritten by exc2's step 3
+    "Atom[match,check] _move_exn1 ?_w1 ?_w2",
+    "Atom[anchor,exact] _move_prime2 ?_w1 ?_w2", // rewritten by exc2's step 3
   ], `r_default1:\n${render("r_default1").join("\n")}`);
   assert.deepEqual(render("r_default2"), [
     "Atom[match] _move_prime2 ?_w1 ?_w2",
-    "Atom[aggregate] _move_exn2 ?_w1 ?_w2 -> 0",
-    "Atom[anchor] move ?_w1 ?_w2",
+    "Atom[match,check] _move_exn2 ?_w1 ?_w2",
+    "Atom[anchor,exact] move ?_w1 ?_w2",
   ]);
   console.log("PASS: same-predicate structural (worked example 2)");
 }
@@ -431,7 +434,7 @@ ctx, ^move c1 supply
 {
   const cases: [string, string][] = [
     ["ctx {p X => {q => ^r}}", "exception RHS may not contain an exception"],
-    ["ctx {p a -> X => ^q}", "exception LHS cannot be an aggregate ('-> weight')"],
+    ["ctx {p a -> X => ^q}", `'-> weight' was removed: aggregation is '#acc' (declare '#acc rel : col… @op' and compute it with 'body / rel …' rules; negate with 'not rel …') — see the tutorial, "Aggregates"`],
     ["ctx {X a => ^q}", "exception LHS head must be a symbol"],
     ["ctx {+p a => ^q}", "exception LHS cannot carry a marker"],
     ["ctx {p q}", "exception block requires '=>'"],
@@ -771,25 +774,26 @@ s2, ^s3
   assert(t1.includes("e a"), `late flag (chain): missing 'e a': ${t1.join(" | ")}`);
   assert(!t1.includes("p a"), `late flag (chain): premature default leaked 'p a': ${t1.join(" | ")}`);
 
-  // Aggregate variant: an aggregate read gates the flag-setter, so the
-  // flag emit is deferred to the aggregate tier — the same tier as the
-  // p_exn reads themselves. Which closes first is a scheduler question
-  // (the plan's `-> 0`-as-negation-over-time concern); record it.
-  // Note the saw fact is set in an *earlier* episode: aggregate
-  // candidates are selected by interval containment, so a fact minted
-  // inside the reading anchor would not be seen at all.
+  // Acc-gated variant (formerly an `#agg saw -> bool` read): an `#acc`
+  // read gates the host rule, so its context broadcast waits until ep2's
+  // start has settled, while the intercepted tuple is emitted inside ep2.
+  // The default's check is answered only after inner-loop quiescence at the
+  // tuple's start, by which time the context exists; record the outcome.
+  // The saw fact is set in an *earlier* episode so it is alive at ep2's
+  // start, where the acc read samples.
   const t2 = run(`
-#agg saw -> bool
+#acc saw : ep
+seen X / saw X
 
 ~ep1; ~ep2
 
-ep1, +saw -> 1
+ep1, +seen x
 
 ep2, ^p a
 
 #def r
   ep2
-  saw -> 1
+  saw x
   {p X => ^e X}
 `);
   assertExclusive(t2, "e a", "p a");

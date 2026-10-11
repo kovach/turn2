@@ -9,7 +9,7 @@ import type { Term } from "../v2/term.js";
 
 // Alpha-equivalence over parser-output rule bodies: same structure
 // up to a consistent bijection on Variable names. Symbols, Wildcards,
-// markers, Sub sequence flags, term shapes, and weight presence must
+// markers, Sub sequence flags, and term shapes must
 // match exactly; only Variable.name is allowed to differ (consistently).
 function alphaEqualBody(a: RuleAtom[], b: RuleAtom[]): boolean {
   return walkBody(a, b, new Map(), new Map());
@@ -26,9 +26,7 @@ function walkRA(a: RuleAtom, b: RuleAtom, ab: Map<string, string>, ba: Map<strin
   if (a.tag === "Atom" && b.tag === "Atom") {
     if (a.marker !== b.marker) return false;
     if (!walkTerms(a.atom.terms, b.atom.terms, ab, ba)) return false;
-    if ((a.weight === undefined) !== (b.weight === undefined)) return false;
-    if (a.weight && b.weight && !walkTerm(a.weight, b.weight, ab, ba)) return false;
-    return true;
+    return a.negated === b.negated;
   }
   if (a.tag === "Sub" && b.tag === "Sub") {
     if (a.sequence !== b.sequence) return false;
@@ -166,31 +164,36 @@ function sub(a: RuleAtom): Extract<RuleAtom, { tag: "Sub" }> {
   console.log("PASS: plain sub-rule");
 }
 
-// 6) weighted assert
+// 6–8) Removed aggregation forms (plans/v2-caret-fresh-left.md §5.4):
+// `-> weight` (assert, match, `!`), `#agg`, `#reactive`, `#macro` and bracket
+// aggregation are parse errors pointing at `#acc`.
 {
-  const p = ok("+ points -> 3\n");
-  const a = atom(p.rules[0]!.body[0]!);
-  assert.equal(a.marker, "fact");
-  assert.deepEqual(a.atom.terms, [{ tag: "Symbol", name: "points" }]);
-  assert.deepEqual(a.weight, { tag: "Symbol", name: "3" });
-  console.log("PASS: weighted assert (+)");
+  const removed = (src: string, what: RegExp, line = 1): void => {
+    const e = err(src);
+    assert.match(e.message, what, src);
+    assert.match(e.message, /was removed: aggregation is '#acc'/, src);
+    assert.equal(e.line, line, src);
+  };
+  removed("+ points -> 3\n", /'-> weight'/);
+  removed("points -> N\n", /'-> weight'/);
+  removed("foo X, !(bar X -> W)\n", /'-> weight'/);
+  removed("#agg points -> sum\n", /'#agg'/);
+  removed("#reactive points -> sum\n", /'#reactive'/);
+  removed("#macro m X := [p X | count X]\n", /'#macro'/);
+  removed("foo X, [ p X Y | count Y ]\n", /bracket aggregation/);
+  console.log("PASS: removed aggregation forms are migration errors");
 }
 
-// 7) weighted match (now an aggregate marker)
+// 8b) `not` prefixes a plain read; it is reserved otherwise.
 {
-  const p = ok("points -> N\n");
-  const a = atom(p.rules[0]!.body[0]!);
-  assert.equal(a.marker, "aggregate");
-  assert.deepEqual(a.weight, { tag: "Variable", name: "N" });
-  console.log("PASS: weighted match");
-}
-
-// 8) schema decl
-{
-  const p = ok("#agg points -> sum\n+ points -> 3\n");
-  assert.equal(p.schema.get("points"), "sum");
-  assert.equal(p.rules.length, 1);
-  console.log("PASS: schema decl");
+  const p = ok("foo X, not bar X\n");
+  const a = atom(p.rules[0]!.body[1]!);
+  assert.equal(a.marker, "match");
+  assert.equal(a.negated, true);
+  assert.deepEqual(a.atom.terms[0], { tag: "Symbol", name: "bar" });
+  assert.match(err("foo, +not bar\n").message, /'not' only prefixes a plain read/);
+  assert.match(err("foo, not\n").message, /'not' is reserved/);
+  console.log("PASS: not read");
 }
 
 // 9) compound term
@@ -305,15 +308,20 @@ activate A
   console.log("PASS: activate example as one rule");
 }
 
-// 12) tutorial program parses end-to-end
+// 12) tutorial program: the historical notes file still uses `#agg` (line
+// 138), now a migration error; everything before that parses.
 {
   const src = readFileSync(join(__dir, "..", "..", "..", "notes", "turn-program-1.t"), "utf8");
   const p = parse(src);
-  if ("message" in p) {
-    throw new Error(`tutorial parse error at line ${p.line}: ${p.message}`);
+  assert("message" in p, "notes/turn-program-1.t still uses '#agg'; expected the migration error");
+  assert.equal(p.line, 138);
+  assert.match(p.message, /'#agg' was removed/);
+  const head = parse(src.split("\n").slice(0, 137).join("\n"));
+  if ("message" in head) {
+    throw new Error(`tutorial parse error at line ${head.line}: ${head.message}`);
   }
-  assert(p.rules.length > 0);
-  console.log(`PASS: tutorial program parses (${p.rules.length} rules, ${p.schema.size} schema decls)`);
+  assert(head.rules.length > 0);
+  console.log(`PASS: tutorial program parses up to its '#agg' section (${head.rules.length} rules)`);
 }
 
 // ---- dot-notation desugaring (plans/v2-dot-notation.md) ----
@@ -339,11 +347,11 @@ assertAlpha(
   "dot — spaced basic",
 );
 
-// Aggregate on right
+// Negated read on the right
 assertAlpha(
-  "player . score -> S\n",
-  "player T, score T -> S\n",
-  "dot — aggregate on right",
+  "player . not score S\n",
+  "player T, not score T S\n",
+  "dot — not on right",
 );
 
 // Leading-dot chain
@@ -473,7 +481,7 @@ assertAlpha(
   assert.match(err("x A, A .\n").message, /trailing '\.'/);
   assert.match(err("foo X . = a b\n").message, /right of '\.'/);
   assert.match(err("foo X . . bar\n").message, /consecutive/);
-  assert.match(err("foo -> W . bar\n").message, /aggregate atom .* on the left of '\.'/);
+  assert.match(err("foo -> W . bar\n").message, /'-> weight' was removed/);
   assert.match(err("foo X .\n").message, /trailing '\.'/);
   assert.match(err("foo . ()\n").message, /empty sub-block/);
   assert.match(err("(. bar)\n").message, /dot must follow an atom/);

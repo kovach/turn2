@@ -1,5 +1,5 @@
-// Expand: rule splitting at weighted matches, semi-naive delta variants,
-// then anchor decomposition into the post-expand IR.
+// Expand: exceptions, anchor decomposition into the post-expand IR, rule
+// splitting at every emit, js-mode resolution, semi-naive delta variants.
 //
 // Pre-expand IR (from parse): each rule body is a list of `Atom`s (with a
 // marker), `Sub`s, and `Equal`s.
@@ -9,17 +9,19 @@
 // used to do implicitly is now explicit IR.
 
 import type { Atom, Span, Term } from "./term.js";
-import type { AccDecl, AccRule, JsDef, JsRelDef, MacroDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
+import type { AccDecl, AccRule, JsDef, JsRelDef, MatchConstraint, Program, ProvLink, Rule, RuleAtom } from "./types.js";
 import { exprTerms } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 import { resolveJsModes } from "./js-rel.js";
 import { accOp, UNIT } from "./acc-ops.js";
 import { ACC_MOMENT_VAR } from "./eval.js";
 
+// `_is-input` (scheduler.ts) — defined here to keep expand free of scheduler imports.
+const SYM_IS_INPUT: Term = { tag: "Symbol", name: "_is-input" };
+
 // The named intermediate rule-lists of the expansion pipeline, in order. The
 // CLI's `--stage` flag dumps these; `expand` returns the final `variants`.
 export interface ExpandStages {
-  macroExpanded: Rule[];
   decomposed: Rule[];
   split: Rule[];
   filtered: Rule[];
@@ -28,11 +30,9 @@ export interface ExpandStages {
 }
 
 export function expandStages(program: Program): ExpandStages {
-  program = expandMacros(program);
-  const macroExpanded = program.rules;
   program = applyExceptions(program);
   const decomposed = program.rules.map((r) => {
-    const { rule, essential } = decomposeRule(r, program.jsDefs, program.jsRels, program.reactive, program.accDecls);
+    const { rule, essential } = decomposeRule(r, program.jsDefs, program.jsRels, program.accDecls);
     return pruneChains(rule, essential);
   });
   const split: Rule[] = [];
@@ -50,293 +50,18 @@ export function expandStages(program: Program): ExpandStages {
   const resolved = resolveJsModes(filtered, program.jsRels);
   const variants: Rule[] = [];
   for (const rule of resolved) variants.push(...generateDeltaVariants(rule));
-  return { macroExpanded, decomposed, split, filtered, resolved, variants };
+  return { decomposed, split, filtered, resolved, variants };
 }
 
 export function expand(program: Program): Program {
   const { variants } = expandStages(program);
   return {
     rules: variants,
-    schema: program.schema,
-    reactive: program.reactive,
     jsDefs: program.jsDefs,
     jsRels: program.jsRels,
-    macros: new Map(),
     accDecls: program.accDecls,
     accRules: program.accRules,
   };
-}
-
-// ----- Aggregation synonyms (plans/v2-aggregation-synonyms.md) -----
-//
-// Source-to-source elimination of macro uses, run *before* `applyExceptions`
-// so exception rewriting sees the relation reads a macro body performs.
-// A macro use is replaced by a copy of the macro's `[ ... ]` body with the
-// arguments substituted for the parameters and every other body variable
-// freshened against the host rule's names.
-//
-// Substitution is sound because a parameter names an *outward* variable of
-// the body — a top-level output column, i.e. either a group column or a
-// variable of an output pattern. Restricting a group column before the fold
-// selects exactly the group that filtering after the fold would have
-// produced, and an output pattern already unifies (plans/v2-agg-output-var.md
-// is what makes this true). A single name-keyed map suffices: the
-// disjointness rule plus the bare form's compiler-fresh reduction names mean
-// no name plays two roles.
-//
-// A macro-free program is returned unchanged, so calling this twice is safe.
-export function expandMacros(program: Program): Program {
-  const macros = program.macros;
-  if (macros.size === 0) return program;
-
-  checkMacroCycles(macros);
-
-  // Normalize each body to be macro-free, dependencies first, so a use
-  // expands in one step no matter how deeply macros are layered.
-  for (const name of macroTopoOrder(macros)) {
-    const def = macros.get(name)!;
-    const body = expandMacroUses([def.body], macros, collectMacroBodyVars(def.body), def.span);
-    const first = body[0];
-    if (body.length !== 1 || first === undefined || first.tag !== "AggComp") {
-      throw new Error("internal: macro body expansion changed shape");
-    }
-    def.body = first;
-  }
-
-  // Every parameter must name an outward variable of the body — a variable
-  // with meaning outside the expression. `aggCompOutCols` also validates the
-  // body's levels the same way a rule-embedded expression is validated.
-  for (const def of macros.values()) {
-    const outward = new Set(aggCompOutCols(def.body, new Set(), null, program.jsRels));
-    for (const p of def.params) {
-      if (!outward.has(p)) {
-        throw new Error(
-          `macro '${def.name}' (line ${def.span.line}): parameter '${p}' is not an output ` +
-          `variable of its body (it has no meaning outside the aggregate expression)`,
-        );
-      }
-    }
-  }
-
-  const rules = program.rules.map((r) => {
-    const used = new Set<string>();
-    collectBodyVars(r.body, used);
-    return { ...r, body: expandMacroUses(r.body, macros, used, r.span) };
-  });
-  return { ...program, rules, macros: new Map() };
-}
-
-// Macro names used as atom heads anywhere in a body (recursing into nested
-// expressions, subs, and exception RHSs).
-function collectMacroCalls(body: RuleAtom[], macros: Map<string, MacroDef>, out: Set<string>): void {
-  for (const a of body) {
-    if (a.tag === "Sub") { collectMacroCalls(a.body, macros, out); continue; }
-    if (a.tag === "AggComp") { collectMacroCalls(a.body, macros, out); continue; }
-    if (a.tag === "Exception") {
-      collectMacroCalls(a.right, macros, out);
-      const lh = a.left.terms[0];
-      if (lh !== undefined && lh.tag === "Symbol" && macros.has(lh.name)) out.add(lh.name);
-      continue;
-    }
-    if (a.tag !== "Atom") continue;
-    for (const terms of atomTermLists(a)) {
-      const h = terms[0];
-      if (h !== undefined && h.tag === "Symbol" && macros.has(h.name)) out.add(h.name);
-    }
-  }
-}
-
-// The head-term lists an Atom carries: its own, or its `!(...)` sub-atoms'.
-function atomTermLists(a: Extract<RuleAtom, { tag: "Atom" }>): Term[][] {
-  if (a.subAtoms !== undefined) return a.subAtoms.map((s) => s.atom.terms);
-  return [a.atom.terms];
-}
-
-function macroCallGraph(macros: Map<string, MacroDef>): Map<string, Set<string>> {
-  const g = new Map<string, Set<string>>();
-  for (const [name, def] of macros) {
-    const deps = new Set<string>();
-    collectMacroCalls([def.body], macros, deps);
-    g.set(name, deps);
-  }
-  return g;
-}
-
-// Reject recursion, direct or mutual, naming the cycle.
-function checkMacroCycles(macros: Map<string, MacroDef>): void {
-  const g = macroCallGraph(macros);
-  const state = new Map<string, "open" | "done">();
-  const stack: string[] = [];
-  const visit = (n: string): void => {
-    const st = state.get(n);
-    if (st === "done") return;
-    if (st === "open") {
-      const cycle = [...stack.slice(stack.indexOf(n)), n].join(" -> ");
-      throw new Error(
-        `macro '${n}' (line ${macros.get(n)!.span.line}): macros cannot recurse (${cycle})`,
-      );
-    }
-    state.set(n, "open");
-    stack.push(n);
-    for (const d of g.get(n) ?? []) visit(d);
-    stack.pop();
-    state.set(n, "done");
-  };
-  for (const n of macros.keys()) visit(n);
-}
-
-// Macro names with every dependency before its dependents. Cycle-free by
-// `checkMacroCycles`.
-function macroTopoOrder(macros: Map<string, MacroDef>): string[] {
-  const g = macroCallGraph(macros);
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const visit = (n: string): void => {
-    if (seen.has(n)) return;
-    seen.add(n);
-    for (const d of g.get(n) ?? []) visit(d);
-    out.push(n);
-  };
-  for (const n of macros.keys()) visit(n);
-  return out;
-}
-
-// Every Variable name occurring anywhere in a macro body, including each
-// level's reduction variable and output pattern.
-function collectMacroBodyVars(comp: AggCompRA): Set<string> {
-  const out = new Set<string>();
-  collectAtomVarsOrdered(comp, out, []);
-  const withReduce = (c: AggCompRA): void => {
-    out.add(c.reduce.varName);
-    for (const it of c.body) if (it.tag === "AggComp") withReduce(it);
-  };
-  withReduce(comp);
-  return out;
-}
-
-// Replace every qualifying macro use in `body` with the macro's body under
-// the argument substitution. `used` accumulates names already taken, so the
-// fresh names minted for body-internal variables cannot capture or be
-// captured by host names (nor by a second use in the same rule).
-function expandMacroUses(
-  body: RuleAtom[],
-  macros: Map<string, MacroDef>,
-  used: Set<string>,
-  span: Span,
-): RuleAtom[] {
-  const reject = (name: string, why: string): never => {
-    throw new Error(`line ${span.line}: macro '${name}' ${why} — a macro name is not a relation`);
-  };
-  const macroHead = (terms: Term[]): MacroDef | null => {
-    const h = terms[0];
-    if (h === undefined || h.tag !== "Symbol") return null;
-    return macros.get(h.name) ?? null;
-  };
-  const out: RuleAtom[] = [];
-  for (const a of body) {
-    if (a.tag === "Sub") {
-      out.push({ ...a, body: expandMacroUses(a.body, macros, used, a.span) });
-      continue;
-    }
-    if (a.tag === "AggComp") {
-      out.push({ ...a, body: expandMacroUses(a.body, macros, used, a.span) });
-      continue;
-    }
-    if (a.tag === "Exception") {
-      const lhs = macroHead(a.left.terms);
-      if (lhs !== null) reject(lhs.name, "cannot be an exception's left-hand side");
-      out.push({ ...a, right: expandMacroUses(a.right, macros, used, a.span) });
-      continue;
-    }
-    if (a.tag !== "Atom") { out.push(a); continue; }
-    if (a.subAtoms !== undefined) {
-      for (const s of a.subAtoms) {
-        const def = macroHead(s.atom.terms);
-        if (def !== null) reject(def.name, "cannot appear inside a '!(...)' constrain block");
-      }
-      out.push(a);
-      continue;
-    }
-    const def = macroHead(a.atom.terms);
-    if (def === null) { out.push(a); continue; }
-    if (a.marker !== "match") {
-      reject(def.name, `cannot carry the '${a.marker}' marker`);
-    }
-    if (a.weight !== undefined) reject(def.name, "cannot carry a '-> weight'");
-    const args = a.atom.terms.slice(1);
-    if (args.length !== def.params.length) {
-      throw new Error(
-        `line ${a.span.line}: macro '${def.name}' takes ${def.params.length} argument(s), ` +
-        `given ${args.length}`,
-      );
-    }
-    out.push(instantiateMacro(def, args, used, a.span));
-  }
-  return out;
-}
-
-// A deep copy of `def.body` with parameters replaced by `args` and every
-// other variable freshened.
-function instantiateMacro(
-  def: MacroDef,
-  args: Term[],
-  used: Set<string>,
-  span: Span,
-): AggCompRA {
-  const sub = new Map<string, Term>();
-  def.params.forEach((p, i) => sub.set(p, args[i]!));
-  for (const n of collectMacroBodyVars(def.body)) {
-    if (n === "_" || sub.has(n)) continue;
-    sub.set(n, { tag: "Variable", name: mintFresh(n, used) });
-  }
-
-  const subTerm = (t: Term): Term => {
-    if (t.tag === "Variable") return t.name === "_" ? t : (sub.get(t.name) ?? t);
-    if (t.tag === "Atom" || t.tag === "Id") {
-      return { tag: t.tag, atom: { terms: t.atom.terms.map(subTerm) } };
-    }
-    return t;
-  };
-  // A reduction variable is internal to the query, so it is always freshened
-  // to a Variable — a parameter can never land here (parameters are outward).
-  const subName = (n: string): string => {
-    const t = sub.get(n);
-    if (t === undefined || t.tag !== "Variable") {
-      throw new Error(`internal: macro '${def.name}' reduction variable '${n}' is not freshened`);
-    }
-    return t.name;
-  };
-  const copy = (c: AggCompRA): AggCompRA => ({
-    tag: "AggComp",
-    body: c.body.map((it) =>
-      it.tag === "AggComp"
-        ? copy(it)
-        : it.tag === "Atom"
-          ? { ...it, atom: { terms: it.atom.terms.map(subTerm) }, span }
-          : it,
-    ),
-    reduce: {
-      op: c.reduce.op,
-      varName: subName(c.reduce.varName),
-      out: subTerm(c.reduce.out),
-      // The source-level bare form no longer describes the copy: `out` may
-      // now be an argument term rather than the renamed reduction variable.
-      bare: false,
-    },
-    span,
-  });
-  return copy(def.body);
-}
-
-function mintFresh(base: string, used: Set<string>): string {
-  let k = 1;
-  for (;;) {
-    const name = `${base}_${k++}`;
-    if (!used.has(name)) {
-      used.add(name);
-      return name;
-    }
-  }
 }
 
 // ----- Exceptions pass (plans/v2-exceptions.md, amended by
@@ -376,9 +101,10 @@ export function applyExceptions(program: Program): Program {
   if (pending.length === 0) return program;
   const S: Rule[] = program.rules.filter((r) => !hasExc(r));
   const usedSyms = collectProgramSymbols(program);
-  const usedRuleNames = new Set(program.rules.map((r) => r.name));
+  const usedRuleNames = new Set([...program.rules, ...program.accRules].map((r) => r.name));
   // Generated default rules, kept for provenance-link derivation below.
   const defaultRules: Rule[] = [];
+
 
   for (const R of pending) {
     // Per-rule numbering for `<name>_exn<j>` / `<name>_default<j>`.
@@ -418,7 +144,8 @@ export function applyExceptions(program: Program): Program {
       let wildN = 0;
       const tFresh: Term[] = tTerms.map((t) => freshenWildcards(t, () => `_t${++wildN}`));
 
-      // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>` / `_<p>_ctx<k>`.
+      // Fresh symbols `_<p>_prime<k>` / `_<p>_exn<k>` (the interception
+      // flag) / `_<p>_ctx<k>`.
       let k = 1;
       while (
         usedSyms.has(`_${p}_prime${k}`) ||
@@ -431,9 +158,6 @@ export function applyExceptions(program: Program): Program {
       usedSyms.add(primeName);
       usedSyms.add(exnName);
       usedSyms.add(ctxName);
-
-      // 2. Flag schema.
-      program.schema.set(exnName, "bool");
 
       // 3. Rewrite emitting occurrences of `p` to `p'` across S. Arity is
       // part of the predicate identity for this feature: only emits with
@@ -449,9 +173,9 @@ export function applyExceptions(program: Program): Program {
       const sym = (name: string): Term => ({ tag: "Symbol", name });
       const vars = (names: string[]): Term[] => names.map((n) => ({ tag: "Variable", name: n }));
       const ctxEmit: AtomRA = {
-        tag: "Atom", marker: "anchor",
+        tag: "Atom", marker: "anchor", exact: true,
         atom: { terms: [sym(ctxName), ...vars(U)] }, span,
-      };
+      } as AtomRA;
       container.splice(index, 1, ctxEmit);
 
       // Generated rule names, skipping to the next free integer on collision.
@@ -468,49 +192,65 @@ export function applyExceptions(program: Program): Program {
       usedRuleNames.add(exnRuleName);
       usedRuleNames.add(defaultRuleName);
 
-      // 5. Watcher rule: match p_ctx U.., match p' t°.., anchor p_exn t°.. -> 1.
-      // The two matches intersect, so the flag covers ctx ∩ tuple — the same
-      // interval the old inline recognition emitted it over — and is keyed
-      // by the matched tuple.
+      // 5. Watcher rule: match p' t°.., (p_ctx U..), exact p_exn t°.. .
+      // The context is peeked, not intersected: the flag sits exactly on the
+      // intercepted tuple's interval whenever the context overlaps it, so
+      // the flag read at the tuple's start always sees it. (Requiring the
+      // context to be alive at the tuple's start was considered and
+      // rejected: under fresh-left `^` a context read from a sibling `^`
+      // fact starts at a moment incomparable to the tuple's —
+      // plans/v2-caret-fresh-left.md §5.2.)
       S.push({
         name: watchRuleName,
         span,
         body: [
-          { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
           { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
-          { tag: "Atom", marker: "anchor", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
+          { tag: "Sub", sequence: false, span, body: [
+            { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
+          ] },
+          { tag: "Atom", marker: "anchor", exact: true, atom: { terms: [sym(exnName), ...tFresh] }, span } as AtomRA,
         ],
       });
 
-      // 6. Exception rule: match p' t°.., aggregate p_exn t°.. -> 1,
-      // match p_ctx U.., e. The flag read has every key bound by the match;
-      // the ctx re-join binds the prefix vars `e` needs and re-checks Vt
-      // against the tuple. An empty RHS means bare suppression — the flag
-      // still gates the default rule, but there is no exception case to run.
+      // 6. Exception rule: match p' t°.., p_exn t°.. (the flag is a plain
+      // tuple on the tuple's own interval, so this match is monotone),
+      // (p_ctx U..), e. The peeked ctx re-join binds the prefix vars `e`
+      // needs and re-checks Vt against the tuple. `e` runs on the tuple's
+      // interval. An empty RHS means bare suppression — the flag still
+      // gates the default rule, but there is no exception case to run.
       if (exc.right.length > 0) {
         S.push({
           name: exnRuleName,
           span,
           body: [
             { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...tFresh] }, span },
-            { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...tFresh] }, weight: sym("1"), span },
-            { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
+            { tag: "Atom", marker: "match", atom: { terms: [sym(exnName), ...tFresh] }, span },
+            { tag: "Sub", sequence: false, span, body: [
+              { tag: "Atom", marker: "match", atom: { terms: [sym(ctxName), ...vars(U)] }, span },
+            ] },
             ...exc.right,
           ],
         });
       }
 
-      // 7. Default rule: match p' W.., aggregate p_exn W.. -> 0, anchor p W..
-      // (fresh W1..Wn). W is bound by the match, so the zero row is produced
-      // exactly when this tuple was not intercepted.
+      // 7. Default rule: match p' W.., <exnCheck p_exn W..>, exact p W..
+      // (fresh W1..Wn). W is bound by the match. The check is answered by
+      // the exception-check handler (scheduler.ts) only after the inner
+      // loop is quiet — so every watcher that can flag this tuple has run,
+      // including for a tuple re-emitted at an already-settled moment by an
+      // earlier exception's default (chained exceptions on one `p`). It
+      // succeeds exactly when the tuple was not intercepted; the
+      // re-emission keeps the tuple's endpoints. Internal flags are not
+      // `#acc` rows: acc rows at a settled moment are frozen, which a chain
+      // would race (plans/v2-caret-fresh-left.md §5.2).
       const W: Term[] = tTerms.map((_, i) => ({ tag: "Variable", name: `_w${i + 1}` }));
       const defaultRule: Rule = {
         name: defaultRuleName,
         span,
         body: [
           { tag: "Atom", marker: "match", atom: { terms: [sym(primeName), ...W] }, span },
-          { tag: "Atom", marker: "aggregate", atom: { terms: [sym(exnName), ...W] }, weight: sym("0"), span },
-          { tag: "Atom", marker: "anchor", atom: { terms: [sym(p), ...W] }, span },
+          { tag: "Atom", marker: "match", exnCheck: true, atom: { terms: [sym(exnName), ...W] }, span },
+          { tag: "Atom", marker: "anchor", exact: true, atom: { terms: [sym(p), ...W] }, span } as AtomRA,
         ],
       };
       S.push(defaultRule);
@@ -538,7 +278,7 @@ function deriveProvLinks(defaultRules: Rule[]): ProvLink[] {
       if (a.tag !== "Atom") continue;
       const h = a.atom.terms[0];
       if (h === undefined || h.tag !== "Symbol") continue;
-      if (a.marker === "match") prime = h.name;
+      if (a.marker === "match" && !a.exnCheck) prime = h.name;
       else if (a.marker === "anchor") {
         head = h.name;
         arity = a.atom.terms.length - 1;
@@ -602,16 +342,11 @@ function collectAtomVarsOrdered(a: RuleAtom, seen: Set<string>, out: string[]): 
     } else {
       for (const t of a.atom.terms) push(t);
     }
-    if (a.weight !== undefined) push(a.weight);
     if (a.lLit !== undefined) push(a.lLit);
     if (a.rLit !== undefined) push(a.rLit);
   } else if (a.tag === "Equal") {
     push(a.lhs);
     for (const t of exprTerms(a.rhs)) push(t);
-  } else if (a.tag === "AggComp") {
-    for (const it of a.body) collectAtomVarsOrdered(it, seen, out);
-    // `out`'s variables are the ones the expression binds outward.
-    push(a.reduce.out);
   } else if (a.tag === "Exception") {
     // An earlier Exception cannot occur (they are processed first-to-last),
     // but keep the walk total: its in-place replacement contributes vars
@@ -665,10 +400,6 @@ function rewriteEmitHeads(body: RuleAtom[], p: string, arity: number, primeName:
     if (a.tag === "Sub") { rewriteEmitHeads(a.body, p, arity, primeName); continue; }
     if (a.tag !== "Atom") continue;
     if (a.marker !== "fact" && a.marker !== "episode" && a.marker !== "anchor") continue;
-    // Weighted emits (`+p .. -> w`, aggregate-relation assertions) store the
-    // weight in a trailing slot — renaming one would orphan it the same way
-    // an off-arity emit would. They are not interceptable.
-    if (a.weight !== undefined) continue;
     if (a.atom.terms.length !== arity + 1) continue;
     const head = a.atom.terms[0];
     if (head !== undefined && head.tag === "Symbol" && head.name === p) {
@@ -677,8 +408,8 @@ function rewriteEmitHeads(body: RuleAtom[], p: string, arity: number, primeName:
   }
 }
 
-// Every Symbol name occurring in the program (rule bodies, schema keys,
-// #js names). Used to mint fresh `_<p>_prime<k>` / `_<p>_exn<k>` names.
+// Every Symbol name occurring in the program (rule bodies, acc and #js
+// names). Used to mint fresh `_<p>_prime<k>` / `_<p>_exn<k>` names.
 function collectProgramSymbols(program: Program): Set<string> {
   const out = new Set<string>();
   const term = (t: Term): void => {
@@ -696,14 +427,12 @@ function collectProgramSymbols(program: Program): Set<string> {
         continue;
       }
       if (a.tag === "Equal") { term(a.lhs); exprTerms(a.rhs).forEach(term); continue; }
-      if (a.tag === "AggComp") { walk(a.body); continue; }
       if (a.tag !== "Atom") continue;
       if (a.subAtoms !== undefined) {
         for (const s of a.subAtoms) for (const t of s.atom.terms) term(t);
       } else {
         for (const t of a.atom.terms) term(t);
       }
-      if (a.weight !== undefined) term(a.weight);
       if (a.lLit !== undefined) term(a.lLit);
       if (a.rLit !== undefined) term(a.rLit);
     }
@@ -713,7 +442,6 @@ function collectProgramSymbols(program: Program): Set<string> {
     walk(r.body);
     for (const t of r.head.terms) term(t);
   }
-  for (const key of program.schema.keys()) out.add(key);
   for (const key of program.jsDefs.keys()) out.add(key);
   for (const key of program.jsRels.keys()) out.add(key);
   for (const key of program.accDecls.keys()) out.add(key);
@@ -731,7 +459,7 @@ function collectProgramSymbols(program: Program): Set<string> {
 // duplicate emissions.
 export function generateDeltaVariants(rule: Rule): Rule[] {
   let n = 0;
-  for (const a of rule.body) if (a.tag === "Match") n++;
+  for (const a of rule.body) if (a.tag === "Match" && !a.negated) n++;
   if (n === 0) return [rule];
   const out: Rule[] = [];
   for (let j = 0; j < n; j++) {
@@ -749,7 +477,7 @@ export function generateDeltaVariants(rule: Rule): Rule[] {
 function tagBody(body: RuleAtom[], delta: number): RuleAtom[] {
   let i = 0;
   return body.map((a) => {
-    if (a.tag !== "Match") return a;
+    if (a.tag !== "Match" || a.negated) return a;
     const idx = i++;
     const c: MatchConstraint = idx < delta ? "old" : idx === delta ? "delta" : "any";
     return { ...a, constraint: c };
@@ -784,10 +512,10 @@ function positiveBeforeDelta(body: RuleAtom[]): boolean {
 // including the Emit; consumer = everything after (starting with the
 // paired Match). Recursion handles multiple Emits per rule.
 //
-// Aggregate is the one exception to the paired-Match construction: its
-// `_do-agg` Emit gets the trailing id slot for store-schema uniformity but
-// the existing `_agg-result` Match takes the role of the chain-recovery
-// Match. splitRule still slices on `_do-agg` since that's just an Emit.
+// The exception check (`decomposeExnCheck`) is the one exception to the
+// paired-Match construction: its `_exn-wait` Emit is followed by the
+// `_exn-clear` Match, which shares the trailing id and takes the role of the
+// chain-recovery Match.
 
 function splitRule(rule: Rule): Rule[] {
   const eIdx = rule.body.findIndex((a) => a.tag === "Emit");
@@ -847,10 +575,6 @@ interface DecState {
   jsRels: Map<string, JsRelDef[]>;
   // Counter for fresh `_js_<k>` result Variables.
   jsCounter: number;
-  // Relations declared `#reactive`: their `head ... -> weight` reads lower to
-  // a plain Match of the `_aggval` value relation instead of the demand
-  // `_do-agg`/`_agg-result` pair. See plans/v2-reactive-aggregates.md.
-  reactive: Set<string>;
   // Relations declared `#acc` (plans/v2-acc-relations.md): a plain match
   // lowers to a point read at the anchor's left endpoint
   // (`decomposeAccRead`); every other appearance is an error.
@@ -866,24 +590,28 @@ const SYM_CHOOSE: Term = { tag: "Symbol", name: "*choose" };
 const SYM_CHAIN: Term = { tag: "Symbol", name: "*chain" };
 const SYM_CONJ: Term = { tag: "Symbol", name: "*conj" };
 const SYM_C_PLAIN: Term = { tag: "Symbol", name: "*c-plain" };
-const SYM_C_AGG: Term = { tag: "Symbol", name: "*c-agg" };
 const SYM_C_JS: Term = { tag: "Symbol", name: "*c-js" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
-const SYM_DO_AGG: Term = { tag: "Symbol", name: "_do-agg" };
-const SYM_AGG_RESULT: Term = { tag: "Symbol", name: "_agg-result" };
-const SYM_AGGVAL: Term = { tag: "Symbol", name: "_aggval" };
-// Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-// Row heads + wrapped-query encoding symbols, consumed by comp-aggregate.ts.
-const SYM_DO_AGGC: Term = { tag: "Symbol", name: "_do-aggc" };
-const SYM_AGG_RESULTC: Term = { tag: "Symbol", name: "_agg-resultc" };
-const SYM_CQ: Term = { tag: "Symbol", name: "*cq" };
-const SYM_CQ_ATOM: Term = { tag: "Symbol", name: "*cq-atom" };
-const SYM_CQ_RED: Term = { tag: "Symbol", name: "*cq-red" };
-const SYM_CQ_COLS: Term = { tag: "Symbol", name: "*cq-cols" };
-const SYM_CQ_ANY: Term = { tag: "Symbol", name: "*cq-any" };
-const SYM_FV: Term = { tag: "Symbol", name: "*fv" };
-const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
+// Written by the acc handler at every settled moment when the program has a
+// negated read (acc.ts); a `not` read waits on it.
+export const SYM_ACC_SETTLED: Term = { tag: "Symbol", name: "_acc-settled" };
+// Exception default checks (decomposeExnCheck; answered in scheduler.ts).
+export const SYM_EXN_WAIT: Term = { tag: "Symbol", name: "_exn-wait" };
+export const SYM_EXN_CLEAR: Term = { tag: "Symbol", name: "_exn-clear" };
+export const SYM_EXN_HELD: Term = { tag: "Symbol", name: "_exn-held" };
+const SYM_C_NOT: Term = { tag: "Symbol", name: "*c-not" };
+
+// User variable names (not `_`) occurring anywhere in `ts`.
+function termsVars(ts: Term[]): string[] {
+  const out: string[] = [];
+  const walk = (t: Term): void => {
+    if (t.tag === "Variable") { if (t.name !== "_" && !out.includes(t.name)) out.push(t.name); return; }
+    if (t.tag === "Atom" || t.tag === "Id") t.atom.terms.forEach(walk);
+  };
+  ts.forEach(walk);
+  return out;
+}
 const SYM_L: Term = { tag: "Symbol", name: "l" };
 const SYM_R: Term = { tag: "Symbol", name: "r" };
 
@@ -891,7 +619,6 @@ function freshDecState(
   ruleName: string,
   jsDefs: Map<string, JsDef>,
   jsRels: Map<string, JsRelDef[]>,
-  reactive: Set<string>,
   accDecls: Map<string, AccDecl>,
 ): DecState {
   return {
@@ -907,7 +634,6 @@ function freshDecState(
     jsDefs,
     jsRels,
     jsCounter: 0,
-    reactive,
     accDecls,
   };
 }
@@ -916,10 +642,9 @@ function decomposeRule(
   rule: Rule,
   jsDefs: Map<string, JsDef>,
   jsRels: Map<string, JsRelDef[]>,
-  reactive: Set<string>,
   accDecls: Map<string, AccDecl>,
 ): { rule: Rule; essential: Set<string> } {
-  const state = freshDecState(rule.name, jsDefs, jsRels, reactive, accDecls);
+  const state = freshDecState(rule.name, jsDefs, jsRels, accDecls);
   decomposeBody(rule.body, state, SYM_BOT, SYM_TOP);
   return { rule: { ...rule, body: state.out }, essential: state.essential };
 }
@@ -935,7 +660,7 @@ function decomposeRule(
 // `AccContribute`. No split, no chain pruning, no delta variants: acc rules
 // run naively to a local fixpoint inside the handler.
 export function decomposeAccRule(rule: AccRule, program: Program): Rule {
-  const state = freshDecState(rule.name, program.jsDefs, program.jsRels, program.reactive, program.accDecls);
+  const state = freshDecState(rule.name, program.jsDefs, program.jsRels, program.accDecls);
   const M: Term = { tag: "Variable", name: ACC_MOMENT_VAR };
   state.seen.add(ACC_MOMENT_VAR);
   state.chain.push(M);
@@ -961,31 +686,40 @@ export function decomposeAccRule(rule: AccRule, program: Program): Rule {
     const k = state.lexPos;
     if (hn !== undefined && state.accDecls.has(hn)) {
       // Read of another acc relation, at this same moment.
-      if (a.weight !== undefined) {
-        throw new Error(`acc rule '${rule.name}': acc relation '${hn}' carries no '-> weight'`);
-      }
       const decl = state.accDecls.get(hn)!;
       if (a.atom.terms.length - 1 !== decl.columns.length) {
         throw new Error(
           `acc rule '${rule.name}': '${hn}' has ${decl.columns.length} column(s), pattern has ${a.atom.terms.length - 1}`,
         );
       }
+      if (a.negated) {
+        const unbound = termsVars(a.atom.terms).filter((n) => !state.seen.has(n));
+        if (unbound.length > 0) {
+          throw new Error(
+            `acc rule '${rule.name}': 'not ${hn} …' needs its variables bound before it (unbound: ${unbound.join(", ")})`,
+          );
+        }
+        state.out.push({ tag: "AccMatch", relation: hn, atom: a.atom, moment: { tag: "Wildcard" }, negated: true, span: a.span });
+        continue;
+      }
       const mv: Term = { tag: "Variable", name: `_am_${k}` };
-      state.seen.add(mv.name);
-      state.chain.push(mv);
-      state.essential.add(mv.name);
-      state.out.push({ tag: "AccMatch", relation: hn, atom: a.atom, moment: mv, span: a.span });
+      const rowId: Term = { tag: "Variable", name: `_aid_${k}` };
+      for (const v of [mv, rowId]) {
+        if (v.tag !== "Variable") continue;
+        state.seen.add(v.name);
+        state.chain.push(v);
+        state.essential.add(v.name);
+      }
+      state.out.push({ tag: "AccMatch", relation: hn, atom: a.atom, moment: mv, id: rowId, span: a.span });
+      ids.push(rowId);
       for (const t of a.atom.terms) collectVarsTerm(t, state);
       moments.push(mv);
       continue;
     }
-    if (a.weight !== undefined) {
-      // The parser only lets a `#reactive` read through with a weight.
-      if (hn === undefined || !state.reactive.has(hn)) {
-        throw new Error(`acc rule '${rule.name}': weighted read of '${hn ?? "?"}' is not a #reactive relation`);
-      }
-      decomposeReactiveRead(a, state, M, M);
-      continue;
+    if (a.negated) {
+      throw new Error(
+        `acc rule '${rule.name}': 'not' reads an '#acc' relation; '${hn ?? "?"}' is not one`,
+      );
     }
     // Ordinary stored relation: Match at (l, r) with the tuple's id bound
     // (firing identity), then point containment of `_acc_m`.
@@ -1061,11 +795,17 @@ function decomposeAccRead(
 ): boolean {
   if (a.subAtoms !== undefined) return false; // `!(...)`: checked in buildConstrainRowAtom
   const h = a.atom.terms[0];
+  if (a.negated && (h === undefined || h.tag !== "Symbol" || !state.accDecls.has(h.name))) {
+    throw new Error(
+      `rule '${state.ruleName}': 'not' reads an '#acc' relation; '${h !== undefined && h.tag === "Symbol" ? h.name : "?"}' ` +
+      `is not one — declare a boolean acc relation (e.g. '#acc fallen : pin' with 'down Q / fallen Q') and negate that`,
+    );
+  }
   if (h === undefined || h.tag !== "Symbol" || !state.accDecls.has(h.name)) return false;
-  if (a.marker !== "match" || a.weight !== undefined) {
+  if (a.marker !== "match") {
     throw new Error(
       `rule '${state.ruleName}': '${h.name}' is an acc relation — computed by '/' rules, never asserted; ` +
-      `read it with a plain match (no marker, no '-> weight')`,
+      `read it with a plain match (no marker)`,
     );
   }
   const decl = state.accDecls.get(h.name)!;
@@ -1075,6 +815,21 @@ function decomposeAccRead(
     );
   }
   const matchAtom: Atom = { terms: [...a.atom.terms, { tag: "Wildcard" }] };
+  if (a.negated) {
+    // `not r t̄`: range-restricted, binds nothing, anchor unchanged. The
+    // positive `_acc-settled` point read blocks the rule until XL has
+    // settled (the rows at XL are then final — plans/v2-caret-fresh-left.md
+    // §2.2) and is what wakes it then: an absent row produces no delta.
+    const unbound = termsVars(a.atom.terms).filter((n) => !state.seen.has(n));
+    if (unbound.length > 0) {
+      throw new Error(
+        `rule '${state.ruleName}': 'not ${h.name} …' needs its variables bound before it (unbound: ${unbound.join(", ")})`,
+      );
+    }
+    state.out.push({ tag: "Match", atom: { terms: [SYM_ACC_SETTLED, { tag: "Wildcard" }] }, l: XL, r: XL, span: a.span });
+    state.out.push({ tag: "Match", atom: matchAtom, l: XL, r: XL, negated: true, span: a.span });
+    return true;
+  }
   const constraint = (a as { constraint?: MatchConstraint }).constraint;
   state.out.push(
     constraint === undefined
@@ -1320,6 +1075,12 @@ function decomposeBody(
     }
     if (a.tag === "Atom") {
       state.lexPos++;
+      if (a.exnCheck) {
+        const next = decomposeExnCheck(a, state, XL, XR);
+        XL = next.XL;
+        XR = next.XR;
+        continue;
+      }
       // js relations (plans/v2-js-relations.md): a plain match atom whose
       // head names a `#js-def` relation lowers to a JsIterate and leaves
       // the running anchor untouched (js relations are timeless). Any
@@ -1332,26 +1093,11 @@ function decomposeBody(
         const next = decomposeMatch(a, state, XL, XR);
         XL = next.XL;
         XR = next.XR;
-      } else if (a.marker === "aggregate") {
-        const head = a.atom.terms[0];
-        const isReactive = head !== undefined && head.tag === "Symbol" && state.reactive.has(head.name);
-        const next = isReactive
-          ? decomposeReactiveRead(a, state, XL, XR)
-          : decomposeAggregate(a, state, XL, XR);
-        XL = next.XL;
-        XR = next.XR;
       } else {
         const next = decomposeEmit(a, state, XL, XR);
         XL = next.XL;
         XR = next.XR;
       }
-      continue;
-    }
-    if (a.tag === "AggComp") {
-      state.lexPos++;
-      const next = decomposeAggComp(a, state, XL, XR);
-      XL = next.XL;
-      XR = next.XR;
       continue;
     }
     if (a.tag === "Exception") {
@@ -1384,10 +1130,10 @@ function decomposeJsRel(
   if (a.subAtoms !== undefined) return false;
   const h = a.atom.terms[0];
   if (h === undefined || h.tag !== "Symbol" || !state.jsRels.has(h.name)) return false;
-  if (a.marker !== "match" || a.weight !== undefined) {
+  if (a.marker !== "match" || a.negated) {
     throw new Error(
       `rule '${state.ruleName}': js relation '${h.name}' can only be used as a plain match atom ` +
-      `(no '~'/'+'/'^'/'?'/'!' marker, no '-> weight')`,
+      `(no '~'/'+'/'^'/'?'/'!' marker, no 'not')`,
     );
   }
   const arity = state.jsRels.get(h.name)![0]!.params.length;
@@ -1473,406 +1219,37 @@ function decomposeMatch(
   return { XL: XLnext, XR: XRnext };
 }
 
-// Reactive read: a `#reactive head pat -> weight` consumer samples the
-// relation's value at the running anchor's *left endpoint* (plans/
-// v2-moment-walk.md). The moment walk materializes `_aggval head key...
-// value` as a point row `[m, m]` at every moment `m` it resolves, so the read
-// lowers to a Match of that row with both endpoints pinned to `XL`:
-//
-//   Match [_aggval, head, pat..., weight, _]  at (XL, XL)
-//
-// `evalMatch` unifies the endpoints before the atom, so rows at other moments
-// are rejected cheaply. Until `XL` is resolved the row does not exist and the
-// rule does not fire — the read is blocked; when the walk emits the row, the
-// semi-naive delta variant on this Match wakes the rule. The running anchor
-// is unchanged: threading the point row through `Max`/`Min` would collapse
-// it to `[XL, XL]` and make every later `+` emit assert a cycle. No
-// `_l_k`/`_r_k` slots are minted — `XL` is already in the chain, and the
-// row's user terms enter it below, so firing identity is intact. There is no
-// producer Emit. A variable in the weight slot binds the value at `XL`; a
-// literal filters to where the value equals it.
-function decomposeReactiveRead(
+
+// Exception default check (applyExceptions step 7): a producer
+// `Emit (_exn-wait (flag pat) idTpl) at (XL, XR)` and a consumer
+// `Match (_exn-clear (flag pat) idTpl) at (_l_K, _r_K)` sharing the per-firing
+// id, like an aggregate's demand pair. The exception-check handler answers
+// each wait row with `_exn-clear` (no flag alive at XL) or `_exn-held`, after
+// inner-loop quiescence. The answer copies the wait row's endpoints, so the
+// running anchor is unchanged.
+function decomposeExnCheck(
   a: Extract<RuleAtom, { tag: "Atom" }>,
   state: DecState,
   XL: Term,
   XR: Term,
 ): { XL: Term; XR: Term } {
-  if (a.weight === undefined) {
-    throw new Error("internal: reactive read without weight");
-  }
-  // `[_aggval, head, key..., value, <id>]` — the trailing Wildcard matches the
-  // scheduler-emitted row's universal id slot.
-  const matchAtom: Atom = { terms: [SYM_AGGVAL, ...a.atom.terms, a.weight, { tag: "Wildcard" }] };
-  const constraint = (a as { constraint?: MatchConstraint }).constraint;
-  state.out.push(
-    constraint === undefined
-      ? { tag: "Match", atom: matchAtom, l: XL, r: XL, span: a.span }
-      : { tag: "Match", atom: matchAtom, l: XL, r: XL, constraint, span: a.span },
-  );
-  for (const t of a.atom.terms) collectVarsTerm(t, state);
-  collectVarsTerm(a.weight, state);
-  return { XL, XR };
-}
-
-// Aggregate: lowers `pat -> weight` into a paired producer `Emit (_do-agg
-// wrappedFreePattern idTpl) at (XL, XR)` and consumer `Match (_agg-result
-// originalPatternWithWeight idTpl) at (_l_K, _r_K)`. Both sides inline the
-// *same* `freshIdTemplate(state, K, "_emitId")` term in the universal
-// trailing id slot — substituting it in either context produces the same
-// ground value, so closeDoAgg's copied id matches the consumer template
-// under structural unification, binding chain Variables in the consumer's
-// trail.
-//
-// No Le/Max/Min scaffolding around the consumer Match: by the closeDoAgg
-// invariant the matched `_agg-result.l/r == _do-agg.l/r == (XL, XR)`, so
-// those atoms would be no-ops. The new running anchor for the suffix is
-// just `(_l_K, _r_K)`.
-//
-// `splitRule` slices on every Emit; the producer `_do-agg` Emit is just
-// one of them.
-function decomposeAggregate(
-  a: Extract<RuleAtom, { tag: "Atom" }>,
-  state: DecState,
-  XL: Term,
-  XR: Term,
-): { XL: Term; XR: Term } {
-  if (a.weight === undefined) {
-    throw new Error("internal: aggregate atom without weight");
-  }
   const k = state.lexPos;
-
-  // Snapshot the prefix's seen-set for the freeify decision below: a
-  // Variable mentioned in the user pattern is "bound by prefix" iff it's
-  // in this snapshot.
-  const prefixSeen = new Set(state.seen);
-
-  // Single inline idTpl, shared by producer Emit and consumer Match. Sits
-  // in the universal trailing id slot of both rows; serves as the
-  // _do-agg ↔ _agg-result correlation key for closeDoAgg AND as the
-  // chain-recovery anchor for the consumer Match's structural unification.
   const idTpl = freshIdTemplate(state, k, "_emitId");
-
-  // Producer: Emit (_do-agg wrappedFreePattern idTpl) at (XL, XR).
-  // Variables not bound by the prefix and Wildcards become `_free`;
-  // closeDoAgg matches stored candidates against this pattern and
-  // substitutes the aggregated value into the trailing `_free` slot.
-  const freeify = (t: Term): Term => {
-    if (t.tag === "Variable") {
-      if (t.name !== "_" && prefixSeen.has(t.name)) return t;
-      return SYM_FREE;
-    }
-    if (t.tag === "Wildcard") return SYM_FREE;
-    if (t.tag === "Atom" || t.tag === "Id") {
-      return { tag: t.tag, atom: { terms: t.atom.terms.map(freeify) } };
-    }
-    return t;
-  };
-  const wrappedFreeAtom: Term = {
-    tag: "Atom",
-    atom: { terms: [...a.atom.terms.map(freeify), SYM_FREE] },
-  };
-  // Producer Emit. Aggregate is exempt from the universal paired Match —
-  // chain recovery is supplied by the `_agg-result` Match below, which
-  // shares the trailing idTpl.
-  const producerRow: Atom = { terms: [SYM_DO_AGG, wrappedFreeAtom, idTpl] };
-  state.out.push({ tag: "Emit", atom: producerRow, l: XL, r: XR, span: a.span });
-
-  // Mint slots for the consumer Match. Push to chain so the suffix sees
-  // them as bound (the Match binds them via unification with the stored
-  // _agg-result row's endpoints).
+  const pattern: Term = { tag: "Atom", atom: { terms: [...a.atom.terms] } };
+  state.out.push({ tag: "Emit", atom: { terms: [SYM_EXN_WAIT, pattern, idTpl] }, l: XL, r: XR, span: a.span });
   const lName = `_l_${k}`;
   const rName = `_r_${k}`;
   const lVar: Term = { tag: "Variable", name: lName };
   const rVar: Term = { tag: "Variable", name: rName };
-  state.seen.add(lName);
-  state.chain.push(lVar);
-  state.essential.add(lName);
-  state.seen.add(rName);
-  state.chain.push(rVar);
-  state.essential.add(rName);
-
-  // Consumer: Match (_agg-result originalPatternWithWeight idTpl) at
-  // (_l_K, _r_K). No scaffolding (see header).
-  const originalPatternWithWeight: Term = {
-    tag: "Atom",
-    atom: { terms: [...a.atom.terms, a.weight] },
-  };
-  // Consumer Match: shares the trailing idTpl with the producer Emit.
-  // Structural unification on idTpl against the stored _agg-result row's
-  // copied id binds chain Variables in the consumer's trail.
-  const consumerRow: Atom = { terms: [SYM_AGG_RESULT, originalPatternWithWeight, idTpl] };
-  const constraint = (a as { constraint?: MatchConstraint }).constraint;
-  const matchAtom: RuleAtom = constraint === undefined
-    ? { tag: "Match", atom: consumerRow, l: lVar, r: rVar, span: a.span }
-    : { tag: "Match", atom: consumerRow, l: lVar, r: rVar, constraint, span: a.span };
-  state.out.push(matchAtom);
-
-  // Add user vars from the matched pattern (and weight) to the chain —
-  // the consumer Match binds them via main-atom unification, same as
-  // decomposeMatch does for ordinary matches.
-  for (const t of a.atom.terms) collectVarsTerm(t, state);
-  collectVarsTerm(a.weight, state);
-
-  // New running anchor: the matched _agg-result row's interval. Equals
-  // the producer's prefix anchor (XL, XR) by closeDoAgg invariant.
+  for (const n of [lName, rName]) {
+    state.seen.add(n);
+    state.chain.push({ tag: "Variable", name: n });
+    state.essential.add(n);
+  }
+  state.out.push({ tag: "Match", atom: { terms: [SYM_EXN_CLEAR, pattern, idTpl] }, l: lVar, r: rVar, span: a.span });
   return { XL: lVar, XR: rVar };
 }
 
-type AggCompRA = Extract<RuleAtom, { tag: "AggComp" }>;
-
-// Unbound (non-prefix-bound, non-`_`) Variable names in a term, appended to
-// `out` in first-occurrence order.
-function noteFreeVars(t: Term, prefixSeen: Set<string>, seen: Set<string>, out: string[]): void {
-  if (t.tag === "Variable") {
-    if (t.name === "_" || prefixSeen.has(t.name)) return;
-    if (!seen.has(t.name)) { seen.add(t.name); out.push(t.name); }
-    return;
-  }
-  if (t.tag === "Atom" || t.tag === "Id") {
-    for (const x of t.atom.terms) noteFreeVars(x, prefixSeen, seen, out);
-  }
-}
-
-// Every unbound variable occurring in a comp's query subtree as a *genuine
-// query position* — an atom column at any level, or any level's reduction
-// variable. The disjointness rule of plans/v2-agg-output-var.md forbids this
-// level's own `out` variables from appearing here, so that every name has
-// exactly one role.
-//
-// Deliberately excluded: a nested level's own output-pattern variables.
-// Those are columns of this level, but sharing a name with them is
-// meaningful rather than confused — the folded value is checked against the
-// group's value for that column instead of binding it, and `matchTerm`
-// already does exactly that. plans/v2-aggregation-synonyms.md depends on it:
-// `land:count X X` expands to `[[at A B | X = last B] | X = count A]`,
-// which is how "the location equals the count" is expressed.
-function aggCompQueryVars(comp: AggCompRA, prefixSeen: Set<string>, out: Set<string>): void {
-  out.add(comp.reduce.varName);
-  for (const it of comp.body) {
-    if (it.tag === "AggComp") {
-      aggCompQueryVars(it, prefixSeen, out);
-      continue;
-    }
-    if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
-    const vs: string[] = [];
-    noteFreeVars({ tag: "Atom", atom: it.atom }, prefixSeen, new Set(), vs);
-    for (const n of vs) out.add(n);
-  }
-}
-
-// The **output columns** of a bracket-aggregation level, in
-// first-occurrence order (plans/v2-agg-output-var.md):
-//
-//   joinCols(comp) = ⋃ outCols(item), in order   -- what the join produces
-//   outCols(comp)  = joinCols(comp) − {V} ++ unbound vars of `out`
-//
-// This is the result-row layout; `comp-aggregate.ts`'s `compOutCols` reads
-// rows back with the identical recursion, so the two must stay in step.
-// Also validates each level: `V` is a column of its query and is not bound
-// earlier in the rule, and `out`'s variables are disjoint from the query.
-// `state` is supplied during decomposition, where `@js(...)` is rejected
-// inside aggregate queries and errors can name the rule.
-function aggCompOutCols(
-  comp: AggCompRA,
-  prefixSeen: Set<string>,
-  state: DecState | null,
-  jsRels: Map<string, JsRelDef[]>,
-): string[] {
-  const where = state === null ? "macro body" : `rule '${state.ruleName}'`;
-  const join: string[] = [];
-  const seen = new Set<string>();
-  for (const it of comp.body) {
-    if (it.tag === "AggComp") {
-      for (const n of aggCompOutCols(it, prefixSeen, state, jsRels)) {
-        if (!seen.has(n)) { seen.add(n); join.push(n); }
-      }
-      continue;
-    }
-    if (it.tag !== "Atom") throw new Error("internal: aggregate query item is not an atom");
-    // js relations are rejected inside `[ ... ]` queries: the query is
-    // reified and evaluated by comp-aggregate.ts's own join, which only
-    // matches stored tuples (plans/v2-js-relations.md, out of scope).
-    const ih = it.atom.terms[0];
-    if (ih !== undefined && ih.tag === "Symbol" && jsRels.has(ih.name)) {
-      throw new Error(
-        `${where}: js relation '${ih.name}' cannot appear inside a '[ ... ]' aggregate query`,
-      );
-    }
-    // acc relations too: the bracket join reads stored tuples containing the
-    // anchor, and acc rows are point rows at resolved moments
-    // (plans/v2-acc-relations.md §10).
-    if (ih !== undefined && ih.tag === "Symbol" && state !== null && state.accDecls.has(ih.name)) {
-      throw new Error(
-        `${where}: acc relation '${ih.name}' cannot appear inside a '[ ... ]' aggregate query (not yet supported)`,
-      );
-    }
-    for (const t of it.atom.terms) {
-      if (state !== null && isJsHead(t)) jsNotAllowed(state);
-      noteFreeVars(t, prefixSeen, seen, join);
-    }
-  }
-
-  const v = comp.reduce.varName;
-  // The bare form's outward name is its source-level reduction variable, so
-  // it inherits the "not bound earlier" restriction that `V` carries.
-  const bareOut = comp.reduce.bare === true ? comp.reduce.out : null;
-  // Diagnostics name what the user wrote: in the bare form the query-side
-  // `V` is a compiler-minted rename, and the source name is `out`.
-  const srcName = bareOut !== null && bareOut.tag === "Variable" ? bareOut.name : v;
-  if (prefixSeen.has(srcName) || prefixSeen.has(v)) {
-    throw new Error(
-      `${where}: reduction variable '${srcName}' is bound earlier in the rule ` +
-      `(it must be free in the aggregate query)`,
-    );
-  }
-  if (!seen.has(v)) {
-    throw new Error(
-      `${where}: reduction variable '${srcName}' does not occur in the aggregate query`,
-    );
-  }
-
-  const outVars: string[] = [];
-  noteFreeVars(comp.reduce.out, prefixSeen, new Set(), outVars);
-  if (outVars.length > 0) {
-    const queryVars = new Set<string>();
-    aggCompQueryVars(comp, prefixSeen, queryVars);
-    for (const n of outVars) {
-      if (queryVars.has(n)) {
-        throw new Error(
-          `${where}: aggregate output variable '${n}' also occurs in the aggregate query ` +
-          `(an output pattern's variables must be disjoint from the query)`,
-        );
-      }
-    }
-  }
-
-  const cols = join.filter((n) => n !== v);
-  const colSeen = new Set(cols);
-  noteFreeVars(comp.reduce.out, prefixSeen, colSeen, cols);
-  // `none` binds nothing (plans/v2-bracket-some.md): unlike `some`, it cannot
-  // carry a group key, since a negated query has no bindings to group by. So
-  // every query variable must be the reduction variable or bound before the
-  // aggregate — any leftover output column is a static error.
-  if (comp.reduce.op === "none" && cols.length > 0) {
-    throw new Error(
-      `${where}: 'none' binds nothing, so every aggregate query variable must be ` +
-      `the reduction variable or bound before the aggregate (got free column '${cols[0]}')`,
-    );
-  }
-  return cols;
-}
-
-// Bracket aggregation `[ Q | Out = op V ]` (plans/v2-agg-output-var.md):
-// lowers the whole expression tree into a paired producer
-// `Emit (_do-aggc <cq> <cols> idTpl)` at (XL, XR) and consumer
-// `Match (_agg-resultc (row V1..Vm) idTpl)` at (_l_K, _r_K), following the
-// decomposeAggregate pattern: the shared inline idTpl is both the
-// do-aggc ↔ agg-resultc correlation key for closeDoAggC and the
-// chain-recovery anchor for the consumer Match. Result rows are emitted by
-// closeDoAggC at the producer's exact endpoints, so no Le/Max/Min
-// scaffolding is needed and the suffix's running anchor is (_l_K, _r_K)
-// == (XL, XR).
-//
-// Wrapped-query encoding (ground modulo prefix-bound Variables, which the
-// trail substitutes at Emit-intern time; decoded by comp-aggregate.ts):
-//   comp       := (*cq (*cq-red <op> (*fv :V) <out>) item...)
-//   atom item  := (*cq-atom t1' ... tk')
-//   nested     := its own (*cq ...) term
-//   free var   := (*fv :name)        `_` / wildcard := *cq-any
-//   cols       := (*cq-cols (*fv :name)...) — the output columns of the
-//                 whole tree (see aggCompOutCols); fixes the result row
-//                 layout shared with the consumer Match's pattern.
-function decomposeAggComp(
-  a: AggCompRA,
-  state: DecState,
-  XL: Term,
-  XR: Term,
-): { XL: Term; XR: Term } {
-  const k = state.lexPos;
-  const prefixSeen = new Set(state.seen);
-
-  const free = aggCompOutCols(a, prefixSeen, state, state.jsRels);
-
-  const fvTerm = (name: string): Term => ({
-    tag: "Id",
-    atom: { terms: [SYM_FV, variableToSymbol({ tag: "Variable", name })] },
-  });
-  const encodeTerm = (t: Term): Term => {
-    if (isJsHead(t)) jsNotAllowed(state);
-    if (t.tag === "Variable") {
-      if (t.name === "_") return SYM_CQ_ANY;
-      if (prefixSeen.has(t.name)) return t; // bound by prefix — trail substitutes
-      return fvTerm(t.name);
-    }
-    if (t.tag === "Wildcard") return SYM_CQ_ANY;
-    if (t.tag === "Atom" || t.tag === "Id") {
-      return { tag: t.tag, atom: { terms: t.atom.terms.map(encodeTerm) } };
-    }
-    return t;
-  };
-  const encodeComp = (comp: AggCompRA): Term => {
-    const red: Term = {
-      tag: "Id",
-      atom: {
-        terms: [
-          SYM_CQ_RED,
-          { tag: "Symbol", name: comp.reduce.op },
-          fvTerm(comp.reduce.varName),
-          // `out` rides through the same term encoder: unbound variables
-          // become `(*fv :name)` for close-time unification, prefix-bound
-          // ones stay Variables (the trail substitutes their value at
-          // Emit-intern time), and ground terms pass through.
-          encodeTerm(comp.reduce.out),
-        ],
-      },
-    };
-    const terms: Term[] = [SYM_CQ, red];
-    for (const it of comp.body) {
-      if (it.tag === "AggComp") {
-        terms.push(encodeComp(it));
-      } else {
-        const atomIt = it as AtomRA;
-        terms.push({ tag: "Id", atom: { terms: [SYM_CQ_ATOM, ...atomIt.atom.terms.map(encodeTerm)] } });
-      }
-    }
-    return { tag: "Id", atom: { terms } };
-  };
-
-  // Producer: Emit (_do-aggc <cq> <cols> idTpl) at (XL, XR). Exempt from
-  // the universal paired Match — chain recovery is supplied by the
-  // _agg-resultc Match below, which shares the trailing idTpl.
-  const idTpl = freshIdTemplate(state, k, "_emitId");
-  const cols: Term = { tag: "Id", atom: { terms: [SYM_CQ_COLS, ...free.map(fvTerm)] } };
-  const producerRow: Atom = { terms: [SYM_DO_AGGC, encodeComp(a), cols, idTpl] };
-  state.out.push({ tag: "Emit", atom: producerRow, l: XL, r: XR, span: a.span });
-
-  // Mint slots for the consumer Match (same as decomposeAggregate).
-  const lName = `_l_${k}`;
-  const rName = `_r_${k}`;
-  const lVar: Term = { tag: "Variable", name: lName };
-  const rVar: Term = { tag: "Variable", name: rName };
-  state.seen.add(lName);
-  state.chain.push(lVar);
-  state.essential.add(lName);
-  state.seen.add(rName);
-  state.chain.push(rVar);
-  state.essential.add(rName);
-
-  // Consumer: Match (_agg-resultc (row V1..Vm) idTpl) at (_l_K, _r_K).
-  // Unification against the stored result row binds the free vars
-  // (including the reduced one, now holding the aggregate value).
-  const rowPattern: Term = {
-    tag: "Atom",
-    atom: { terms: free.map((n): Term => ({ tag: "Variable", name: n })) },
-  };
-  const consumerRow: Atom = { terms: [SYM_AGG_RESULTC, rowPattern, idTpl] };
-  state.out.push({ tag: "Match", atom: consumerRow, l: lVar, r: rVar, span: a.span });
-
-  // The free vars enter the chain — bound by the consumer Match.
-  for (const n of free) noteVar(state, n);
-
-  return { XL: lVar, XR: rVar };
-}
 
 // Build the wrapped row atom for a `!` source-atom. Always shaped as
 // `(_constrain (*conj sub1 ... subN))` where each `subi` is
@@ -1937,12 +1314,6 @@ function buildConstrainRowAtom(
     const sh = sub.atom.terms[0];
     const accDecl = sh !== undefined && sh.tag === "Symbol" ? state.accDecls.get(sh.name) : undefined;
     if (accDecl !== undefined) {
-      if (sub.kind === "agg") {
-        throw new Error(
-          `rule '${state.ruleName}': acc relation '${accDecl.relation}' cannot take '-> weight' inside a ` +
-          `'!(...)' block — it is computed by '/' rules; read it with a plain pattern`,
-        );
-      }
       if (sub.atom.terms.length - 1 !== accDecl.columns.length) {
         throw new Error(
           `rule '${state.ruleName}': '${accDecl.relation}' has ${accDecl.columns.length} column(s), ` +
@@ -1952,18 +1323,12 @@ function buildConstrainRowAtom(
     }
     // A sub-atom naming a `#js-def` relation is tagged `*c-js` so the
     // constraint-query evaluator enumerates its generator instead of
-    // reading the store (plans/v2-js-rel-in-constrain.md). No `-> weight`
-    // (there are no store rows to aggregate), arity checked eagerly.
+    // reading the store (plans/v2-js-rel-in-constrain.md). Arity checked
+    // eagerly.
     const h = sub.atom.terms[0];
     const jsClauses =
       h !== undefined && h.tag === "Symbol" ? state.jsRels.get(h.name) : undefined;
     if (jsClauses !== undefined) {
-      if (sub.kind === "agg") {
-        throw new Error(
-          `rule '${state.ruleName}': js relation '${(h as { name: string }).name}' cannot take ` +
-          `'-> weight' inside a '!(...)' constrain block (nothing to aggregate)`,
-        );
-      }
       const arity = jsClauses[0]!.params.length;
       const given = sub.atom.terms.length - 1;
       if (given !== arity) {
@@ -1973,9 +1338,28 @@ function buildConstrainRowAtom(
         );
       }
     }
+    if (sub.negated) {
+      if (accDecl === undefined) {
+        throw new Error(
+          `rule '${state.ruleName}': 'not' inside '!(...)' reads an '#acc' relation; ` +
+          `'${sh !== undefined && sh.tag === "Symbol" ? sh.name : "?"}' is not one`,
+        );
+      }
+      // Range restriction within the block: every variable is bound by the
+      // rule's prefix or by a positive sub-atom of the same block.
+      const positive = new Set(termsVars(subAtoms.filter((x) => !x.negated).flatMap((x) => x.atom.terms)));
+      const unbound = termsVars(sub.atom.terms).filter((n) => !prefixSeen.has(n) && !positive.has(n));
+      if (unbound.length > 0) {
+        throw new Error(
+          `rule '${state.ruleName}': 'not ${accDecl.relation} …' inside '!(...)' needs its variables bound ` +
+          `by the rule or by a positive sub-atom of the block (unbound: ${unbound.join(", ")})`,
+        );
+      }
+    }
     const inner: Atom = { terms: sub.atom.terms.map(rewrite) };
     const wrapHead =
-      jsClauses !== undefined ? SYM_C_JS : sub.kind === "agg" ? SYM_C_AGG : SYM_C_PLAIN;
+      sub.negated ? SYM_C_NOT :
+      jsClauses !== undefined ? SYM_C_JS : SYM_C_PLAIN;
     subTerms.push({ tag: "Id", atom: { terms: [wrapHead, { tag: "Atom", atom: inner }] } });
   }
   const conj: Term = { tag: "Id", atom: { terms: subTerms } };
@@ -2008,7 +1392,22 @@ function decomposeEmit(
   // here (and below for the user atom) snapshot the chain *before* this
   // emit contributes its own slots, matching today's assignIds order.
   // We push lVar/rVar onto the chain at the end of this function.
+  // `is` rows resolve choices and are anchored at their choice by the engine
+  // (scheduler.ts installIs). The only source form is the harness's
+  // rule-initial `^ is T V`, which becomes the input row `_is-input T V`.
+  const head0 = a.atom.terms[0];
+  let isInput = false;
+  if (head0 !== undefined && head0.tag === "Symbol" && head0.name === "is" && a.marker !== "ask" && a.marker !== "constrain") {
+    if (a.marker !== "anchor" || !(XL.tag === "Symbol" && XL.name === "bot")) {
+      throw new Error(
+        `rule '${state.ruleName}': 'is' rows resolve choices and are written only as a top-level '^ is C V' ` +
+        `(the choice harness's form); a rule cannot emit 'is'`,
+      );
+    }
+    isInput = true;
+  }
   let emitL: Term, emitR: Term;
+  let caretFresh = false;
   switch (a.marker) {
     case "fact": {
       // l = fresh moment, r = top.
@@ -2033,9 +1432,29 @@ function decomposeEmit(
       emitR = rVar;
       break;
     }
+    case "anchor":
+      // `^p` mints a fresh left end like `+` (XL < l < XR) and keeps the
+      // anchor's right end: `p` lives on [l, XR] and the rule continues
+      // there (plans/v2-caret-fresh-left.md §2). So a `^` reacting to state
+      // at XL (acc rows, a choice asked at XL) starts strictly after XL, and
+      // the state at a settled moment is final. Two exceptions keep the
+      // exact-anchor emit: a rule-initial `^` (anchor still statically
+      // (bot, top) — a premise-free fact, e.g. harness `^ is` rows), and
+      // compiler-internal `exact` emits (applyExceptions).
+      if (!a.exact && !(XL.tag === "Symbol" && XL.name === "bot")) {
+        const momL = freshMomTemplate(state, k, "l");
+        state.out.push({ tag: "Equal", lhs: lVar, rhs: momL, span: a.span });
+        state.out.push({ tag: "Equal", lhs: rVar, rhs: XR, span: a.span });
+        state.out.push({ tag: "AssertLt", a: XL, b: lVar, span: a.span });
+        state.out.push({ tag: "AssertLt", a: lVar, b: XR, span: a.span });
+        emitL = lVar;
+        emitR = XR;
+        caretFresh = true;
+        break;
+      }
+    // falls through
     case "ask":
-    case "constrain":
-    case "anchor": {
+    case "constrain": {
       // `^`, and the `_choose` / `_constrain` rows of `?` / `!`
       // (plans/v2-choice-components-by-moment.md): emitted at the running
       // anchor, no fresh moment, anchor unchanged. A choice is asked at the
@@ -2083,11 +1502,8 @@ function decomposeEmit(
     for (const t of a.atom.terms) {
       userAtomTerms.push(emitBindingsAndRewrite(t, state, k, a.span));
     }
-    let weight = a.weight;
-    if (weight !== undefined) {
-      weight = emitBindingsAndRewrite(weight, state, k, a.span);
-    }
-    const userAtom: Atom = { terms: weight !== undefined ? [...userAtomTerms, weight] : userAtomTerms };
+    if (isInput) userAtomTerms[0] = SYM_IS_INPUT;
+    const userAtom: Atom = { terms: userAtomTerms };
 
     if (a.marker === "ask") {
       // (_choose chooseId (userAtom) actor)
@@ -2143,9 +1559,11 @@ function decomposeEmit(
       // `~>p` continues after the episode: `max(XL, r)` is statically `r`
       // (XL < l < r was just asserted), and the right end stays `XR`.
       return a.after ? { XL: rVar, XR } : { XL: lVar, XR: rVar };
+    case "anchor":
+      if (caretFresh) return { XL: lVar, XR };
+      return { XL, XR };
     case "ask":
     case "constrain":
-    case "anchor":
       return { XL, XR };
     default: // fact
       return { XL: lVar, XR };

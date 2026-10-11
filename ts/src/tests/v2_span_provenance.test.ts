@@ -83,13 +83,14 @@ function sliceSpan(lines: string[], s: Span): string {
 // wouldn't catch fragment-relative columns; tightness catches padding bugs.)
 {
   const src = [
-    "#agg at * -> last",
+    "#acc at : e (@last loc)",
     "~game",
     "  ( ~step here ); ( ~look )",
-    "step L, +at me -> L",
-    "look, at me -> L, ^print L, = Z L",
+    "step L, +put me L",
+    "put X L / at X L",
+    "look, at me L, ^print L, = Z L",
     "who, ?Pick",
-    "guard G, !at G -> 1",
+    "guard G, !at G here",
     "~ctx2",
     "ctx2, ^p2 a",
     "#def rx",

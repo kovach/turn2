@@ -19,11 +19,13 @@ setup
   
   +card to-gain, +in-deck to-gain
 
+-- (`val` names the card an activation is about; `is` is reserved for the
+-- harness's choice resolutions)
 test-call
-  ~activate .(^it.^is call) .(^target l1)
+  ~activate .(^it.^val call) .(^target l1)
 
 test-entwine
-  ~activate .(^it.^is entwine) .(^target s2)
+  ~activate .(^it.^val entwine) .(^target s2)
 
 gain-power E, type E major
   ( ?P, !in-deck P, ~it E P, is P X );
@@ -56,7 +58,7 @@ target-power
   .(:actor S, spirit:name S mists-shift-and-flow)
   .(:target.is T)
   ~may ( true )
-  ~gather.(:to.^is T).(:it I, !spirit:presence S I)
+  ~gather.(:to.^val T).(:it I, !spirit:presence S I)
 
 may, ?X, !boolean X, is X true, ^true
 
@@ -65,12 +67,12 @@ may, ?X, !boolean X, is X true, ^true
 -- you may play the Major Power immediately, paying its cost.
 -- https://sick.oberien.de/?query=call%20on%20midnight
 -- https://spiritislandwiki.com/index.php?title=Call_on_Midnight%27s_Dream
-activate .(it.is This, card:name This call) .(target T)
+activate .(it.val This, card:name This call) .(target T)
   ( ~this-is This );
   ( has-dahan T, ~ok );
   ( ~gain-power.(^type major).(it.is Gained)
     (forget-power.forgot.is This) );
-  ~play-power.^it.^is Gained
+  ~play-power.^it.^val Gained
 
 target-power .(:actor S)
   entwined S T

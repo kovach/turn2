@@ -80,8 +80,7 @@ parseFails(`${RANGE}\n#js-def range +Lo +Hi -I { yield [0]; }`, /duplicate '#js-
 parseFails(`${RANGE}\n#js-def range +Lo -I { yield [0]; }`, /agree on arity/, "arity mismatch across clauses");
 parseFails(`${RANGE}\n#js (range x) { return x; }`, /already a '#js-def' relation/, "#js after #js-def");
 parseFails(`#js (range x) { return x; }\n${RANGE}`, /already a '#js' function/, "#js-def after #js");
-parseFails(`${RANGE}\n#agg range -> sum`, /cannot have a schema declaration/, "#agg on a js relation");
-parseFails(`${RANGE}\n#macro range X := [foo X W | count W]`, /already a macro/, "#macro on a js relation");
+parseFails(`${RANGE}\n#acc range : e e e`, /already a '#js-def' relation/, "#acc on a js relation");
 parseFails(`#js-def bad +X`, /must be followed by '\{'/, "missing body brace");
 
 // 3) Enumeration: two generators join; emits land per binding.
@@ -193,10 +192,15 @@ runFails(`${RANGE}\n\n^ range 1 2`, /can only be used as a plain match atom/, "a
 // An ask atom rejects any non-variable term at parse time (vars-only shape,
 // plans/v2-choice-actors.md), so a js-relation ask never reaches expand.
 runFails(`${RANGE}\n\n? range 1 2 3`, /'\?' accepts only variables/, "ask");
-runFails(
+parseFails(
   `${RANGE}\n\n+ go\n\ngo, range 1 2 X -> 1, ^out X`,
+  /'-> weight' was removed/,
+  "weighted match (removed syntax)",
+);
+runFails(
+  `${RANGE}\n\n+ go\n\ngo, not range 1 2 1, ^out`,
   /can only be used as a plain match atom/,
-  "weighted match",
+  "negated read of a js relation",
 );
 // A js relation inside `!(...)` is now allowed
 // (plans/v2-js-rel-in-constrain.md) — behavior is covered by
@@ -206,11 +210,6 @@ runFails(
   assert.equal(status.kind, "done");
   console.log("PASS: js relation accepted inside !(...)");
 }
-runFails(
-  `${RANGE}\n\n+ go\n\ngo, [range 0 2 X | count X], ^out`,
-  /'\[ \.\.\. \]' aggregate query/,
-  "inside bracket aggregation",
-);
 runFails(`${RANGE}\n\n+ go\n\ngo, {range A B C => ~z}, ^out`, /exception's left-hand side/, "exception LHS");
 runFails(`${RANGE}\n\ngo, range 0 2, ^out`, /takes 3 argument\(s\), given 2/, "arity mismatch at use");
 

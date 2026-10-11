@@ -88,10 +88,8 @@ export function collectVarLines(rules: Rule[]): Map<string, Map<string, { line: 
           } else {
             for (const t of a.atom.terms) note(into, t, a.span);
           }
-          if (a.weight) note(into, a.weight, a.span);
           break;
         case "Sub": walk(into, a.body); break;
-        case "AggComp": walk(into, a.body); note(into, a.reduce.out, a.span); break;
         case "Exception": for (const t of a.left.terms) note(into, t, a.span); walk(into, a.right); break;
         case "Equal": note(into, a.lhs, a.span); for (const t of exprTerms(a.rhs)) note(into, t, a.span); break;
         default: break;

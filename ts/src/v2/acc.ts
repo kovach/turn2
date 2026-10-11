@@ -33,7 +33,7 @@ import type { AccDecl, Program, Rule, RuleAtom } from "./types.js";
 import { addTuple, leastUpperBound, tokenOf, type Store } from "./store.js";
 import { ACC_MOMENT_VAR, evaluateRule, type AccEvalCtx, type AccRow, type CompiledJs } from "./eval.js";
 import { resolveJsModes, type CompiledJsRel } from "./js-rel.js";
-import { decomposeAccRule } from "./expand.js";
+import { decomposeAccRule, SYM_ACC_SETTLED } from "./expand.js";
 import { accOp, type AccOpDef } from "./acc-ops.js";
 import type { MomentHandler } from "./moment-walk.js";
 
@@ -41,6 +41,7 @@ import type { MomentHandler } from "./moment-walk.js";
 export const ACC_ROUND_CAP = 1000;
 
 const SYM_ACC_ID: Term = { tag: "Symbol", name: "*acc" };
+const SYM_SETTLED_ID: Term = { tag: "Symbol", name: "*acc-settled" };
 
 export interface AccStratum {
   relations: string[];
@@ -74,6 +75,21 @@ export function compileAcc(program: Program): CompiledAcc {
     for (const read of readsOf(r)) succ.get(read)!.add(h);
   }
   const sccs = tarjan([...program.accDecls.keys()], (n) => succ.get(n) ?? new Set());
+  // Stratified negation: `not r` in a rule for `h` needs `r` in a strictly
+  // lower stratum, i.e. not in `h`'s SCC.
+  const sccOf = new Map<string, number>();
+  sccs.forEach((rels, i) => rels.forEach((r) => sccOf.set(r, i)));
+  for (const r of lowered) {
+    const h = headOf(r);
+    for (const a of r.body) {
+      if (a.tag === "AccMatch" && a.negated && sccOf.get(a.relation) === sccOf.get(h)) {
+        throw new Error(
+          `acc rule '${r.name}': 'not ${a.relation}' is recursive through '${h}' — ` +
+          `negation must read a relation computed strictly before '${h}' (stratified negation)`,
+        );
+      }
+    }
+  }
   const strata: AccStratum[] = sccs.map((relations) => {
     const set = new Set(relations);
     const rules = lowered.filter((r) => set.has(headOf(r)));
@@ -137,7 +153,6 @@ export function computeAccAt(
   store: Store,
   compiled: CompiledAcc,
   m: Term,
-  schema: Map<string, string>,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
 ): Map<string, AccRow[]> {
@@ -177,7 +192,7 @@ export function computeAccAt(
         },
       };
       for (const rule of stratum.rules) {
-        evaluateRule({ ...rule, body: [pin, ...rule.body] }, store, schema, jsFuncs, jsRels, -1, ctx);
+        evaluateRule({ ...rule, body: [pin, ...rule.body] }, store, jsFuncs, jsRels, -1, ctx);
       }
       let changed = false;
       for (const rel of stratum.relations) {
@@ -263,9 +278,11 @@ function renderMoment(store: Store, m: Term): string {
 // rows at `m` and write them as point tuples with a deterministic id.
 export function accHandler(
   compiled: CompiledAcc,
-  schema: Map<string, string>,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
+  // Write an `_acc-settled` point row at every settled moment: the program
+  // has a `not` read, which waits on it (expand.ts decomposeAccRead).
+  markSettled = false,
 ): MomentHandler {
   return {
     name: "acc",
@@ -273,8 +290,13 @@ export function accHandler(
       return { progress: false, blocked: false };
     },
     settle(store, m) {
-      if (compiled.decls.size === 0) return false;
-      const rows = computeAccAt(store, compiled, m, schema, jsFuncs, jsRels);
+      let marked = false;
+      if (markSettled) {
+        const id: Term = hashconsTerm({ tag: "Id", atom: { terms: [SYM_SETTLED_ID, m] } }, store.hash);
+        marked = addTuple(store, { terms: [SYM_ACC_SETTLED, id] }, m, m);
+      }
+      if (compiled.decls.size === 0) return marked;
+      const rows = computeAccAt(store, compiled, m, jsFuncs, jsRels);
       let any = false;
       for (const [relation, rs] of rows) {
         const head: Term = { tag: "Symbol", name: relation };
@@ -287,7 +309,7 @@ export function accHandler(
           if (addTuple(store, atom, m, m)) any = true;
         }
       }
-      return any;
+      return any || marked;
     },
   };
 }

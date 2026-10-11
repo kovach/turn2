@@ -114,9 +114,13 @@ pin A, pin B, >warmup, ~after A B
 
 // 8) parse errors: only matches and episodes take `>`
 {
-  for (const src of ["+>p\n", "^>p\n", "?>X\n", "!>p\n", ">p -> W, +q W\n"]) {
-    assert.match(parseError(src), /'>'|marker|aggregate/, src);
+  for (const src of ["+>p\n", "^>p\n", "?>X\n", "!>p\n"]) {
+    assert.match(parseError(src), /'>'|marker/, src);
   }
+  // (`>p -> W` used to be rejected as an aggregate; weights are gone.)
+  assert.match(parseError(">p -> W, +q W\n"), /'-> weight' was removed/);
+  // `not` reads at a point; there is no "after" a negated read.
+  assert.match(parseError("#acc f : e\na, >not f y, +q\n"), /not to 'not'/);
   assert.match(parseError("{>p => ~q}\n~p\n"), /marker/);
   assert.match(parseError("#acc t : e @count\n>p / t p\n"), /acc rule bodies/);
   console.log("PASS: '>' is rejected outside matches and episodes");

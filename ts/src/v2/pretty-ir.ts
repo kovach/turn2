@@ -173,7 +173,6 @@ function line(a: RuleAtom, ctx: Ctx): string | null {
         ` by {${a.ids.map((x) => term(x, ctx)).join(", ")}}`;
     case "Atom":
     case "Sub":
-    case "AggComp":
     case "Exception":
       // Pre-expand atoms: no pretty form; fall back to the structural dump.
       return renderRuleAtom(a);

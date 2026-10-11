@@ -53,33 +53,17 @@ function renderAtomRaw(atom: Atom): string {
 export function renderRuleAtom(atom: RuleAtom): string {
   switch (atom.tag) {
     case "Atom": {
-      const w = atom.weight !== undefined ? ` -> ${renderTermRaw(atom.weight)}` : "";
       if (atom.marker === "constrain" && atom.subAtoms) {
         const subs = atom.subAtoms
-          .map((s) => `${s.kind === "agg" ? "agg " : ""}${renderAtomRaw(s.atom)}`)
+          .map((s) => `${s.negated ? "not " : ""}${renderAtomRaw(s.atom)}`)
           .join(", ");
         return `Atom[constrain] !(${subs})`;
       }
       // Ask atoms show their actor annotation (plans/v2-choice-actors.md).
       const marker = (atom.marker === "ask" && atom.actor !== undefined
         ? `ask[${atom.actor}]`
-        : atom.marker) + (atom.after ? ",after" : "");
-      return `Atom[${marker}] ${renderAtomRaw(atom.atom)}${w}`;
-    }
-    case "AggComp": {
-      const items = atom.body.map(renderRuleAtom).join(", ");
-      const { op, varName, out, bare } = atom.reduce;
-      // Keep the source-level bare form `[ Q | op V ]` readable: there the
-      // query-side name is a compiler-minted rename of `V` and printing
-      // both halves is noise.
-      // `some`/`none` have no output value; render just `op ?V` (out is `_`).
-      if (op === "some" || op === "none") {
-        return `AggComp [${items} | ${op} ?${varName}]`;
-      }
-      if (bare === true && out.tag === "Variable") {
-        return `AggComp [${items} | ${op} ?${out.name}]`;
-      }
-      return `AggComp [${items} | ${renderTermRaw(out)} = ${op} ?${varName}]`;
+        : atom.marker) + (atom.after ? ",after" : "") + (atom.exact ? ",exact" : "") + (atom.negated ? ",not" : "") + (atom.exnCheck ? ",check" : "");
+      return `Atom[${marker}] ${renderAtomRaw(atom.atom)}`;
     }
     case "Sub": {
       const inner = atom.body.map(renderRuleAtom).join("; ");
@@ -99,10 +83,10 @@ export function renderRuleAtom(atom: RuleAtom): string {
     }
     case "Match": {
       const c = atom.constraint ? `[${atom.constraint}]` : "";
-      return `Match${c} ${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
+      return `Match${c} ${atom.negated ? "not " : ""}${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
     }
     case "AccMatch":
-      return `AccMatch ${renderAtomRaw(atom.atom)} @${renderTermRaw(atom.moment)}`;
+      return `AccMatch ${atom.negated ? "not " : ""}${renderAtomRaw(atom.atom)} @${renderTermRaw(atom.moment)}`;
     case "AccContribute":
       return `AccContribute ${atom.relation} ${atom.terms.map(renderTermRaw).join(" ")}` +
         ` [moments: ${atom.moments.map(renderTermRaw).join(" ")}; ids: ${atom.ids.map(renderTermRaw).join(" ")}]`;
@@ -144,9 +128,6 @@ export function lineTag(line: number): string {
 
 export function renderProgram(program: Program, opts: RenderOptions = {}): string {
   const parts: string[] = [];
-  for (const [relation, aggregator] of program.schema) {
-    parts.push(`#agg ${relation} ${aggregator}`);
-  }
   for (const def of program.jsDefs.values()) {
     parts.push(`#js (${def.name} ${def.params.join(" ")}) { ... }`);
   }

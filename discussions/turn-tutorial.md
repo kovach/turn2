@@ -18,9 +18,17 @@ its interval.
 The assertion sigils differ in how long (and to whom) the result is visible:
 
 - `+fact` — persists from its emission to `top`: visible to every later moment.
-- `^prop` — visible within the enclosing parent episode only.
+- `^prop` — holds from a fresh moment just after the rule's current point to
+  the end of the enclosing episode, and the rule continues from that moment.
+  A `^` at the very top of a rule, before anything is matched, holds
+  everywhere.
 - `~sub` — launches a sub-episode (a new tuple with its own interval, which
   other rules can match and extend).
+
+All three start their result at a *new* moment after the rule's current
+point. So a reaction always comes after what it reacted to: whatever an
+aggregate or a choice observed at a moment is final, and nothing a rule does
+in response can change it retroactively.
 
 ### Continuing after something: `;`, `>p`, `~>p`
 
@@ -70,7 +78,7 @@ and this is one rule (the blank line changes nothing):
 
 ```
 pin Q, turn
-  downs Q -> 0
+  not fallen Q
 
   ^standing Q
 ```
@@ -172,8 +180,14 @@ don't. Three ways out:
 
    This is why ttt's `n`-based joins (`setup, n R, n C, +cell R C`) work.
 
-3. **Replace one side with an aggregate lookup** (see below) — `downs R -> 0`
-   is a value read, not a tuple match, so it adds no interval constraint.
+3. **Replace one side with an acc lookup** (see below) — `not fallen R` or
+   `fallen R` is a point read at the anchor's start, not a tuple match, so it
+   adds no interval constraint.
+
+The same applies to views derived with `^`. Each `^` fact under an episode
+starts at its own fresh moment inside it, and facts derived by different
+rules are siblings. They are all alive together at the episode's end, which
+is where to read them jointly (`( turn … );` — see Choices).
 
 Experimental: with moment-lattice mode (`v2-cli --lattice`, `?lattice` in the
 web URL), facts matched together always overlap — the window starts at the
@@ -182,39 +196,37 @@ product. Episodes still need their order to be known.
 
 ## Aggregates and negation
 
-There is no bare negation; absence is observed through aggregates, which have
-a default value:
+Aggregation is `#acc` (below); there is no other. Negation is `not`, which
+reads an `#acc` relation and succeeds when it has no matching row:
 
 ```
-#agg downs -> bool
+#acc fallen : pin
+down Q / fallen Q
 
-turn, down Q, +downs Q -> 1
-
-pin Q, turn
-downs Q -> 0
-^standing Q
+pin Q, turn, not fallen Q
+  ^standing Q
 ```
 
-`downs Q -> 0` succeeds while nothing has contributed a `1` for key `Q` —
-i.e., pin `Q` hasn't fallen. The read is snapshotted per episode, which gives
-negation sane timing: contributions made during a turn are seen by later
-turns, not by the turn making them (ttt's `did-win` works the same way).
+`not fallen Q` succeeds while no `down Q` has happened by the start of the
+turn. The read is a snapshot at the anchor's start: a pin knocked down during
+a turn is seen by later turns, not by the turn that knocked it down. (ttt's
+"has someone won" works the same way: `#acc winner : player`,
+`won P _ / winner P`, `not winner _`.)
 
-A relation may instead be declared `#reactive rel -> agg`. Its value is then
-computed by the scheduler at every moment, and a read `rel k -> V` gives the
-value at the *start* of the rule's current anchor — so `move A B, at A -> C`
-sees where `A` was before the move, and a read placed at the top of a rule
-sees the value at the very beginning of the run. A rule cannot fire on such a
-read until the scheduler has reached that moment (a pending choice below it
-holds it back). Reactive reads yield no default for an absent group, so use
-`#agg` for negation.
+- Every variable of a `not` must already be bound (`_` is allowed and means
+  "any value"); `not` binds nothing and does not move the anchor.
+- `not` only reads `#acc` relations. To negate an ordinary relation, declare
+  the boolean acc relation that states it, as `fallen` does for `down` — that
+  relation is also what the timeline shows.
+- Inside `!(...)` it reads at the choice's moment: `!(cell C, not filled C)`.
+- In a `/` rule it may read only relations computed strictly before the
+  head's own (no negation through recursion).
 
 ### Acc relations
 
-`#acc` is the newer form of the same idea and is meant to replace
-`#reactive`: a relation whose rows are *computed* at each moment by their own
-kind of rule, never asserted. Declare the relation with a type, one column
-per argument, at most one of them an aggregation marked with `@`:
+An acc relation's rows are *computed* at each moment by their own kind of
+rule, never asserted. Declare the relation with a type, one column per
+argument, at most one of them an aggregation marked with `@`:
 
 ```
 #acc damage    : e @sum
@@ -256,8 +268,8 @@ The ops, and what a key's rows look like:
 
 Two things follow from "computed at the moment". First, a key with no
 contributions has no row, so `damage you D` simply does not fire for an
-undamaged `you`; for negation use a boolean acc relation that states the
-positive condition, or `#agg`. Second, the rows at a moment are a snapshot
+undamaged `you`; for negation use `not` on a boolean acc relation that states
+the positive condition. Second, the rows at a moment are a snapshot
 taken when the engine settles that moment: if a rule reads `crowded here`
 at the start of `check` and asserts `+at extra here` in response, the extra
 occupant counts from the next moment on, not retroactively at `check`'s
@@ -274,6 +286,17 @@ edge A B, distance B C L / distance A C (s L)
 The recursion converges because `@min` only ever decreases. The same rule
 shape with `@sum` or `@count` has no well-defined fixpoint; the engine does
 not check, and reports an error if the computation fails to settle.
+
+Recursive views belong here, not in `^` rules. A `^` recursion over cyclic
+data (`turn, reach A B, edge B C, ^reach A C` over a cycle) never terminates —
+every re-derivation is a new fact at a new moment — while the boolean acc
+form computes the closure once per moment:
+
+```
+#acc reach : node node
+edge A B / reach A B
+edge A B, reach B C / reach A C
+```
 
 On the timeline an acc value is drawn as one square-cornered bar for as long
 as it holds, in a band above the episodes: `at me here` ends where
@@ -295,8 +318,9 @@ bird X, ^flies X
 peng X, { flies X => ^swims X }
 ```
 
-`{p t1..tn => e}` reads: while this rule's context is active, a `p` tuple
-matching `t1..tn` is not asserted; `e` runs in its place with the `ti`
+`{p t1..tn => e}` reads: a `p` tuple matching `t1..tn` whose interval
+overlaps this rule's context is not asserted; `e` runs in its place, on the
+tuple's interval, with the `ti`
 variables bound from the tuple. An empty right-hand side, `{ flies X => }`,
 just suppresses the tuple. Variables already bound earlier in the rule (here
 `X` from `peng X`) filter which tuples are intercepted, so `flies y` is
@@ -311,23 +335,32 @@ pattern, pass through unchanged.
 A choice point suspends evaluation and asks the harness for input:
 
 ```
-turn, (actor P), downs (s z) -> 0
+game, other P Op
+  ( turn, (actor P), not fallen (s z) );
   ?C
   !eligible C
-  ~choice C
+  ( ~move C
+    ^mover P );
+  ~turn
+  ^actor Op
 
-  is C M
-    hits M Q
-      +down Q
-      ~did-move
+move C, is C M, hits M Q, +down Q
 ```
 
-- `?C` introduces the choice; `~choice C` names it for other rules.
+- `?C` introduces the choice; `~move C` names it for other rules.
 - `!eligible C` constrains the answer: the harness offers exactly the terms
-  for which `eligible` holds *at the moment the choice was asked*. Compute
-  eligibility with ordinary rules (`turn, standing Q, ^eligible (one Q)`).
+  for which `eligible` holds *at the moment the choice was asked*. Eligibility
+  is computed with ordinary rules (`turn, standing Q, ^eligible (one Q)`),
+  and each such view starts at its own moment inside the turn — so the choice
+  is asked at the turn's *end* (`( turn … );`), the one moment where all of
+  them hold. Views derived earlier in the asking rule itself
+  (`pick, ^opt x, ^opt y, ?C, !opt C`) or read from `#acc` relations are
+  visible at an earlier ask too.
 - The harness answers by appending an `is` row binding `C` to the chosen
-  term; the nested block under `is C M` then runs with the binding.
+  term; `is C M` then matches. The row holds from the moment the choice was
+  asked, so reading it moves a rule to that moment: a rule anchored on
+  something that ended before the ask cannot read the answer and act in the
+  past.
 - If the constraints admit **no options at all**, the choice resolves to
   nothing rather than blocking: no `is` row ever appears, `.is`-gated
   follow-ups never fire, and the program simply continues — the Ceptre
@@ -362,10 +395,11 @@ Every choice therefore needs a constraint of its own at its own moment; one
 whose only `!` also mentions a later `?` is an empty-fringe error.
 
 Acc relations may appear inside `!(...)` as plain patterns
-(`!(at C here)`). The block sees the acc values at the choice's moment from
-*before* the choice is made — so a second choice asked at the very same
-moment does not see the first one's effects through an acc relation; put it
-at a later moment if it should.
+(`!(at C here)`) or negated (`!(cell C, not filled C)`). The block sees the
+state at the choice's moment from *before* the choice is made — and since a
+choice's consequences start after its moment, a second choice asked at the
+very same moment does not see the first one's effects at all; put it at a
+later moment if it should.
 
 `?X` requires `X` to be *fresh*: an ask accepts only one or more distinct
 variables (`?A B` asks two at once), and asking an already-bound variable is
@@ -430,7 +464,7 @@ turn, ?N, !(num N, ge N 3)
 Only numeric symbols compare; a name or a Peano nat is a runtime error. To
 compare a `@count` (which is Peano), match its shape instead:
 `occupancy X (s (s (s _)))`. The names `lt`/`gt`/`le`/`ge` are reserved —
-a `#js-def`, `#js`, `#acc`, `#agg` or `#macro` of that name is rejected. For
+a `#js-def`, `#js` or `#acc` of that name is rejected (and so is `not`). For
 anything beyond comparison (adding, ranges), see the next section.
 
 ## Escaping to JavaScript
@@ -467,8 +501,8 @@ yielded value just has to match, so `range 0 8 X` with `X` already bound acts
 as a membership test. Bodies must be pure functions of their arguments: a js
 relation is timeless (it doesn't constrain the rule's anchor) and is
 re-enumerated on every firing, so nondeterminism or side effects will
-misbehave. Emitting into a js relation (`^range ...`) or aggregating over one
-(`[ ... ]`) is a compile error.
+misbehave. Emitting into a js relation (`^range ...`) or negating one is a
+compile error.
 
 A js relation may also appear as a sub-atom of a `!(...)` constrain block,
 where it enumerates or filters the option domain of a choice:
@@ -482,12 +516,11 @@ Inside `!(...)` clause selection is dynamic — an argument counts as `+` when
 the component's other constraints determine it, regardless of where the js
 sub is written in the block (js subs run after all store-backed sub-atoms).
 Make sure some clause serves the modes your block can actually produce, or
-the run fails with a mode error. A `-> weight` on a js sub is a compile error
-(there are no stored rows to aggregate).
+the run fails with a mode error.
 
 ## Structuring a game
 
-The pattern shared by ttt and pins:
+The pattern shared by ttt and pins (`ts/data/v2/pins.t`):
 
 ```
 ~ game
@@ -495,16 +528,29 @@ The pattern shared by ttt and pins:
   ( ~turn
     ^actor a )
 
-turn, did-move, ~turn-complete
+-- views of the turn, derived with ^ inside it
+turn, standing Q, ^eligible (one Q)
 
+-- at the end of a turn its player moves; the next turn follows the move
 game, other P Op
-  ( turn, (actor P), (turn-complete) );
-  ( ~turn, ^actor Op )
+  ( turn, (actor P), not fallen (s z) );
+  ?C
+  !eligible C
+  ( ~move C
+    ^mover P );
+  ~turn
+  ^actor Op
 ```
 
-`;` sequences episodes. The last rule is the whole game loop: whenever a
-completed turn by `P` exists, a new turn for the opponent follows it. State
-is monotone — nothing is retracted; "the pin fell" is a persistent `+down`
-fact, and "still standing" is derived per-turn via the aggregate. Designing
-the state to be add-only (plus per-episode derived views) is the idiom that
+`;` sequences: `( turn … );` continues at the turn's end, where the move is
+chosen, and `( ~move C … );` continues after the move, where the opponent's
+turn starts. The rule is the whole game loop. State is monotone — nothing is
+retracted; "the pin fell" is a persistent `+down` fact, and "still standing"
+is a per-turn view read through `not fallen Q`. Designing the state to be
+add-only (plus per-episode derived views and acc relations) is the idiom that
 makes everything above compose.
+
+Removed forms, for readers of older programs: `#agg`, `#reactive`, weighted
+reads and writes (`rel k -> V`), bracket aggregation `[ Q | op V ]` and
+`#macro` all became `#acc` relations (with `not` for the `-> 0` negation
+idiom); the parser reports each with a pointer here.

@@ -1,9 +1,8 @@
 -- display: ttt-display.js
 
-~ game
-  ( ~setup );
-  ( ~turn
-    ^actor o)
+~game
+  ~setup;
+  ~turn, ^actor o
 
 -- Setup players and board
 --   each `+` is a fact: overlaps every later episode
@@ -18,52 +17,40 @@ setup, n (s X), +n X
 -- For each pair of numbers, create a cell
 setup, n R, n C
   +cell R C
+  +sq (cell R C)
 
--- determine filled cells
-#agg fills -> bool
+-- filled cells, as of a moment
+#acc taken : cell
+filled Cell _ / taken Cell
 
--- A cell is eligible to be chosen if it hasn't been filled earlier
-cell R C, turn
-  fills (cell R C) -> 0
-  ^eligible (cell R C)
-
--- ?C: C is a choice to be made
--- !eligible C: C must be *eligible* at the time it is chosen. A `!` sits at
---   the moment its `?` was asked, so it comes before `~choice`, which moves
---   the rule on to a later moment
--- ~choice C: other rules refer to it this way
-turn, (actor P), did-win -> 0
+turn, actor P
+  not winner _
   ?C
-  !eligible C
-  ~choice C
-  is C Cell -- The external harness writes `is` rows for each user input
-    +filled Cell P
-    ~did-fill
+  !(sq C, not taken C)
+  ( ~choice C
+    ^chooser P );
 
-turn 
-  filled Cell P
-  +fills Cell -> 1
-
--- A turn with at least one filled is finished
-turn, did-fill, ~turn-complete
-
--- After turn is complete, the other player's turn begins
 game, other P Op
-  ( turn, (actor P), (turn-complete) );
-  ( ~turn, ^actor Op )
+  (turn, actor P, not winner _);
+  ~turn
+  ^actor Op
+
+-- The external harness writes `is` rows for each user input
+choice C, (chooser P), is C Cell
+  +filled Cell P
 
 -- Directions and Adjacency
 -- (excessively general; could use to implement go-moku, etc)
-#def dx setup, n (s X), n Y, +vector X Y (s X) Y dx
-#def dy setup, n X, n (s Y), +vector X Y X (s Y) dy
-#def dxy setup, n (s X), n (s Y), +vector X Y (s X) (s Y) dxy
+#def dx   setup, n (s X), n Y, +vector X Y (s X) Y dx
+#def dy   setup, n X, n (s Y), +vector X Y X (s Y) dy
+#def dxy  setup, n (s X), n (s Y), +vector X Y (s X) (s Y) dxy
 #def dxy' setup, n (s X), n (s Y), +vector X (s Y) (s X) Y dxy'
 
 setup
   vector X1 Y1 X2 Y2 Dir,
   +adj (cell X1 Y1) (cell X2 Y2) Dir
 
--- Win condition
+-- Win condition: checked in each turn, over the moves made before it
 turn
   filled A M
   adj A B D
@@ -72,6 +59,7 @@ turn
   filled C M
   ~won M D
 
--- needed for negation
-#agg did-win -> bool
-turn, (won _ _), +did-win -> 1
+-- someone has won (persistent), for negation
+turn, (won M _), +has-won M
+#acc winner : player
+has-won M / winner M

@@ -45,8 +45,10 @@ a, +move me here
 a, +move you here
 b, +move me there
 
-c, at X L, ^pos X L
-c, occupancy L N, ^occ L N
+-- One reader firing: a non-initial \`^\` mints a moment, and sibling reader
+-- firings would branch the timeline (one bar per branch). \`crowded\` has no
+-- row at c's start, so its rule only records the read.
+c, at me L, occupancy L N, ^pos me L N
 c, crowded L, ^crowded-c L
 `;
 
@@ -190,9 +192,7 @@ opt _ / n ()
   ~pick;
   ~after
 
-pick, ^opt x, ^opt y
-
-pick, ? C, !opt C, ~choice C
+pick, ^opt x, ^opt y, ? C, !opt C, ~choice C
 
 after, n N, +seen N
 `);
@@ -207,11 +207,14 @@ after, n N, +seen N
   }
   assert.ok(runs.every((r) => r.moments.every((m) => store.settled.has(m))));
   // The choice's own moment has settled — its acc rows are written, which is
-  // what lets a `!(...)` block read them — but it is not resolved.
-  const pick = startOf(store, "pick");
-  assert.ok(store.settled.has(pick) && !store.resolved.has(pick));
-  assert.ok(runs.some((r) => r.moments.includes(pick)), "acc rows exist at the pending choice's moment");
-  const snap = accSnapshot(store, pick);
+  // what lets a `!(...)` block read them — but it is not resolved. The ask
+  // sits at `opt y`'s fresh left end (a `^` moves the anchor), where both
+  // options are alive.
+  const ask = startOf(store, "_choose");
+  assert.notEqual(ask, startOf(store, "pick"), "the ask moment lies after pick's start");
+  assert.ok(store.settled.has(ask) && !store.resolved.has(ask));
+  assert.ok(runs.some((r) => r.moments.includes(ask)), "acc rows exist at the pending choice's moment");
+  const snap = accSnapshot(store, ask);
   assert.deepEqual([snap.settled, snap.resolved], [true, false]);
   console.log("PASS: a bar stops, open, at the first unresolved moment");
 }

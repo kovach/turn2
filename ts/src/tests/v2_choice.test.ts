@@ -385,21 +385,22 @@ turn
 }
 console.log("PASS: mixed joint + independent choices at one moment");
 
-// 8) Sequential c1 episodes with a `! at C -> here` constrain-agg that
-//    narrows after the first choice. After picking t1, t1's last `at`
-//    becomes `there`, so only t2 satisfies `at C -> here` in the second
-//    c1. Exercises canonical-moment evaluation across the two
-//    constrain rows in one component (! thing + ! at) and the agg row
-//    seeing the post-resolution `+at t1 there`.
+// 8) Sequential c1 episodes with a `! at C here` constraint on an `@last`
+//    acc relation that narrows after the first choice. After picking t1,
+//    t1's latest `at` becomes `there`, so only t2 satisfies `at C here` in
+//    the second c1. Exercises canonical-moment evaluation across the two
+//    constrain rows in one component (! thing + ! at) and the acc row
+//    seeing the post-resolution `+put t1 there`.
 {
   const src = `
 ~game
 
-#agg at * -> last
+#acc at : e (@last loc)
+put It L / at It L
 
 game, +thing t1, +thing t2, +thing bad
-  +at t1 -> here
-  +at t2 -> here
+  +put t1 here
+  +put t2 here
   +monster t1
   ( ~c1 );
   ( ~c1 );
@@ -409,13 +410,13 @@ c1
   !thing C
   ~it C
 
-c1, (it C), !at C -> here
+c1, (it C), !at C here
 
 c1
-  ( it C, is C V ); +at V there
+  ( it C, is C V ); +put V there
 `;
   // Phase 1: first c1 surfaces. Options should be {t1, t2} — `bad` is
-  // excluded by `! at C -> here` (no `at bad` contribution).
+  // excluded by `! at C here` (no `at bad` row).
   const r1 = runFixpoint(ok(src));
   assert.equal(r1.status.kind, "active-choices", `phase1 status: ${r1.status.kind}`);
   if (r1.status.kind !== "active-choices") throw new Error("unreachable");
@@ -429,9 +430,9 @@ c1
   const activeText = renderTerm(r1.store, comp1.activeTerms[0]!);
   const src2 = src + `\n^ is ${activeText} t1\n`;
 
-  // Phase 2: second c1 surfaces; t1 now has `at t1 -> there` from the
-  // sub-rule (`( it C, is C V ); +at V there`), so under `last` it no
-  // longer satisfies `at C -> here`. Only t2 remains.
+  // Phase 2: second c1 surfaces; t1 now has `at t1 there` from the
+  // sub-rule (`( it C, is C V ); +put V there`), so under `@last` it no
+  // longer satisfies `at C here`. Only t2 remains.
   const r2 = runFixpoint(ok(src2));
   assert.equal(r2.status.kind, "active-choices", `phase2 status: ${r2.status.kind}`);
   if (r2.status.kind !== "active-choices") throw new Error("unreachable");
@@ -450,7 +451,8 @@ c1
 //    ask moment is written next to the `?`.
 {
   const spread = `
-#agg at * -> last
+#acc at : e (@last loc)
+put It L / at It L
 
 (~setup); ~t
 
@@ -462,23 +464,24 @@ t, it _, ~a
 
 t, it _, ~b
 
-a, it C, +at it -> a
+a, it C, +put it a
   !thing C
 
-b, it C, !at C -> a
+b, it C, !at C a
 `;
   const r1 = runFixpoint(ok(spread));
   assert.equal(r1.status.kind, "late-constraint-error", `spread status: ${r1.status.kind}`);
   console.log("PASS: a constraint emitted from a later episode is reported as late");
 
   const local = `
-#agg at * -> last
+#acc at : e (@last loc)
+put It L / at It L
 
 (~setup); ~t
 
-setup, +thing it, +thing other, +at it -> a
+setup, +thing it, +thing other, +put it a
 
-t, ?C, !thing C, !at C -> a, ~it C
+t, ?C, !thing C, !at C a, ~it C
 `;
   const r2 = runFixpoint(ok(local));
   assert.equal(r2.status.kind, "active-choices", `local status: ${r2.status.kind}`);

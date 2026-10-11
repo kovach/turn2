@@ -14,8 +14,7 @@
 // compound, a Peano nat — is a runtime error naming the relation.
 //
 // `parseProgram` seeds `Program.jsRels` from `builtinJsRels()` and rejects a
-// user declaration of the same name (`#js-def`, `#js`, `#acc`, `#agg`,
-// `#reactive`, `#macro`).
+// user declaration of the same name (`#js-def`, `#js`, `#acc`).
 
 import type { JsRelDef } from "./types.js";
 

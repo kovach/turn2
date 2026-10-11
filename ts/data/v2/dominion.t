@@ -1,5 +1,6 @@
 -- Each turn has three phases: Action, then Buy, then Clean-up
-turn
+-- (they start after the turn's actor, so the actor is visible in them)
+turn.actor _
   ~action-phase;
   ~buy-phase ;
   ~cleanup-phase
@@ -10,36 +11,40 @@ action-phase
 
 do-action
   ~choose-action.it.is A ;
-  ~play-action.it.^is A ;
+  ~play-action.it.^val A ;
 
 -- Play has three steps: announce, move into play, follow its instructions.
-play-action.it.is A
+-- (`val` is the card a play or activation is about; `is` is reserved for
+-- the harness's choice resolutions)
+play-action.it.val A
   ~announce A ;
   ~move A in-play ;
-  ~activate.^it.^is A
+  ~activate.^it.^val A
 
 -- How to activate an action (two examples)
 
 -- Throne Room:
 -- You may play an action card from your hand twice.
 #def throne-room
-activate.it.is.card:name throne-room,
+activate.it.val.card:name throne-room,
   ( ~choose-action.it.is C );
-  ( ~play-action.it.^is C);
-  ( ~play-action.it.^is C)
+  ( ~play-action.it.^val C);
+  ( ~play-action.it.^val C)
 
 -- Village:
 -- +1 Card +2 Actions
-activate.it.is.card:name village
+activate.it.val.card:name village
   ( ~gain-card );
   ( ~gain-action );
   ( ~gain-action )
   
 -- The Rest --
 
-#agg at _ -> last
+-- where each card is: its latest move, as of a moment
+#acc at : card (@last place)
+put It To / at It To
 move It To
-  +at It -> To
+  +put It To
 
 ~game
   (~setup);
@@ -49,7 +54,7 @@ move It To
 mk-action Name
   +card C
   +card:name C Name
-  +at C -> you-hand
+  +put C you-hand
   +action C
   +icon C
   +icon:name C Name
@@ -57,7 +62,7 @@ mk-action Name
 mk-copper Name
   +card C
   +card:name C copper
-  +at C -> you-hand
+  +put C you-hand
   +treasure C
   +icon C
   +icon:name C copper
@@ -83,7 +88,8 @@ mk-bool
   +icon:name 0 do-not
 
 -- your-hand refers to the hand of the active player this turn
-turn.actor.player:hand.^your-hand
+#acc your-hand : place
+turn.actor.player:hand H / your-hand H
 
 -- A `!` sits at the moment its `?` was asked. choose-card asks at its own
 -- start, so its constraint comes before `~it` (which moves the rule on), and
@@ -99,13 +105,13 @@ choose-action E
 choose-card E
   your-hand H
   ? Card
-  !at Card -> H
+  !(at Card H)
   ~it E Card
 
 play-action.^it C
 
-#def act-c activate.it.is.card:name c, ~go-c
-#def act-d activate.it.is.card:name d, ~go-d
+#def act-c activate.it.val.card:name c, ~go-c
+#def act-d activate.it.val.card:name d, ~go-d
 
 gain-action, ~action-token
 

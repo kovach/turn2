@@ -197,9 +197,9 @@ setup
   +icon x
   +icon y
   +icon z
-  +at x -> board
-  +at y -> board
-  +at z -> board
+  +at x board
+  +at y board
+  +at z board
   +left:right x y
   +above:below x z
 `;
@@ -225,7 +225,6 @@ setup
   };
   const out = createDefaultDisplay(api)!.render(store, {
     components: [],
-    schema: parsed.schema,
     selectedIdx: 0,
     pending: null,
   });

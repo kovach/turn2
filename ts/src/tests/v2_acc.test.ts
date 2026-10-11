@@ -66,6 +66,7 @@ function runErr(src: string): string {
 }
 
 const three = "(s (s (s z)))";
+function peanoText(n: number): string { let t = "z"; for (let i = 0; i < n; i++) t = `(s ${t})`; return t; }
 
 // ===== 1) Parse ==============================================================
 {
@@ -109,8 +110,9 @@ occupancy X (s (s (s _))) / crowded X
   assert.match(err(`#acc bar : e\nfoo X, (baz X) / bar X`), /only matches and '='/);
   assert.match(err(`#acc bar : e\nfoo X / bar X / bar X`), /exactly one '\/'/);
   assert.match(err(`#acc bar : e\nfoo X / +bar X`), /plain atom/);
-  assert.match(err(`#acc bar : e\n#agg bar -> sum`), /already has a '#agg'/);
-  assert.match(err(`#agg q -> sum\n#acc bar : e\nfoo X, q X -> N / bar X`), /cannot read '#agg q'/);
+  // `#agg` / `-> weight` were removed; their uses are migration errors.
+  assert.match(err(`#acc bar : e\n#agg bar -> sum`), /'#agg' was removed/);
+  assert.match(err(`#acc bar : e\nfoo X, q X -> N / bar X`), /'-> weight' was removed/);
   console.log("PASS: acc parse errors");
 }
 {
@@ -121,10 +123,10 @@ occupancy X (s (s (s _))) / crowded X
     throw new Error("expected an error");
   };
   assert.match(bad(`#acc bar : e\nfoo X / bar X\n^foo a, +bar b`), /is an acc relation/);
-  assert.match(bad(`#acc bar : e\nfoo X / bar X\nbar X -> N, ^seen N`), /is an acc relation/);
+  assert.match(bad(`#acc bar : e\nfoo X / bar X\nbar X -> N, ^seen N`), /'-> weight' was removed/);
   assert.match(bad(`#acc bar : e\nfoo X / bar Y`), /head variable 'Y' is not bound/);
   // Inside `!(...)` an acc relation is a plain pattern: no weight, full arity.
-  assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C -> N)`), /cannot take '-> weight' inside/);
+  assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C -> N)`), /'-> weight' was removed/);
   assert.match(bad(`#acc bar : e\nfoo X / bar X\n?C, !(bar C extra)`), /has 1 column\(s\), pattern has 2 \(inside/);
   console.log("PASS: acc expand errors");
 }
@@ -361,9 +363,11 @@ opt _ / n ()
   ~pick;
   ~after
 
-pick, ^opt x, ^opt y
-
-pick, ?${actor} C, !opt C, ~choice C
+-- The options are derived in the asking rule: under fresh-left \`^\` the
+-- anchor moves through each \`^\`, so both are alive where \`?\` asks
+-- (plans/v2-caret-fresh-left.md §2.1). Derived in a sibling rule they would
+-- start after the ask moment and the choice would have no options.
+pick, ^opt x, ^opt y, ?${actor} C, !opt C, ~choice C
 
 after, n N, +seen N
 `;
@@ -404,25 +408,28 @@ total a T, ^t T
   console.log("PASS: #js-def in an acc body, @js in an acc head");
 }
 
-// ===== 10) Reactive read inside an acc body =================================
+// ===== 10) A computed value read inside another acc body ===================
+// (Formerly a `#reactive hp -> sum` read; the value is now itself an acc
+// relation, so `low` sits in a stratum above `hp`.)
 {
   const { store, status } = runFixpoint(ok(`
-#reactive hp -> sum
+#acc hp : @sum
 #acc low : e
 
-hp -> N, small N / low me
+dmg N / hp N
+hp N, small N / low me
 #js-def small +N { if (N < 5) yield []; }
 
 ~game
   ~a; ~c
 
-a, +hp -> 3
+a, +dmg 3
 
 c, low X, ^low-c X
 `));
   assert.equal(status.kind, "done");
   assert.deepEqual(withHead(store, "low-c"), ["low-c me"]);
-  console.log("PASS: a #reactive value can be read inside an acc body");
+  console.log("PASS: an acc value can be read inside another acc body");
 }
 
 // ===== 11) Non-convergence hits the round cap ===============================
@@ -508,7 +515,7 @@ n X / n (s X)
 #acc damage : e @sum
 hit X A / damage X (@sum A)
 `);
-  const handler = accHandler(compileAcc(program), program.schema, new Map(), new Map());
+  const handler = accHandler(compileAcc(program), new Map(), new Map());
   for (let guard = 0; guard < 50; guard++) {
     const U = unresolvedMoments(s);
     if (U.length === 0) break;
@@ -590,6 +597,11 @@ a, +move it there
 }
 
 // ===== 15) Acc at a moment is the state before its choices resolve ===========
+// Under fresh-left `^` (plans/v2-caret-fresh-left.md §2.2) a reaction to a
+// choice starts strictly after the ask moment, so the snapshot at a moment
+// is also its final state, and a second choice chained after `^took` sits at
+// took's own moment and sees it. (Before the change both choices shared one
+// moment and the second saw the acc state from before the first.)
 {
   const { store, status } = runFixpoint(ok(`
 #acc n : @count
@@ -599,27 +611,283 @@ took _ / n ()
   ~pick;
   ~after
 
-pick, ^opt x
-
 pick, n N, ^before N
 
-pick, ?[rng] A, !(opt A), is A V, ^took V
+pick, ^opt x, ?[rng] A, !(opt A), is A V, ^took V
   ?[rng] B, !(n B), is B W, +saw W
 
 after, n N, +later N
 `), 200, 5000, { random: () => 0 });
   assert.equal(status.kind, "done");
-  // An ordinary reader at the choice's moment fires before the choice is
-  // made, and sees the state from before it.
+  // An ordinary reader at the start of `pick` sees the state from before
+  // any choice.
   assert.deepEqual(withHead(store, "before"), ["before z"]);
-  // The documented limit: a second choice chained at the same moment sees the
-  // acc state from before the first — `^took` is alive at that moment, but
-  // acc there was written once, when the moment settled.
   assert.deepEqual(withHead(store, "took"), ["took x"]);
-  assert.deepEqual(withHead(store, "saw"), ["saw z"]);
-  // `^took` lives inside `pick`, so a later moment does not see it either.
+  // The chained choice is asked at took's moment, where `took` is alive and
+  // counted.
+  assert.deepEqual(withHead(store, "saw"), ["saw (s z)"]);
+  // `^took` lives inside `pick`, so a later moment does not see it.
   assert.deepEqual(withHead(store, "later"), ["later z"]);
-  console.log("PASS: acc at a choice's moment is a snapshot from before the choice");
+  // No moment's acc rows disagree with what is alive there: `took x` is not
+  // alive at the ask moment of A.
+  const took = store.tuples.find((t) => rt(store, t.atom.terms[0]!) === "took")!;
+  const askA = store.tuples.find((t) => rt(store, t.atom.terms[0]!) === "_choose")!;
+  assert.notEqual(tokenOf(store, took.l), tokenOf(store, askA.l), "took must start after A's ask moment");
+  console.log("PASS: acc at a choice's moment is a snapshot; a chained choice after `^` sees it");
+}
+
+// ===== 16) Moment walk frontier ==============================================
+// (Moved from v2_reactive_aggregate.test.ts with `#reactive`; the walk itself
+// stays — acc settling, choices and exception checks run on it.)
+{
+  const s = createStore();
+  const a = intern(s, sym("a")), b = intern(s, sym("b")), j = intern(s, sym("j"));
+  addOrder(s, a, j);
+  addOrder(s, b, j);
+  const step = (): string[] => {
+    const F = frontier(s, unresolvedMoments(s));
+    markResolved(s, F);
+    return F.map((tok) => rt(s, s.momentTerms.get(tok)!)).sort();
+  };
+  assert.deepEqual(step(), ["bot"]);
+  assert.deepEqual(step(), ["a", "b"]);
+  assert.deepEqual(step(), ["j"]);
+  assert.deepEqual(step(), []);
+  console.log("PASS: frontier walks a diamond bot → {a, b} → j");
+}
+{
+  // `x < y < x`: the edge test excludes both forever; the strict-order
+  // fallback resolves the cycle as a unit.
+  const s = createStore();
+  const x = intern(s, sym("x")), y = intern(s, sym("y")), z = intern(s, sym("z"));
+  addOrder(s, x, y);
+  addOrder(s, y, x);
+  addOrder(s, y, z);
+  const step = (): string[] => {
+    const F = frontier(s, unresolvedMoments(s));
+    markResolved(s, F);
+    return F.map((tok) => rt(s, s.momentTerms.get(tok)!)).sort();
+  };
+  assert.deepEqual(step(), ["bot"]);
+  assert.deepEqual(step(), ["x", "y"]);
+  assert.deepEqual(step(), ["z"]);
+  console.log("PASS: frontier falls back to strict minimality on an order cycle");
+}
+
+// ===== 17) A rule-initial read samples at bot =================================
+// (Formerly `#reactive`.) The anchor of a rule-initial read is (bot, top), so
+// it samples the relation at `bot`: a keyless `@sum` reads its zero row once,
+// not every later value.
+{
+  const { store, status } = runFixpoint(ok(`
+#acc total : @sum
+pt N / total N
+
+~game
+  +pt 3
+  +pt 4
+
+total N, +seen N
+`));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(withHead(store, "seen"), ["seen 0"]);
+  console.log("PASS: a rule-initial acc read samples at bot (zero, not a subscription)");
+}
+
+// ===== 18) Recursion at one moment is a stratum fixpoint ======================
+// (Formerly same-moment `#reactive` recursion + `computeAggStrata`.) A boolean
+// closure over a cyclic graph converges inside its stratum; a relation over
+// it, positive or negated, sits in a stratum above and sees the final value.
+// (Counting acc rows read in an acc body is covered by test 18b.)
+{
+  const { store, status } = runFixpoint(ok(`
+#acc reach : n n
+#acc cyclic : n
+#acc acyclic : n
+
+edge A B / reach A B
+edge A B, reach B C / reach A C
+reach X X / cyclic X
+node X, not cyclic X / acyclic X
+
+~game
+  ( ~setup ); ( ~check )
+
+setup
+  +node a
+  +node b
+  +node c
+  +node d
+  +edge a b
+  +edge b c
+  +edge c a
+  +edge c d
+
+check, reach A B, ^r A B
+check, cyclic X, ^cyc X
+check, acyclic X, ^acyc X
+`));
+  assert.equal(status.kind, "done");
+  const nodes = ["a", "b", "c"];
+  const want = [...nodes.flatMap((x) => nodes.map((y) => `r ${x} ${y}`)), ...nodes.map((x) => `r ${x} d`)].sort();
+  assert.deepEqual(withHead(store, "r"), want, "closure includes all self-loops");
+  assert.deepEqual(withHead(store, "cyc"), ["cyc a", "cyc b", "cyc c"]);
+  assert.deepEqual(withHead(store, "acyc"), ["acyc d"]);
+  console.log("PASS: a boolean closure converges in its stratum; strata above (positive and `not`) see its final value");
+}
+
+// ===== 19) Bracket `some`/`none` and correlation, as acc reads ===============
+// (Formerly `[ Q | some V ]` / `[ Q | none V ]` with a prefix-bound key.)
+// The correlated variable becomes a key column; `some` is a positive read of
+// a boolean relation and `none` is `not`.
+{
+  const { store, status } = runFixpoint(ok(`
+#acc spent-card : card
+#acc winner : player
+
+spent C _ / spent-card C
+won W / winner W
+
+~game
+  ( ~setup ); ( ~check )
+
+setup
+  +card c1
+  +card c2
+  +spent c1 3
+
+check, card C, spent-card C, ^some-spent C
+check, card C, not spent-card C, ^none-spent C
+check, not winner _, ^nobody-won
+`));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(withHead(store, "some-spent"), ["some-spent c1"]);
+  assert.deepEqual(withHead(store, "none-spent"), ["none-spent c2"]);
+  assert.equal(withHead(store, "nobody-won").length, 1);
+  console.log("PASS: some/none become a positive read and `not` on a keyed boolean relation");
+}
+
+// ===== 20) `not`: negation over acc relations =================================
+// (plans/v2-caret-fresh-left.md §3.) `not r t̄` succeeds iff no row of `r`
+// matches at the read's moment: the anchor's start in an ordinary rule, the
+// component's moment inside `!(...)`, `m` in an acc body.
+{
+  // Ordinary rules: a snapshot at each anchor's start. `down a` happens during
+  // t1, so at t1's start all three pins stand; at t2's start only b and c.
+  const { store, status } = runFixpoint(ok(`
+#acc fallen : pin
+#acc standing : pin
+
+~game
+  ( ~setup ); ( ~t1 ); ( ~t2 )
+
+setup
+  +pin a
+  +pin b
+  +pin c
+
+t1, +down a
+
+down Q / fallen Q
+pin Q, not fallen Q / standing Q
+
+t1, pin Q, not fallen Q, ^up-at-t1 Q
+t2, pin Q, not fallen Q, ^up-at-t2 Q
+t2, standing Q, ^standing-at-t2 Q
+`));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(withHead(store, "up-at-t1"), ["up-at-t1 a", "up-at-t1 b", "up-at-t1 c"]);
+  assert.deepEqual(withHead(store, "up-at-t2"), ["up-at-t2 b", "up-at-t2 c"]);
+  // In an acc body, over a strictly lower stratum.
+  assert.deepEqual(withHead(store, "standing-at-t2"), ["standing-at-t2 b", "standing-at-t2 c"]);
+  console.log("PASS: `not` in ordinary rules is a snapshot at the anchor start; in acc bodies it reads a lower stratum");
+}
+{
+  // Inside `!(...)`: the options are the pins with no `fallen` row at the
+  // component's moment.
+  const { store, status } = runFixpoint(ok(`
+#acc fallen : pin
+down Q / fallen Q
+
+~game
+  ( ~setup ); ( ~t )
+
+setup
+  +pin a
+  +pin b
+  +down a
+
+t, ?C, !(pin C, not fallen C), ~pick C
+`));
+  assert.equal(status.kind, "active-choices");
+  if (status.kind !== "active-choices") throw new Error("unreachable");
+  const opts = status.components[0]!.options.map((o) => o.map((t) => rt(store, t)).join(",")).sort();
+  assert.deepEqual(opts, ["b"]);
+  console.log("PASS: `not` inside `!(...)` filters a choice's options");
+}
+{
+  // Errors.
+  const bad = (src: string): string => {
+    const p = parse(src);
+    if ("message" in p) return p.message;
+    try { runFixpoint(p); } catch (e) { return (e as Error).message; }
+    throw new Error(`expected an error for: ${src}`);
+  };
+  // On an ordinary relation: declare a boolean acc relation instead.
+  assert.match(bad(`+pin a\nx, not pin a, ^y`), /'not' reads an '#acc' relation; 'pin' is not one/);
+  // Range restriction.
+  assert.match(bad(`#acc f : e\n+e a\nx, not f X, ^y`), /needs its variables bound before it \(unbound: X\)/);
+  // Negation within an SCC.
+  assert.match(bad(`#acc f : e\n#acc g : e\ne X / f X\ne X, not g X / f X\nf X / g X`), /stratified negation/);
+  // With a marker.
+  assert.match(bad(`#acc f : e\n+e a\nx, +not f a`), /'not' only prefixes a plain read/);
+  // Negated acc head.
+  assert.match(bad(`#acc f : e\nf X / not f X`), /acc rule head cannot be negated/);
+  // `not` is reserved: it cannot name a relation.
+  assert.match(bad(`+not\n`), /'not' is reserved/);
+  assert.match(bad(`x, not, ^y\n`), /'not' is reserved/);
+  // Inside `!(...)`: acc relations only, variables bound by a positive sub.
+  assert.match(bad(`+pin a\nx, ?C, !(pin C, not pin C)`), /'not' inside '!\(\.\.\.\)' reads an '#acc' relation/);
+  console.log("PASS: `not` errors");
+}
+
+// ===== 18b) Counting acc rows read in an acc body ============================
+// Each matched acc row is part of a contribution's identity, so rows that
+// share a moment are not collapsed: three `k` rows count as three, both for a
+// direct count of the tuples and for a count over the acc rows; a count over a
+// cyclic closure's rows counts every pair.
+{
+  const { store, status } = runFixpoint(ok(`
+#acc k : e
+#acc n : @count
+#acc m : @count
+#acc reach : n n
+#acc pairs : @count
+
+item X / k X
+k _ / n ()
+item _ / m ()
+edge A B / reach A B
+edge A B, reach B C / reach A C
+reach _ _ / pairs ()
+
+^item a
+^item b
+^item c
+^edge x y
+^edge y z
+^edge z x
+~check
+
+check, n N, ^via-acc-rows N
+check, m N, ^via-tuples N
+check, pairs N, ^closure-pairs N
+`));
+  assert.equal(status.kind, "done");
+  assert.deepEqual(withHead(store, "via-acc-rows"), [`via-acc-rows ${peanoText(3)}`]);
+  assert.deepEqual(withHead(store, "via-tuples"), [`via-tuples ${peanoText(3)}`]);
+  assert.deepEqual(withHead(store, "closure-pairs"), [`closure-pairs ${peanoText(9)}`]);
+  console.log("PASS: counting acc rows read in an acc body");
 }
 
 console.log("ALL v2 acc tests passed");

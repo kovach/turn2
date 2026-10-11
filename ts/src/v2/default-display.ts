@@ -25,7 +25,6 @@ import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
 import type { ComponentOptions } from "./types.js";
 import { candidatesByHead, intervalContains, tokenOf } from "./store.js";
-import { aggregateOver } from "./scheduler.js";
 import { isTrivialLayout, layoutIcons, type LayoutEdge } from "./icon-layout.js";
 
 interface ClickIntent {
@@ -44,7 +43,6 @@ interface DisplayApi {
 
 interface DisplayCallContext {
   components: ComponentOptions[];
-  schema: Map<string, string>;
   selectedIdx: number;
   pending: Term | null;
 }
@@ -163,7 +161,6 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     store: Store,
     M: Term,
     iconKeys: Set<number>,
-    schema: Map<string, string>,
   ): { childToParents: Map<number, number[]>; orphans: Term[] } {
     const childToParents = new Map<number, number[]>();
     const orphans: Term[] = [];
@@ -178,32 +175,15 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       if (!arr.includes(lk)) arr.push(lk);
     }
 
-    if (schema.has("at")) {
-      // `#agg at * -> <aggregator>`: use aggregateOver so e.g. `last`
-      // collapses multiple `+at X -> Y` contributions into one parent
-      // per icon. Pattern: `(at _free _free)` — group key is the X
-      // slot, weight is the target L.
-      const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
-      const aggPattern: Atom = { terms: [{ tag: "Symbol", name: "at" }, SYM_FREE, SYM_FREE] };
-      const results = aggregateOver(store, aggPattern, M, M, schema);
-      for (const r of results) {
-        // filledTerms = [head, X], weight = L.
-        const X = r.filledTerms[1];
-        const L = r.weight;
-        if (X === undefined) continue;
-        record(X, L);
-      }
-    } else {
-      // No schema for `at`: fall back to raw iteration. Each `+at`
-      // contribution is taken at face value.
-      for (const idx of candidatesByHead(store, "at")) {
-        const t = store.tuples[idx]!;
-        const ts = t.atom.terms;
-        // [head, X, L, id]
-        if (ts.length !== 4) continue;
-        if (!intervalContains(store, t.l, t.r, M, M)) continue;
-        record(ts[1]!, ts[2]!);
-      }
+    // `at X L` rows alive at M: plain tuples, or the point rows of an
+    // `#acc at : e (@last loc)` relation (one per temporally latest move).
+    for (const idx of candidatesByHead(store, "at")) {
+      const t = store.tuples[idx]!;
+      const ts = t.atom.terms;
+      // [head, X, L, id]
+      if (ts.length !== 4) continue;
+      if (!intervalContains(store, t.l, t.r, M, M)) continue;
+      record(ts[1]!, ts[2]!);
     }
     return { childToParents, orphans };
   }
@@ -490,7 +470,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     const names = collectIconNames(store, M);
     const icons = collectIcons(store, M, names);
     const iconKeys = new Set(icons.map((i) => i.termKey));
-    const { childToParents, orphans } = collectAt(store, M, iconKeys, ctx.schema);
+    const { childToParents, orphans } = collectAt(store, M, iconKeys);
     const { roots, childrenOf, cycleWarning } = buildIconTree(icons, childToParents);
 
     const containers = new Map<number, IconNode[]>([[ROOT_KEY, roots]]);

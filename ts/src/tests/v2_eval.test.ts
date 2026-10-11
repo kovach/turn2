@@ -76,7 +76,9 @@ foo a
 // aren't seeded, so neither sub-rule reaches its end successfully — but
 // the producer atoms before the failing matches still leave their tuples
 // (no rollback in this stage). Verify the seed survives and at least one
-// produced tuple appears (~gather, before sub-rule 1 fails).
+// produced tuple appears (~gather, before sub-rule 1 fails). The spec's
+// assignment relation is spelled `assign` here: `is` is reserved for choice
+// resolutions (rules cannot emit it).
 {
   const src = `
 + activate a1
@@ -93,15 +95,15 @@ activate A
     it G X
     to G To
     ! dahan X
-    + is To T )
+    + assign To T )
 
   ( at D T
     dahan D
     ~ defend D1
     it D1 I
     amount D1 A
-    + is I T
-    + is A 1 )
+    + assign I T
+    + assign A 1 )
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
@@ -174,15 +176,18 @@ p X
   console.log("PASS: turn-program-2 produces q 2");
 }
 
-// 6) aggregation: % points -> sum
+// 6) aggregation: a keyless `@sum` over contribution events, read at the
+// anchor's start (plans/v2-caret-fresh-left.md §5.4: `#agg points -> sum` with
+// `+ points -> 3` became an `#acc` relation fed by an event relation).
 {
   const src = `
-#agg points -> sum
+#acc points : @sum
+pt N / points N
 
-+ points -> 3
-  + points -> 4
++ pt 3
+  + pt 4
   + bar
-  points -> N
+  points N
   + result N
 `;
   const { store } = runFixpoint(ok(src));
@@ -191,24 +196,24 @@ p X
   console.log("PASS: aggregation sum");
 }
 
-// 6b) aggregation with a free key in the weighted-match pattern. `score X
-// -> N` has X free, so the aggregation groups by X and emits one agg-result
-// per distinct X value, with the weights summed within each group.
+// 6b) aggregation with a free key: `score X N` with X free enumerates one
+// row per key, each the group's sum.
 {
   const src = `
-#agg score -> sum
+#acc score : player @sum
+pts P N / score P N
 
 ~ game, ( ~ init ); ( ~ check )
 
 -- "global" tuples
 init
-  + score alice -> 10
-  + score alice -> 5
-  + score bob -> 20
+  + pts alice 10
+  + pts alice 5
+  + pts bob 20
   + marker
 
 check
-  score X -> N
+  score X N
   + total X N
 `;
   const { store } = runFixpoint(ok(src));
@@ -315,14 +320,20 @@ foo X
   console.log("PASS: = parser errors");
 }
 
-// 13) Aggregate scheduling: tier selection must respect the prior partial
-// order so that ok1/ok2 see dahan-count contributions instead of firing
-// prematurely with the bound-key empty-zero fallback. Regression test.
+// 13) Counts over contributions made in an earlier sibling episode
+// (formerly the dahan-count demand-aggregate scheduling regression; that
+// bug class went with `#agg`). `at` is an `@last` relation fed by a
+// persisting `moved` event; `dahan-count` counts dahan per land at the
+// reader's anchor start; a land with no dahan has no `@count` row, so its
+// zero is observed with `not` on a boolean relation.
 {
   const src = `
-#agg at e -> last
+#acc at : e (@last land)
+#acc dahan-count : land @count
+#acc dahan-at : land
 
-move It To, +at It -> To
+move It To, +moved It To
+moved It To / at It To
 
 ~game
   ( ~setup );
@@ -334,116 +345,109 @@ setup
   +dahan d1, ~move d1 l1
   +dahan d2, ~move d2 l1
 
-#agg dahan-count land -> count
+at D L, dahan D / dahan-count L ()
+at D L, dahan D / dahan-at L
 
-look, ~locations, ~counts
-
-locations
-  at X -> L
-  ^ here X L
-
-here D L, dahan D, ^has-dahan L, ^dahan-count L -> ()
-
-counts, dahan-count L -> N, ^hey N
-
-look
-  (counts, land L, dahan-count L -> N)
-  ^ok1 L N
-
-look
-  (counts, dahan-count L -> N)
-  ^ok2 L N
+look, land L, dahan-count L N, ^ok1 L N
+look, land L, not dahan-at L, ^ok1 L z
+look, dahan-count L N, ^hey N
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
   assert(tuples.includes("ok1 l1 (s (s z))"), `missing 'ok1 l1 (s (s z))': ${tuples.filter((t) => t.startsWith("ok"))}`);
   assert(tuples.includes("ok1 l2 z"), `missing 'ok1 l2 z': ${tuples.filter((t) => t.startsWith("ok"))}`);
-  assert(tuples.includes("ok2 l1 (s (s z))"), `missing 'ok2 l1 (s (s z))': ${tuples.filter((t) => t.startsWith("ok"))}`);
+  assert(!tuples.includes("ok1 l1 z"), `unexpected 'ok1 l1 z': ${tuples.filter((t) => t.startsWith("ok"))}`);
   assert(tuples.includes("hey (s (s z))"), `missing 'hey (s (s z))': ${tuples.filter((t) => t.startsWith("hey"))}`);
-  console.log("PASS: aggregate tier respects prior order");
+  console.log("PASS: acc count over an earlier sibling episode; zero via not");
 }
 
-// 14) bool aggregate: assertion present -> query yields 1.
+// 14) Boolean `#acc` relation (the old `#agg p -> bool`): a positive read
+// sees a contribution made earlier on the rule's chain.
 {
   const src = `
-#agg p -> bool
+#acc p : e
+pp A / p A
 
-+p a -> 1
-  p a -> 1
++pp a
+  p a
   +ok-present x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
   assert(tuples.includes("ok-present x"), `expected 'ok-present x', got: ${tuples.join(" | ")}`);
-  console.log("PASS: bool aggregate present -> 1");
+  console.log("PASS: boolean acc present");
 }
 
-// 15) bool aggregate: no assertion -> query `-> 0` succeeds.
+// 15) Absence is `not` (the old `p a -> 0`): no contribution, no row.
 {
   const src = `
-#agg p -> bool
+#acc p : e
+pp A / p A
 
-p a -> 0
+not p a
   +ok-absent x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
   assert(tuples.includes("ok-absent x"), `expected 'ok-absent x', got: ${tuples.join(" | ")}`);
-  console.log("PASS: bool aggregate absent -> 0");
+  console.log("PASS: boolean acc absent via not");
 }
 
-// 16) bool aggregate: free variable binds to the result.
+// 16) Present and absent side by side (the old `p a -> X` binding 1/0).
 {
   const src = `
-#agg p -> bool
+#acc p : e
+pp A / p A
 
-+p a -> 1
-  p a -> X
-  +saw-present X
-
-p b -> Y
-  +saw-absent Y
++pp a
+  p a
+  +saw-present a
+  not p b
+  +saw-absent b
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("saw-present 1"), `expected 'saw-present 1', got: ${tuples.join(" | ")}`);
-  assert(tuples.includes("saw-absent 0"), `expected 'saw-absent 0', got: ${tuples.join(" | ")}`);
-  console.log("PASS: bool aggregate free variable binds 0/1");
+  assert(tuples.includes("saw-present a"), `expected 'saw-present a', got: ${tuples.join(" | ")}`);
+  assert(tuples.includes("saw-absent b"), `expected 'saw-absent b', got: ${tuples.join(" | ")}`);
+  console.log("PASS: boolean acc present and absent");
 }
 
-// 17) bool aggregate: idempotent — many asserts still yield 1, not a count.
+// 17) Boolean acc is idempotent: many contributions, one row, one firing.
 {
   const src = `
-#agg p -> bool
+#acc p : e
+pp A / p A
 
-+p a -> 1
-  +p a -> 1
-  +p a -> 1
-  p a -> X
-  +got X
++pp a
+  +pp a
+  +pp a
+  p a
+  +got x
 `;
   const { store } = runFixpoint(ok(src));
   const tuples = listTuples(store);
-  assert(tuples.includes("got 1"), `expected 'got 1', got: ${tuples.join(" | ")}`);
-  console.log("PASS: bool aggregate idempotent");
+  assert.equal(tuples.filter((t) => t === "got x").length, 1, `expected one 'got x', got: ${tuples.join(" | ")}`);
+  console.log("PASS: boolean acc idempotent");
 }
 
-// 18) bool aggregate parse errors.
+// 18) The removed aggregation forms are migration errors naming `#acc`.
 {
-  const cases: { src: string; needle: string }[] = [
-    { src: "#agg p -> bool\n+p a -> 0\n", needle: "reserved for queries" },
-    { src: "#agg p -> bool\n+p a -> 2\n", needle: "must be literal '1'" },
-    { src: "#agg p -> bool\np a -> 2\n+x\n", needle: "query weight must be" },
+  const cases: string[] = [
+    "#agg p -> bool\n+x\n",
+    "#reactive p -> sum\n+x\n",
+    "+p a -> 1\n",
+    "x, p a -> 0, +y\n",
+    "x, [ p A | count A ], +y\n",
+    "#macro m X := [ p X | count X ]\n",
+    "x, !(p A -> W), +y\n",
   ];
-  for (const c of cases) {
-    const r = parse(c.src);
-    assert("message" in r, `expected parse error for: ${c.src}`);
-    assert(
-      (r as { message: string }).message.includes(c.needle),
-      `expected message to include '${c.needle}', got: ${(r as { message: string }).message}`,
-    );
+  for (const src of cases) {
+    const r = parse(src);
+    assert("message" in r, `expected parse error for: ${src}`);
+    const msg = (r as { message: string }).message;
+    assert(msg.includes("was removed") && msg.includes("#acc"), `expected a migration error for ${JSON.stringify(src)}, got: ${msg}`);
   }
-  console.log("PASS: bool aggregate parse errors");
+  console.log("PASS: removed aggregation syntax gives migration errors");
 }
 
 console.log("ALL v2 eval tests passed");

@@ -4,18 +4,24 @@
 setup
   +max-hp 10
 
-#agg days -> last
-#agg hp -> last
-#agg treasure -> last
-#agg weapon-damage -> last
+-- mutable state: each value is its latest `set-…` event, as of a moment
+#acc days : (@last n)
+set-days N / days N
+#acc hp : (@last n)
+set-hp N / hp N
+#acc treasure : (@last n)
+set-treasure N / treasure N
+#acc weapon-damage : (@last n)
+set-weapon-damage N / weapon-damage N
 
 -- i : init_tok * max_hp N -o health N * treasure z * ndays z * weapon_damage 4.
 init
-  +hp 10
-  +treasure 0
-  +days 0
-  +weapon-damage 4
-main-option X, ^icon X
+  +set-hp 10
+  +set-treasure 0
+  +set-days 0
+  +set-weapon-damage 4
+-- icons are derived inside setup, so they hold for the whole game
+setup, (main-option X), +icon X
 
 main
   ?X, !main-option X, ~main-choice X
@@ -41,12 +47,12 @@ setup
 --           * cplus HP Recharge Max N * ndays NDAYS
 --           -o health N * ndays (NDAYS + 1).
 rest
-  hp -> Hp
+  hp Hp
   max-hp Max, recharge-hp R
   cplus Hp R Max Hp'
-  days -> N, plus N 1 N'
-  +hp Hp'
-  +days N'
+  days N, plus N 1 N'
+  +set-hp Hp'
+  +set-days N'
 
 -- qui * stage rest -o stage main * main_screen.
 (main, (rest)); ~main
@@ -63,8 +69,8 @@ setup
   +cost sword 10    -- damage sword 4. cost sword 10.
   +shop-option leave
   +shop-option buy
-shop-option X, ^icon X
-shop-item X, ^icon X
+setup, (shop-option X), +icon X
+setup, (shop-item X), +icon X
 
 shop, ?X, !shop-option X, ~shop-choice X
 
@@ -74,10 +80,10 @@ shop, ?X, !shop-option X, ~shop-choice X
 -- buy : treasure T * cost W C * damage_of W D * weapon_damage _ 
 --     * subtract T C (some T’) -o treasure T’ * weapon_damage D.
 shop-choice.is buy
-  treasure -> T
+  treasure T
   ?X, !(shop-item X, cost X XC, le XC T), is X W,
   cost W C, damage-of W D, subtract T C T'
-  +treasure T', +weapon-damage D,
+  +set-treasure T', +set-weapon-damage D,
 
 -- leave : shop_screen -o main_screen.
 -- qui * stage shop * $main_screen -o stage main.
@@ -98,33 +104,36 @@ setup
   +win-option continue
   +die-option do/quit
   +die-option do/restart
-fight-option X, ^icon X
-win-option X, ^icon X
-die-option X, ^icon X
+setup, (fight-option X), +icon X
+setup, (win-option X), +icon X
+setup, (die-option X), +icon X
 
 -- monster_size Size is random in the paper; here a fixed pseudo-random
 -- sequence indexed by how many monsters have been generated so far
-#agg fights -> sum
+#acc fights : @sum
+fought _ / fights 1
 #js-def monster-size +N -Size { yield [1 + (N * 7 + 3) % 5] }
 -- drop_amount X X. % for now
 #js-def drop-amount +M -N { yield [M] }
 #js-def plus +X +Y -Z { yield [X + Y] }
 #js-def positive +X { if (X > 0) yield [] }
 
-#agg monster:hp -> last
-#agg spoils -> last
+#acc monster:hp : monster (@last n)
+set-monster:hp M N / monster:hp M N
+#acc spoils : (@last n)
+set-spoils N / spoils N
 
 -- init : adventure_screen -o spoils z.
-adventure, +spoils 0, ~fight
+adventure, +set-spoils 0, ~fight
 
 -- gen_a_monster : gen_monster * monster_size Size -o monster Size * monster_hp Size.
 -- the monster's stats are emitted before the first round so every round can see them
 fight F
-  fights -> N, monster-size N Size
-  +fights 1
+  fights N, monster-size N Size
+  +fought F
   +monster F M
   +monster:size M Size
-  +monster:hp M -> Size
+  +set-monster:hp M Size
   ~round
 
 -- qui * stage fight_init -o stage fight * choice.
@@ -145,30 +154,30 @@ round-choice.is do/fight, attacker.is monster, ~monster-hit
 -- fight/hit : try_fight * $fight_in_progress * monster_hp MHP * $weapon_damage D
 --           * subtract MHP D (some MHP') -o monster_hp MHP'.
 player-hit, fight.monster F
-  monster:hp F -> MHP, weapon-damage -> D
+  monster:hp F MHP, weapon-damage D
   subtract MHP D MHP', positive MHP'
-  +monster:hp F -> MHP'
+  +set-monster:hp F MHP'
   ~round-continue
 
 -- win : try_fight * fight_in_progress * monster_hp MHP * $weapon_damage D
 --     * subtract MHP D none -o win_screen.
-player-hit H, fight.monster.monster:hp -> MHP
-  weapon-damage -> D
+player-hit H, fight.monster.monster:hp MHP
+  weapon-damage D
   subtract D MHP _
   ~win
 
 -- fight/miss : try_fight * $fight_in_progress * $monster Size * health HP
 --            * subtract HP Size (some HP') -o health HP'.
 monster-hit, fight.monster.monster:size Size, ~what
-  hp -> HP, subtract HP Size HP', positive HP'
-  +hp HP'
+  hp HP, subtract HP Size HP', positive HP'
+  +set-hp HP'
   ~round-continue
 
 -- fight/die : try_fight * fight_in_progress * monster Size * health HP
 --           * subtract HP Size none -o die_screen.
 monster-hit, fight.monster.monster:size Size
-  hp -> HP, subtract Size HP _
-  +hp 0
+  hp HP, subtract Size HP _
+  +set-hp 0
   ~die
 
 -- another round follows a round survived
@@ -178,8 +187,8 @@ fight, (round, (round-continue)); ~round
 -- collect_spoils : drop X * spoils Y * plus X Y Z -o spoils Z * go_home_or_continue.
 win, fight.monster.monster:size Size
   drop-amount Size Drop
-  spoils -> S, plus Drop S S'
-  +spoils S'
+  spoils S, plus Drop S S'
+  +set-spoils S'
   ?X, !win-option X, ~win-choice X
 
 -- continue : go_home_or_continue -o fight_screen.
@@ -187,8 +196,8 @@ adventure, (fight, (win, (win-choice.is continue))); ~fight
 
 -- go_home : go_home_or_continue * spoils X * treasure Y * plus X Y Z -o treasure Z * main_screen.
 win-choice.is go-home
-  spoils -> S, treasure -> T, plus S T T'
-  +treasure T'
+  spoils S, treasure T, plus S T T'
+  +set-treasure T'
 
 -- do/flee : flee_screen * spoils X * monster _ * monster_hp _ -o ().
 -- fleeing (or going home) ends the adventure and returns to the main screen

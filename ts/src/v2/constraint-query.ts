@@ -36,7 +36,6 @@ import {
   tokenOf,
   type Store,
 } from "./store.js";
-import { aggregateOver } from "./scheduler.js";
 import { JS_REL_YIELD_CAP, type CompiledJsRel } from "./js-rel.js";
 import { decodeTerm, encodeTerm } from "./js-values.js";
 
@@ -240,15 +239,15 @@ function substResolvedAtom(a: Atom, bound: Map<number, Term>, store: Store): Ato
 
 interface ConstrainSub {
   // "plain": match candidates one tuple at a time by structural
-  // unification against the sub-atom. "agg": fold candidates via the
-  // relation's schema aggregator. The choice component moment `M`
-  // (`RawComponent.moment`) gates which candidates are visible
-  // in either case. "js": a `#js-def` relation — enumerated by calling
+  // unification against the sub-atom. The choice component moment `M`
+  // (`RawComponent.moment`) gates which candidates are visible. "js": a
+  // `#js-def` relation — enumerated by calling
   // its generator (plans/v2-js-rel-in-constrain.md); timeless, so `M`
   // does not gate it.
-  kind: "plain" | "agg" | "js";
-  // The sub-atom's regular Atom (head + key positions; for `agg`, last
-  // position is the weight slot, matching `_do-agg`'s layout).
+  // "not": a negated `#acc` read (`not r t̄`) — no row alive at `M`
+  // unifies; evaluated after every positive sub, binds nothing.
+  kind: "plain" | "js" | "not";
+  // The sub-atom's regular Atom (head + argument positions).
   atom: Atom;
 }
 
@@ -353,7 +352,7 @@ function gatherConstrainRows(
     const wrappedTerm = t.atom.terms[1];
     if (wrappedTerm === undefined) continue;
     // The wrapped term is a `(*conj sub1 ... subN)` Id container.
-    // Each `subi` is `(*c-plain (inner))` or `(*c-agg (inner))`.
+    // Each `subi` is `(*c-plain (inner))`, `(*c-js (inner))` or `(*c-not (inner))`.
     const conjAtom = unwrapAtom(wrappedTerm, store);
     if (conjAtom === null) continue;
     const conjHead = conjAtom.terms[0];
@@ -367,9 +366,9 @@ function gatherConstrainRows(
       if (swAtom === null) continue;
       const swHead = swAtom.terms[0];
       if (swHead === undefined || swHead.tag !== "Symbol") continue;
-      const kind: "plain" | "agg" | "js" =
-        swHead.name === "*c-agg" ? "agg" :
-        swHead.name === "*c-js" ? "js" : "plain";
+      const kind: "plain" | "js" | "not" =
+        swHead.name === "*c-js" ? "js" :
+        swHead.name === "*c-not" ? "not" : "plain";
       const innerTerm = swAtom.terms[1];
       if (innerTerm === undefined) continue;
       const rawInner = unwrapAtom(innerTerm, store);
@@ -535,7 +534,6 @@ function runComponent(
   existSet: Set<number>,
   termByTok: Map<number, Term>,
   actorByTok: Map<number, Actor>,
-  schema: Map<string, string>,
   jsRels: Map<string, CompiledJsRel[]>,
 ): ComponentOptions {
   const activeKeys = [...comp.members].filter((k) => activeSet.has(k)).sort((a, b) => a - b);
@@ -580,10 +578,11 @@ function runComponent(
   // order; js subs keep their relative order.
   const orderedSubs: ConstrainSub[] = [];
   const jsSubs: ConstrainSub[] = [];
+  const notSubs: ConstrainSub[] = [];
   for (const row of comp.rows) {
-    for (const s of row.subs) (s.kind === "js" ? jsSubs : orderedSubs).push(s);
+    for (const s of row.subs) (s.kind === "js" ? jsSubs : s.kind === "not" ? notSubs : orderedSubs).push(s);
   }
-  orderedSubs.push(...jsSubs);
+  orderedSubs.push(...jsSubs, ...notSubs);
 
   function go(i: number, sub: Map<number, Term>): void {
     if (i === orderedSubs.length) {
@@ -594,15 +593,31 @@ function runComponent(
     const headTerm = s.atom.terms[0];
     if (headTerm === undefined || headTerm.tag !== "Symbol") return;
     const after = (sub2: Map<number, Term>): void => go(i + 1, sub2);
-    if (s.kind === "agg") {
-      runAggSub(s, sub, store, slotSet, schema, M, after);
-      return;
-    }
     if (s.kind === "js") {
       runJsSub(s, headTerm.name, sub, store, slotSet, jsRels, after);
       return;
     }
     const arity = s.atom.terms.length;
+    if (s.kind === "not") {
+      if (store.accRelations.has(headTerm.name)) {
+        let seen = store.accConsulted.get(headTerm.name);
+        if (seen === undefined) { seen = new Set(); store.accConsulted.set(headTerm.name, seen); }
+        seen.add(tokenOf(store, M));
+      }
+      for (const cidx of candidatesByHead(store, headTerm.name)) {
+        const cand = store.tuples[cidx]!;
+        if (cand.atom.terms.length !== arity + 1) continue;
+        if (!intervalContains(store, cand.l, cand.r, M, M)) continue;
+        const trial = new Map(sub);
+        let hit = true;
+        for (let i2 = 0; i2 < arity; i2++) {
+          if (!matchTerm(s.atom.terms[i2]!, cand.atom.terms[i2]!, trial, store, slotSet)) { hit = false; break; }
+        }
+        if (hit) return;
+      }
+      go(i + 1, sub);
+      return;
+    }
     // Display bookkeeping (plans/v2-acc-timeline-display.md): an acc
     // relation read inside `!(...)` is a read at the component's moment.
     if (store.accRelations.has(headTerm.name)) {
@@ -641,49 +656,6 @@ function unionSets(a: Set<number>, b: Set<number>): Set<number> {
   return out;
 }
 
-// Evaluate one aggregate sub-atom. Same shape as the legacy
-// `runAggRow`, but scoped to a single sub (the row's other subs are
-// handled by `goRow`'s outer recursion). The pattern's last position
-// is the weight slot; key positions that are active or existential
-// tokens become `_free` so `aggregateOver` aggregates across all
-// possible bindings.
-function runAggSub(
-  s: ConstrainSub,
-  sub: Map<number, Term>,
-  store: Store,
-  slotSet: Set<number>,
-  schema: Map<string, string>,
-  M: Term,
-  after: (sub: Map<number, Term>) => void,
-): void {
-  const atom = s.atom;
-  const arity = atom.terms.length;
-  if (arity < 2) return;
-  const SYM_FREE: Term = { tag: "Symbol", name: "_free" };
-  const aggTerms: Term[] = [atom.terms[0]!];
-  for (let i = 1; i < arity - 1; i++) {
-    const t = atom.terms[i]!;
-    const bt = sub.get(tokenOf(store, t));
-    const t2 = bt !== undefined ? bt : t;
-    aggTerms.push(slotSet.has(tokenOf(store, t2)) ? SYM_FREE : t2);
-  }
-  aggTerms.push(SYM_FREE); // weight position always free
-  const aggPattern: Atom = { terms: aggTerms };
-  const results = aggregateOver(store, aggPattern, M, M, schema);
-  for (const res of results) {
-    const trial = new Map(sub);
-    let ok = true;
-    for (let i = 1; i < arity - 1; i++) {
-      if (!matchTerm(atom.terms[i]!, res.filledTerms[i]!, trial, store, slotSet)) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok) continue;
-    if (!matchTerm(atom.terms[arity - 1]!, res.weight, trial, store, slotSet)) continue;
-    after(trial);
-  }
-}
 
 // Evaluate one js-relation sub-atom (plans/v2-js-rel-in-constrain.md).
 // Mirrors eval.ts:evalJsIterate, adapted to the constraint-query
@@ -828,7 +800,6 @@ function childrenOf(term: Term, store: Store): readonly Term[] | null {
 export function computeComponents(
   store: Store,
   blocked: BlockedChoose[],
-  schema: Map<string, string>,
   // Restrict surfaced components to those reachable (via shared
   // `_constrain` rows) from these seed choose rows. The closure pulls in
   // entangled non-seed chooses; other blocked chooses stay blocked and
@@ -904,6 +875,6 @@ export function computeComponents(
     }
   }
 
-  const out = components.map((c) => runComponent(store, c, seedActive, existSet, termByTok, actorByTok, schema, jsRels));
+  const out = components.map((c) => runComponent(store, c, seedActive, existSet, termByTok, actorByTok, jsRels));
   return { kind: "ok", components: out, surfaced };
 }

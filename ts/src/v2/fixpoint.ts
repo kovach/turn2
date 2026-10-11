@@ -12,15 +12,14 @@ import type { Span, Term } from "./term.js";
 import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
 import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
-import { applyExceptions, expand, expandMacros } from "./expand.js";
+import { applyExceptions, expand } from "./expand.js";
 import {
   choiceHandler,
+  exceptionCheckHandler,
+  isInputHandler,
   collectBlockedChooses,
-  computeAggStrata,
-  demandAggHandler,
   markDeadChoice,
   programSeededRandom,
-  reactiveHandler,
   resolveRngChoice,
   type RngCommit,
 } from "./scheduler.js";
@@ -52,29 +51,24 @@ export function runFixpoint(
   // lattice"); off = the original fail-on-incomparable semantics.
   options?: { stats?: boolean; random?: () => number; lattice?: boolean },
 ): FixpointResult {
-  // Expand aggregation-synonym macros first, so exception rewriting sees the
-  // relation reads their bodies perform and `computeAggStrata` below never
-  // sees a macro use. Then eliminate `{...}` exception atoms, so the
-  // pre-expand rules handed to computeAggStrata (and expand itself) are
-  // exception-free.
-  program = expandMacros(program);
+  // Eliminate `{...}` exception atoms first: the generated rules are part
+  // of the program the handlers see.
   program = applyExceptions(program);
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
   const jsRelFuncs = compileJsRels(expanded.jsRels);
-  // Aggregate dependency strata: computed from the pre-expand rules (markers
-  // still present) so the reactive handler can order same-moment folds by
-  // dependency. See plans/v2-reactive-aggregates.md (analysis) and
-  // plans/v2-moment-walk.md (where it is applied).
-  const strata = computeAggStrata(program.rules, program.reactive);
   // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).
   const handlers: MomentHandler[] = [
-    reactiveHandler(expanded.reactive, expanded.schema, strata),
-    demandAggHandler(expanded.schema),
+    isInputHandler(),
     choiceHandler(),
+    exceptionCheckHandler(),
     // `#acc` relations (plans/v2-acc-relations.md): computed at `resolve`,
     // once a moment's other handlers have settled.
-    accHandler(compileAcc(expanded), expanded.schema, jsFuncs, jsRelFuncs),
+    accHandler(
+      compileAcc(expanded), jsFuncs, jsRelFuncs,
+      expanded.rules.some((r) => r.body.some((a) =>
+        a.tag === "Match" && a.atom.terms[0]?.tag === "Symbol" && a.atom.terms[0].name === "_acc-settled")),
+    ),
   ];
   const store = createStore({ lattice: options?.lattice ?? false });
   store.tupleGas = tupleGas;
@@ -131,7 +125,7 @@ export function runFixpoint(
 // prime tuple keeps the original assertion's span, so re-attribute each
 // linked tuple by locating its prime tuple in the store and copying the
 // span, following links transitively for chained exceptions. Tuples with no
-// structural match (emits that escaped renaming: weighted or off-arity)
+// structural match (emits that escaped renaming: off-arity)
 // keep their own span.
 function resolveExceptionProvenance(store: Store, links: ProvLink[] | undefined): void {
   if (links === undefined || links.length === 0) return;
@@ -286,9 +280,8 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       return { store, iterations: totalIters, status: { kind: "done" }, rngCommits };
     }
     if (round.progress) {
-      // Semi-naive: agg-result / _aggval rows emitted by the handlers are
-      // the next inner-loop pass's delta. Mirrors v1's iteration++ after
-      // closeAggregates.
+      // Semi-naive: rows emitted by the handlers (acc rows, exception
+      // checks, `_acc-settled`) are the next inner-loop pass's delta.
       store.iteration++;
       swapHeads(store);
       continue;
@@ -305,7 +298,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     }
     const choices = collectBlockedChooses(store);
     const seedChoices = choices.filter((c) => round.blocked.has(tokenOf(store, c.l)));
-    const cc = computeComponents(store, choices, expanded.schema, seedChoices, jsRelFuncs);
+    const cc = computeComponents(store, choices, seedChoices, jsRelFuncs);
     if (cc.kind === "late-constraint-error") {
       return { store, iterations: totalIters, status: lateConstraintStatus(store, cc), rngCommits };
     }
@@ -407,7 +400,7 @@ function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<str
         continue;
       }
       rulesRan++;
-      evaluateRule(rule, store, program.schema, jsFuncs, jsRelFuncs, i);
+      evaluateRule(rule, store, jsFuncs, jsRelFuncs, i);
     }
     const after = storeSize(store);
     store.stats.iterations.push({

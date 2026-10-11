@@ -11,13 +11,14 @@ import { renderAtom, renderTerm, renderTermShallow, tupleBindings } from "../v2/
 import { collectVarLines } from "../v2/source-link.js";
 
 const src = [
-  "#agg c -> last",
+  "#acc c : (@last num)",
   "~setup; ~go",
-  "setup, +n (s z), +m a, +c 1, +q b",
+  "setup, +n (s z), +m a, +setc 1, +q b",
   "go, n (s X), m Y, +pin X Y",
   "  q Z",
   "  +pq X Z",
-  "go, c -> V, +cv V",
+  "go, c V, +cv V",
+  "setc V / c V",
 ].join("\n");
 
 const parsed = parse(src);
@@ -54,7 +55,7 @@ function one(head: string): number {
   assert.equal(renderTerm(store, r.bindings[2]!.term), "b");
 }
 
-// Aggregate-read rule: V bound by the agg result.
+// Acc-read rule: V bound by the point read of the acc row.
 {
   const r = tupleBindings(store, rules, one("cv"));
   assert.ok(r);
@@ -62,10 +63,10 @@ function one(head: string): number {
   assert.equal(renderTermShallow(store, r.bindings[0]!.term), "1");
 }
 
-// Engine rows (`_do-agg` and the `_agg-result` that copies its trailing id)
-// may decode to the emitting rule, but never to user bindings; a tuple whose
-// last term is not an id slot at all yields undefined.
-for (const head of ["_agg-result", "_do-agg"]) {
+// Engine rows (acc rows, with their `(*acc …)` id) never decode to user
+// bindings; a tuple whose last term is not an id slot at all yields undefined.
+assert.ok(candidatesByHead(store, "c").length > 0, "acc rows for c exist");
+for (const head of ["c"]) {
   for (const i of candidatesByHead(store, head)) {
     assert.deepEqual(tupleBindings(store, rules, i)?.bindings ?? [], [], `${head} has no user bindings`);
   }

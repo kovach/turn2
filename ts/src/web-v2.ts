@@ -24,7 +24,6 @@ interface ClickIntent {
 
 interface DisplayCallContext {
   components: ComponentOptions[];
-  schema: Map<string, string>;
   // Choices-strip state (see renderChoices): the selected component, whose
   // moment the display should render at, and the term an ambiguous click
   // parked for the user to place in a slot.
@@ -355,7 +354,6 @@ let choiceState: ChoiceState = { selectedIdx: 0, pending: null };
 interface View {
   store: Store;
   components: ComponentOptions[];
-  schema: Map<string, string>;
   display: DisplayModule | null;
 }
 let view: View | null = null;
@@ -496,7 +494,6 @@ function renderDisplay(v: View): void {
   if (v.display === null) return;
   const ctx: DisplayCallContext = {
     components: v.components,
-    schema: v.schema,
     selectedIdx: choiceState.selectedIdx,
     pending: choiceState.pending,
   };
@@ -799,7 +796,6 @@ async function run(): Promise<void> {
   view = {
     store,
     components: status.kind === "active-choices" ? status.components : [],
-    schema: parsed.schema,
     display,
   };
   renderView();

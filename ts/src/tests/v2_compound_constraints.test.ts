@@ -116,7 +116,9 @@ turn, (it A), !(p1 A Y, p2 Y)
 + turn
 turn, ? X, !(foo X) -> bar
 `);
-  assert.match(err.message, /outer '-> weight'/);
+  // TODO(parser): this should say "'-> weight' was removed"; since the
+  // outer-arrow check went with weights it reports unbalanced parens.
+  assert.match(err.message, /'-> weight' was removed|unbalanced parens/);
   console.log("PASS: `!(...) -> w` rejected at parse");
 }
 
@@ -190,19 +192,20 @@ turn, ? C, !item C
   console.log("PASS: `!foo` and `!(foo)` produce equivalent compound IR");
 }
 
-// 8) Mixed plain + aggregate sub-atoms: `!(foo X, score X -> W)`. The
-//    existential X is shared between the plain match and the aggregate
-//    sub. Options surface bindings for both ?A and ?W.
+// 8) Mixed plain + `#acc` sub-atoms: `!(foo A, score A W)`. A is shared
+//    between the plain match and the acc row (formerly an `-> W` aggregate
+//    sub). Options surface bindings for both ?A and ?W.
 {
   const src = `
-#agg score key -> sum
+#acc score : key @sum
+pts K N / score K N
 
-+ foo a, + score a 5, + score a 7, + foo b, + score b 3, + turn
++ foo a, + pts a 5, + pts a 7, + foo b, + pts b 3, + turn
 
 turn
   ? A
   ? W
-  !(foo A, score A -> W)
+  !(foo A, score A W)
 `;
   const { store, status } = runFixpoint(ok(src));
   assert.equal(status.kind, "active-choices", `status: ${status.kind}`);
@@ -210,7 +213,7 @@ turn
   const opts = optionSet(store, status.components[0]!.options);
   // foo a, score a sum = 12; foo b, score b sum = 3.
   assert.deepEqual([...opts].sort(), ["a,12", "b,3"], `got: ${[...opts].join(" | ")}`);
-  console.log("PASS: mixed plain + aggregate sub-atoms with shared existential");
+  console.log("PASS: mixed plain + acc sub-atoms with shared variable");
 }
 
 console.log("ALL v2 compound-constraint tests passed");

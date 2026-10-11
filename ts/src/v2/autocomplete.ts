@@ -65,7 +65,7 @@ export function completions(
 // relies only on the lexer, and falls back to a lenient split if even
 // tokenizing fails. Compiler-internal `*`-headed symbols are excluded.
 //
-// `#agg` declarations also contribute their head relation name (the first
+// `#acc` declarations also contribute their head relation name (the first
 // token of the directive's arg text), so a relation that is only declared and
 // never otherwise written still completes. Other directives (`#def`, `#js`)
 // are intentionally not mined here.
@@ -79,7 +79,7 @@ export function collectProgramSymbols(text: string): Set<string> {
     for (const t of toks) {
       if (t.tag === "atom" || t.tag === "equal") {
         for (const w of tokenizeTermText(t.text)) add(w);
-      } else if (t.tag === "command" && (t.name === "agg" || t.name === "reactive" || t.name === "acc")) {
+      } else if (t.tag === "command" && t.name === "acc") {
         const head = tokenizeTermText(t.argText)[0];
         if (head !== undefined) add(head);
       }
@@ -103,7 +103,6 @@ function collectVarsFromBody(body: RuleAtom[], out: Set<string>): void {
   for (const a of body) {
     if (a.tag === "Atom") {
       if (a.atom) for (const t of a.atom.terms) collectVarsFromTerm(t, out);
-      if (a.weight) collectVarsFromTerm(a.weight, out);
       if (a.subAtoms) {
         for (const s of a.subAtoms) for (const t of s.atom.terms) collectVarsFromTerm(t, out);
       }

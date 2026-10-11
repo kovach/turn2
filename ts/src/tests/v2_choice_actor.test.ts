@@ -101,7 +101,7 @@ const throwingRandom = (): number => {
   assert.match(parseError("turn, ?(a b)\n"), /'\?' accepts only variables/);
   assert.match(parseError("turn, ?_\n"), /'\?' accepts only variables/);
   assert.match(parseError("turn, ?C C\n"), /duplicate variable 'C' in '\?'/);
-  assert.match(parseError("turn, ?C -> 1\n"), /'\?' atom cannot carry a '-> weight'/);
+  assert.match(parseError("turn, ?C -> 1\n"), /'-> weight' was removed/);
   assert.match(parseError("turn, ?\n"), /'\?' requires at least one variable/);
   console.log("PASS: parse errors — actor group + vars-only ask shape");
 }

@@ -136,9 +136,8 @@ runFails(`+ a (s z)\n\na X, ge X 0, ^out X`, /#js-def ge threw: arguments must b
 parseFails(`#js-def lt +A +B { yield []; }`, /'lt' is a built-in relation and cannot be redefined/, "#js-def", 1);
 parseFails(`#js (gt x y) { return x > y; }`, /'gt' is a built-in relation/, "#js", 1);
 parseFails(`+ x\n#acc le : e @sum`, /'le' is a built-in relation/, "#acc", 2);
-parseFails(`+ x\n#agg ge -> count`, /'ge' is a built-in relation/, "#agg", 2);
-parseFails(`+ x\n#reactive lt -> sum`, /'lt' is a built-in relation/, "#reactive", 2);
-parseFails(`+ x\n#macro lt X := [foo X W | count W]`, /'lt' is a built-in relation/, "#macro", 2);
+// (`#agg` / `#reactive` / `#macro` were removed; they fail as migration errors
+// before any name check — covered in v2_parse.)
 
 // 8) Like any js relation, a builtin cannot be emitted or intercepted.
 runFails(`+ lt 1 2`, /js relation 'lt'/, "emit into a builtin");

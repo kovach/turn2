@@ -176,17 +176,17 @@ turn
   "no clause serves the runtime modes",
 );
 
-// `-> weight` on a js sub is rejected at expand time.
+// `not` on a js sub is rejected at expand time (`not` reads `#acc` only).
 runFails(
   `${RANGE}
 + turn
 
 turn
   ? N
-  !(range 1 4 N -> W)
+  !(range 1 4 N, not range 2 3 N)
 `,
-  /js relation 'range' cannot take '-> weight'/,
-  "-> weight on a js sub",
+  /'not' inside '!\(\.\.\.\)' reads an '#acc' relation; 'range' is not one/,
+  "not on a js sub",
 );
 
 // Arity mismatch is rejected at expand time.

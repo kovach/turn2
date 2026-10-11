@@ -1,12 +1,12 @@
 // v2 IR. See plans/new-semantics.md and plans/v2-explicit-anchor-ir.md.
 //
-// Pipeline: parse -> Program (rules + schema) -> expand (rule splitting +
+// Pipeline: parse -> Program (rules + acc declarations) -> expand (rule splitting +
 // anchor decomposition) -> fixpoint(eval(rule, store)) -> Store. Reuses the
 // hashconsed Term/Atom algebra from ../types.ts; v2 adds intervals on
 // tuples and a moment-order relation in the Store.
 //
 // Two phases of RuleAtom:
-//   - Pre-expand (parser output): `Atom` (with marker/weight/lLit/rLit),
+//   - Pre-expand (parser output): `Atom` (with marker/lLit/rLit),
 //     `Sub`, `Equal`. The marker enum drives anchor decomposition.
 //   - Post-expand (evaluator input): `Match`, `Emit`, `Le`, `AssertLt`,
 //     `Equal` (whose rhs may be a computed `Expr`). Anchor manipulation is now explicit IR; the
@@ -70,48 +70,40 @@ export function mapExpr(e: Expr, f: (t: Term) => Term): Expr {
 //   anchor    -> Emit at (XL, XR) (no fresh moments, no anchor update)
 //   ask       -> like fact, with wrapped (_choose chooseId atom) row
 //   constrain -> like fact, with wrapped (_constrain atom) row
-//   aggregate -> paired Emit (_do-agg ...) + Match (_agg-result ...). Set
-//                by the parser when a default-marker atom carries a
-//                trailing `-> weight`. splitRule slices the body at the
-//                producer Emit's position.
 //
-// All `!` source — single-atom (`!foo` / `!foo -> Z`) and compound
-// (`!(a, b -> Y)`) — is canonicalized at parse to marker `constrain`
-// with a `subAtoms` list of length ≥ 1. There is no separate
-// `constrain-aggregate` marker; per-sub-atom kind lives inside
-// `subAtoms[i].kind`. See plans/v2-compound-constraints.md.
+// All `!` source — single-atom (`!foo`) and compound (`!(a, b)`) — is
+// canonicalized at parse to marker `constrain` with a `subAtoms` list of
+// length ≥ 1. See plans/v2-compound-constraints.md.
+//
+// `#agg`, `#reactive`, `-> weight` reads, bracket aggregation `[ … ]` and
+// `#macro` were removed in favour of `#acc` + `not`
+// (plans/v2-caret-fresh-left.md §5.4).
 export type Marker =
   | "match"
   | "episode"
   | "fact"
   | "anchor"
   | "ask"
-  | "constrain"
-  | "aggregate";
+  | "constrain";
 
-// A single sub-atom inside a `!(...)` block. `kind: "agg"` means the
-// user wrote `head t1 ... -> weight`; the weight Term is folded into
-// the last position of `atom.terms` (matching `_do-agg`'s layout) so
-// downstream code can treat the trailing slot as the weight position.
+// A single sub-atom inside a `!(...)` block.
 export interface SubConstrain {
-  kind: "plain" | "agg";
   atom: Atom;
+  // `not r t̄` inside `!(...)`: no row of the `#acc` relation `r` matches at
+  // the component's moment.
+  negated?: boolean;
 }
 
 export type RuleAtom =
   // ----- Pre-expand only -----
   //
   // Source-form atom emitted by the parser. Carries a marker plus optional
-  // weight/lLit/rLit. Consumed by `expand` (splitRule + anchor decomposition);
+  // lLit/rLit. Consumed by `expand` (splitRule + anchor decomposition);
   // never reaches the evaluator.
   | {
       tag: "Atom";
       marker: Marker;
       atom: Atom;
-      // Trailing `-> term` slot. On a match, the atom is a weighted *query*
-      // that aggregates; consumed by `splitRule`. On an assert it's stored
-      // in a trailing slot.
-      weight?: Term;
       // Set iff `marker === "constrain"`. Length ≥ 1. The `atom` field is
       // unused in that case (kept undefined-shape compatible by the parser
       // for type-shape purposes only).
@@ -125,6 +117,18 @@ export type RuleAtom =
       // choice (`?[rng] C` sugar; absent = "you"). See
       // plans/v2-choice-actors.md.
       actor?: Actor;
+      // Compiler-internal (`applyExceptions` only; no surface syntax): an
+      // `anchor` emit that lands exactly on the running anchor instead of
+      // minting a fresh left end (plans/v2-caret-fresh-left.md §5.2).
+      exact?: boolean;
+      // `not r t̄` on an `#acc` relation: succeeds iff no row matches at the
+      // read's moment (plans/v2-caret-fresh-left.md §3).
+      negated?: boolean;
+      // Compiler-internal (`applyExceptions` default rules): wait until the
+      // exception-check handler has decided, after inner-loop quiescence,
+      // that no tuple of this (fully bound) flag pattern is alive at the
+      // running anchor's start; then continue on the same anchor.
+      exnCheck?: boolean;
       // `>p` / `~>p` ("after"): the rule continues after `p` ends. On a match
       // (`>p`), `p` is matched over `[right(p), top]` — the running anchor
       // becomes `(max(XL, r_p), XR)` after checking `r_p ≤ XR`; `p` itself
@@ -141,28 +145,6 @@ export type RuleAtom =
       tag: "Sub";
       body: RuleAtom[];
       sequence: boolean;
-      span: Span;
-    }
-  // Bracket aggregation `[ Q | Out = op V ]` (plans/v2-agg-output-var.md,
-  // refining plans/v2-bracket-aggregation.md). `body` items are plain match
-  // Atoms (marker "match", no weight) or nested AggComps. The expression
-  // joins `Q` restricted to tuples containing the running anchor, groups by
-  // its output columns minus `V`, folds each group's `V` values with `op`,
-  // and unifies the folded value against the pattern `Out` — which may bind
-  // (fresh variables become output columns), filter (a prefix-bound
-  // variable or ground term), or both. `varName` is internal to the query
-  // and invisible outward.
-  //
-  // `bare` records that the source was the sugar `[ Q | op V ]`, which the
-  // parser desugars by freshening the query-side occurrences of `V`, so
-  // `out` is the Variable `V` and `varName` is compiler-fresh. It only
-  // affects diagnostics and IR printing.
-  // Lowered by `decomposeAggComp` into a paired `Emit (_do-aggc ...)` /
-  // `Match (_agg-resultc ...)`; never reaches the evaluator.
-  | {
-      tag: "AggComp";
-      body: RuleAtom[];
-      reduce: { op: string; varName: string; out: Term; bare?: boolean };
       span: Span;
     }
   // Exception expression `{p t1..tn => e}` (plans/v2-exceptions.md).
@@ -215,6 +197,9 @@ export type RuleAtom =
       l: Term;
       r: Term;
       constraint?: MatchConstraint;
+      // Negated point read of an `#acc` relation (`not r t̄`): succeeds,
+      // binding nothing, iff no stored row unifies. Never a delta position.
+      negated?: boolean;
       span: Span;
     }
   // Emit a stored tuple with the supplied (already ground) endpoints. No
@@ -255,6 +240,12 @@ export type RuleAtom =
       relation: string;
       atom: Atom;
       moment: Term;
+      // Bound to the matched row's identity `(*acc-row relation terms…)`, so
+      // contributions from distinct rows stay distinct (firing identity).
+      id?: Term;
+      // `not r t̄` in an acc body: no local row of `r` (a strictly lower
+      // stratum) unifies.
+      negated?: boolean;
       span: Span;
     }
   // The head of a lowered acc rule: one contribution to `relation`. `terms`
@@ -321,15 +312,6 @@ export interface AccRule {
   span: Span;
 }
 
-export interface SchemaDecl {
-  relation: string;
-  aggregator: string; // "sum" | "count" | "last"
-  // True when declared with `#reactive` (eager breakpoint materialization)
-  // rather than `#agg` (demand-driven). See plans/v2-reactive-aggregates.md.
-  reactive?: boolean;
-  span: Span;
-}
-
 // A user-defined JS function from a `#js (name p1 ..) { body }` directive.
 // See plans/v2-user-js-functions.md.
 export interface JsDef {
@@ -376,46 +358,22 @@ export interface ProvLink {
 
 export interface Program {
   rules: Rule[];
-  // `relation -> aggregator` for weighted-query dispatch. Holds entries for
-  // both `#agg` (demand-driven) and `#reactive` relations.
-  schema: Map<string, string>;
-  // Relations declared `#reactive`: materialized eagerly into `_aggval` rows
-  // at breakpoints rather than via demand `_do-agg`/`_agg-result`. A subset
-  // of `schema`'s keys. See plans/v2-reactive-aggregates.md.
-  reactive: Set<string>;
   // `name -> definition` for `#js` functions.
   jsDefs: Map<string, JsDef>;
   // `name -> clauses in declaration order` for `#js-def` relations
-  // (plans/v2-js-relations.md). Disjoint from `jsDefs`, `macros`, and
-  // `schema` keys (enforced at parse).
+  // (plans/v2-js-relations.md). Disjoint from `jsDefs` and `accDecls`
+  // (enforced at parse).
   jsRels: Map<string, JsRelDef[]>;
-  // `name -> definition` for `head P1..Pn := [ ... ]` aggregation synonyms.
-  // Eliminated by `expandMacros` before any other expand pass, which leaves
-  // this map empty (plans/v2-aggregation-synonyms.md).
-  macros: Map<string, MacroDef>;
   // `#acc` relations and the `/` rules that compute them
-  // (plans/v2-acc-relations.md). Disjoint from `schema`, `jsDefs`, `jsRels`
-  // and `macros` keys (enforced at parse). Not touched by `expand`; compiled
-  // separately by acc.ts.
+  // (plans/v2-acc-relations.md) — the language's only aggregation. Disjoint
+  // from `jsDefs` and `jsRels` (enforced at parse). Not touched by `expand`;
+  // compiled separately by acc.ts.
   accDecls: Map<string, AccDecl>;
   accRules: AccRule[];
   // Set by `applyExceptions` when it generates default rules; absent
   // otherwise. Carried through by the pass's early return on a second
   // invocation (no Exception atoms remain).
   provLinks?: ProvLink[];
-}
-
-// An aggregation synonym: a name + parameters standing for one bracket
-// aggregation expression (plans/v2-aggregation-synonyms.md). A use
-// `head A1..An` in a rule body is replaced by `body` with each `Ai`
-// substituted for `Pi` and every other body variable freshened. Parameters
-// must be the body's *outward* variables — its top-level output columns —
-// which is what makes substitution a plain rewrite.
-export interface MacroDef {
-  name: string;
-  params: string[]; // distinct variable names, arity-many
-  body: Extract<RuleAtom, { tag: "AggComp" }>;
-  span: Span;
 }
 
 // Stored data. Intervals carry hashconsed Term endpoints; their order in the

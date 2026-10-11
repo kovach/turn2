@@ -72,7 +72,6 @@ export interface AccEvalCtx {
 
 interface Ctx {
   store: Store;
-  schema: Map<string, string>;
   jsFuncs: Map<string, CompiledJs>;
   jsRels: Map<string, CompiledJsRel[]>;
   trail: Trail;
@@ -84,7 +83,6 @@ interface Ctx {
 export function evaluateRule(
   rule: Rule,
   store: Store,
-  schema: Map<string, string>,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]> = new Map(),
   ruleIdx = -1,
@@ -92,7 +90,6 @@ export function evaluateRule(
 ): void {
   const ctx: Ctx = {
     store,
-    schema,
     jsFuncs,
     jsRels,
     trail: newTrail(),
@@ -209,12 +206,27 @@ function evalAccMatch(
     throw new Error(`internal: rule '${ctx.ruleName}': AccMatch outside an acc rule`);
   }
   const head: Term = { tag: "Symbol", name: a.relation };
+  if (a.negated) {
+    // `not r t̄` over a strictly lower stratum's (final) local rows.
+    for (const row of acc.rows(a.relation)) {
+      const mark = trailLength(ctx.trail);
+      const hit = unifyAtoms(a.atom, { terms: [head, ...row.terms] }, ctx.trail, ctx.store.hash);
+      trailUnwind(ctx.trail, mark);
+      if (hit) return;
+    }
+    next();
+    return;
+  }
   for (const row of acc.rows(a.relation)) {
     const mark = trailLength(ctx.trail);
     const rowAtom: Atom = { terms: [head, ...row.terms] };
+    const rowId = a.id === undefined
+      ? undefined
+      : hashconsTerm({ tag: "Id", atom: { terms: [SYM_ACC_ROW, head, ...row.terms] } }, ctx.store.hash);
     if (
       unifyAtoms(a.atom, rowAtom, ctx.trail, ctx.store.hash) &&
-      unifyTerms(a.moment, row.moment, ctx.trail, ctx.store.hash)
+      unifyTerms(a.moment, row.moment, ctx.trail, ctx.store.hash) &&
+      (a.id === undefined || unifyTerms(a.id, rowId!, ctx.trail, ctx.store.hash))
     ) {
       next();
     }
@@ -249,6 +261,7 @@ function evalAccContribute(
 // `decomposeAccRule` binds every read to it; acc.ts prepends `Equal` of it
 // to the moment being resolved).
 export const ACC_MOMENT_VAR = "_acc_m";
+const SYM_ACC_ROW: Term = { tag: "Symbol", name: "*acc-row" };
 
 // Compute a non-Term `Expr` to a Term, or `null` for relational failure
 // (incomparable Max/Min args).
@@ -324,6 +337,22 @@ function evalMatch(
       if (seen === undefined) { seen = new Set(); ctx.store.accConsulted.set(head, seen); }
       seen.add(tokenOf(ctx.store, at));
     }
+  }
+  if (a.negated) {
+    // `not r t̄` (expand.ts decomposeAccRead): succeed once, binding
+    // nothing, iff no stored row unifies at the given endpoints.
+    for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+      const tup = ctx.store.tuples[idx]!;
+      const mark = trailLength(ctx.trail);
+      const hit =
+        unifyTerms(a.l, tup.l, ctx.trail, ctx.store.hash) &&
+        unifyTerms(a.r, tup.r, ctx.trail, ctx.store.hash) &&
+        unifyAtoms(a.atom, tup.atom, ctx.trail, ctx.store.hash);
+      trailUnwind(ctx.trail, mark);
+      if (hit) return;
+    }
+    next();
+    return;
   }
   for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
     if (rs !== undefined) rs.candScanned++;

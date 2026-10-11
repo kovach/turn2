@@ -1,13 +1,12 @@
 // v2 parser. Flat-syntax language per notes/turn-program-1.t.
 //
 // Two passes: tokenize (line-by-line, comment-aware) then parseProgram (turn
-// the token stream into rules + schema). Hashconsing is *not* applied here —
+// the token stream into rules + acc declarations). Hashconsing is *not* applied here —
 // callers run terms through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
-import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, MacroDef, Marker, Program, Rule, RuleAtom, SchemaDecl, SubConstrain } from "./types.js";
+import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, Marker, Program, Rule, RuleAtom, SubConstrain } from "./types.js";
 import { exprTerms, isActor } from "./types.js";
-import { aggregators } from "./aggregators.js";
 import { accOp, UNIT, type AccOp } from "./acc-ops.js";
 import { builtinJsRels, isBuiltinRel } from "./builtins.js";
 
@@ -32,15 +31,9 @@ type Token =
   // `text`'s first char in the source line, so fragment-relative columns in
   // the parsed RHS can be re-based onto the line.
   | { tag: "exception"; text: string; line: number; startCol: number; endCol: number; textStartCol: number }
-  // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-  // `text` is the inner text, brackets stripped; may span multiple source
-  // lines (joined with spaces). `line` is the opening line, `endLine` the
-  // line the closing `]` sits on.
+  // Bracket aggregation `[ … ]` and `#macro … :=` are still tokenized, only
+  // so the parser can report that they were removed (in favour of `#acc`).
   | { tag: "aggcomp"; text: string; line: number; endLine: number }
-  // Macro definition header `#macro head P1..Pn :=`
-  // (plans/v2-aggregation-synonyms.md). `headText` is the text between the
-  // command name and the `:=`; the RHS tokenizes normally and follows as an
-  // `aggcomp` token.
   | { tag: "macroDef"; headText: string; line: number }
   | { tag: "equal"; text: string; line: number; startCol: number; endCol: number }
   | { tag: "command"; name: string; argText: string; body?: string; line: number }
@@ -54,8 +47,6 @@ type Token =
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
   | { kind: "def"; name: string; line: number }
-  | { kind: "agg"; decl: SchemaDecl }
-  | { kind: "reactive"; decl: SchemaDecl }
   | { kind: "acc"; decl: AccDecl }
   | { kind: "js"; name: string; params: string[]; body: string; line: number }
   | { kind: "js-rel"; def: JsRelDef; line: number }
@@ -430,21 +421,18 @@ type BodyItem =
   | { kind: "atom"; atom: RuleAtom }            // RuleAtom with tag "Atom" or "Equal"
   | { kind: "sub"; inner: BodyItem[]; sequence: boolean; span: Span }
   | { kind: "dot"; line: number }
-  // Bracket aggregation `[ Q | op V ]`. `items` is still BodyItems (query
-  // atoms plus `dot` markers) so `desugarBody` resolves dots inside `Q`
-  // with the containing rule's shared fresh-name minting.
-  | {
-      kind: "aggcomp";
-      items: BodyItem[];
-      reduce: { op: string; varName: string; out: Term; bare?: boolean };
-      span: Span;
-    }
   // Exception block. `right` is still BodyItems so `desugarBody` can
   // resolve the fragment's dots with the containing rule's shared
   // fresh-name minting (no `_dotN` capture between rule and fragment).
   | { kind: "exception"; left: Atom; right: BodyItem[]; span: Span };
 
 type AtomItem = Extract<RuleAtom, { tag: "Atom" }>;
+
+// Migration message for the removed aggregation forms
+// (plans/v2-caret-fresh-left.md §5.4).
+const REMOVED_AGG = (what: string): string =>
+  `${what} was removed: aggregation is '#acc' (declare '#acc rel : col… @op' and compute it with ` +
+  `'body / rel …' rules; negate with 'not rel …') — see the tutorial, "Aggregates"`;
 
 function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseError {
   if (tok.name === "def") {
@@ -461,15 +449,8 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     }
     return { kind: "def", name, line: tok.line };
   }
-  if (tok.name === "agg") {
-    const decl = parseSchemaText(tok.argText, tok.line);
-    if ("message" in decl) return decl;
-    return { kind: "agg", decl };
-  }
-  if (tok.name === "reactive") {
-    const decl = parseSchemaText(tok.argText, tok.line);
-    if ("message" in decl) return decl;
-    return { kind: "reactive", decl: { ...decl, reactive: true } };
+  if (tok.name === "agg" || tok.name === "reactive") {
+    return { line: tok.line, message: REMOVED_AGG(`'#${tok.name}'`) };
   }
   if (tok.name === "js") {
     return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
@@ -561,13 +542,9 @@ function parseJsRelCommand(sig: string, body: string, line: number): Command | P
 
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
-  const schema = new Map<string, string>();
-  const schemaLines = new Map<string, number>(); // declaration line, for errors
-  const reactive = new Set<string>();
   const jsDefs = new Map<string, JsDef>();
   // Seeded with the built-in relations (builtins.ts); user clauses join them.
   const jsRels = builtinJsRels();
-  const macros = new Map<string, MacroDef>();
   const accDecls = new Map<string, AccDecl>();
   const accRules: AccRule[] = [];
   // Ordinary and acc rules in source order, for shared auto-naming.
@@ -578,10 +555,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     const t = tokens[i]!;
     if (t.tag === "ruleEnd") { i++; continue; }
     if (t.tag === "macroDef") {
-      const res = parseMacroDef(t, tokens, i + 1, macros);
-      if ("message" in res) return res;
-      i = res.next;
-      continue;
+      return { line: t.line, message: REMOVED_AGG("'#macro'") };
     }
     let explicitName: string | undefined;
     let startLine = t.line;
@@ -589,15 +563,6 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const cmd = parseCommand(t);
       if ("message" in cmd) return cmd;
       i++;
-      if (cmd.kind === "agg" || cmd.kind === "reactive") {
-        if (schema.has(cmd.decl.relation)) {
-          return { line: t.line, message: `duplicate schema declaration for '${cmd.decl.relation}'` };
-        }
-        schema.set(cmd.decl.relation, cmd.decl.aggregator);
-        schemaLines.set(cmd.decl.relation, t.line);
-        if (cmd.kind === "reactive") reactive.add(cmd.decl.relation);
-        continue;
-      }
       if (cmd.kind === "acc") {
         if (accDecls.has(cmd.decl.relation)) {
           return { line: t.line, message: `duplicate '#acc' declaration for '${cmd.decl.relation}'` };
@@ -705,54 +670,27 @@ function parseProgram(tokens: Token[]): Program | ParseError {
   const nameErr = resolveRuleNames(allRules);
   if (nameErr !== null) return nameErr;
 
-  const boolErr = validateBoolWeights(rules, schema);
-  if (boolErr !== null) return boolErr;
-  for (const r of accRules) {
-    const err = walkBoolValidate(r.body, schema);
-    if (err !== null) return err;
-  }
-
   // Acc relations (plans/v2-acc-relations.md): heads declared and shaped,
-  // names disjoint from every other kind of declaration, body reads of
-  // `#agg` relations rejected. Checked after the loop since declaration
-  // order is free.
+  // names disjoint from every other kind of declaration. Checked after the
+  // loop since declaration order is free.
   for (const [name, decl] of accDecls) {
     const line = decl.span.line;
-    if (schema.has(name)) return { line, message: `'#acc' name '${name}' already has a '#agg'/'#reactive' declaration` };
     if (jsDefs.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js' function` };
     if (isBuiltinRel(name)) return { line, message: `'${name}' is a built-in relation and cannot be redefined` };
     if (jsRels.has(name)) return { line, message: `'#acc' name '${name}' is already a '#js-def' relation` };
-    if (macros.has(name)) return { line, message: `'#acc' name '${name}' is already a macro` };
   }
   for (const r of accRules) {
-    const err = validateAccRule(r, accDecls, schema, reactive);
+    const err = validateAccRule(r, accDecls);
     if (err !== null) return err;
   }
 
-  // js relations claim their name exclusively: a stored-relation schema or a
-  // macro under the same name would make match sites ambiguous (js matches
-  // never read the store). Checked after the loop since declaration order is
-  // free (a `#macro`/`#agg` may lexically precede or follow the `#js-def`).
-  for (const [name, clauses] of jsRels) {
-    const line = clauses[0]!.span.line;
-    const macro = macros.get(name);
-    if (macro !== undefined) {
-      if (isBuiltinRel(name)) return { line: macro.span.line, message: `'${name}' is a built-in relation and cannot be redefined` };
-      return { line, message: `'#js-def' name '${name}' is already a macro` };
-    }
-    if (schema.has(name)) {
-      if (isBuiltinRel(name)) return { line: schemaLines.get(name)!, message: `'${name}' is a built-in relation and cannot be redefined` };
-      return { line, message: `js relation '${name}' cannot have a schema declaration ('#agg'/'#reactive')` };
-    }
-  }
-
-  return { rules, schema, reactive, jsDefs, jsRels, macros, accDecls, accRules };
+  return { rules, jsDefs, jsRels, accDecls, accRules };
 }
 
 // Assemble an acc rule from its parsed halves (plans/v2-acc-relations.md
 // §1.2). The body desugars like an ordinary rule (dots, arity saturation)
 // and is then restricted to match atoms and `=`; the head must be exactly
-// one unmarked, unweighted atom. Declaration-dependent checks (head
+// one unmarked atom. Declaration-dependent checks (head
 // declared, arity, agg-column shape) run in `validateAccRule` once every
 // `#acc` line has been seen.
 function buildAccRule(
@@ -770,10 +708,9 @@ function buildAccRule(
   saturateArity(body);
   for (const a of body) {
     if (a.tag === "Equal") continue;
-    if (a.tag === "Atom" && (a.marker === "match" || a.marker === "aggregate") && a.subAtoms === undefined && !a.after) continue;
+    if (a.tag === "Atom" && a.marker === "match" && a.subAtoms === undefined && !a.after) continue;
     const what =
       a.tag === "Sub" ? "a sub-rule" :
-      a.tag === "AggComp" ? "a '[...]' aggregation" :
       a.tag === "Exception" ? "an exception block" :
       a.tag === "Atom" ? `a '${markerChar(a.marker)}${a.after ? ">" : ""}' atom` : a.tag;
     return { line: a.span.line, message: `acc rule bodies contain only matches and '=' (found ${what})` };
@@ -787,8 +724,8 @@ function buildAccRule(
   if (h.tag !== "Atom" || h.marker !== "match" || h.subAtoms !== undefined || h.after) {
     return { line: h.span.line, message: "an acc rule head is a plain atom (no marker)" };
   }
-  if (h.weight !== undefined) {
-    return { line: h.span.line, message: "an acc rule head carries no '-> weight' (the aggregated column is an ordinary argument)" };
+  if (h.negated) {
+    return { line: h.span.line, message: "an acc rule head cannot be negated ('not' is a read)" };
   }
   saturateArity([h]);
   const headSym = h.atom.terms[0];
@@ -806,7 +743,6 @@ function markerChar(m: Marker): string {
     case "anchor": return "^";
     case "ask": return "?";
     case "constrain": return "!";
-    case "aggregate": return "->";
   }
 }
 
@@ -815,8 +751,6 @@ function markerChar(m: Marker): string {
 function validateAccRule(
   r: AccRule,
   accDecls: Map<string, AccDecl>,
-  schema: Map<string, string>,
-  reactive: Set<string>,
 ): ParseError | null {
   const line = r.span.line;
   const headSym = r.head.terms[0]!;
@@ -856,105 +790,9 @@ function validateAccRule(
       return { line, message: `acc rule head '${name}': '@${op!.name}' takes no argument (write '()')` };
     }
   }
-  // Body reads: a weighted atom is a `#reactive` read (allowed) or a
-  // `#agg` read (rejected — the demand path needs a round trip).
-  for (const a of r.body) {
-    if (a.tag !== "Atom" || a.weight === undefined) continue;
-    const h = a.atom.terms[0];
-    const hn = h !== undefined && h.tag === "Symbol" ? h.name : "";
-    if (reactive.has(hn)) continue;
-    if (schema.has(hn)) {
-      return { line: a.span.line, message: `acc rule cannot read '#agg ${hn}' (declare it '#acc' or '#reactive')` };
-    }
-    return { line: a.span.line, message: `acc rule body: '${hn}' has no '#reactive' declaration for a '-> weight' read` };
-  }
   return null;
 }
 
-// Parse a macro definition `#macro head P1..Pn := [ ... ]`
-// (plans/v2-aggregation-synonyms.md). `tok` is the header; the body follows
-// in the token stream (possibly after `ruleEnd`s, so the `[` may open on the
-// next line). Records into `macros` and returns the index just past the body.
-function parseMacroDef(
-  tok: Extract<Token, { tag: "macroDef" }>,
-  tokens: Token[],
-  start: number,
-  macros: Map<string, MacroDef>,
-): { next: number } | ParseError {
-  const line = tok.line;
-  const terms = parseTerms(tokenizeTermText(tok.headText), line);
-  if ("message" in terms) return terms;
-  const head = terms[0];
-  if (head === undefined) {
-    return { line, message: "macro definition needs a name before ':='" };
-  }
-  if (head.tag !== "Symbol") {
-    // `_`-prefixed names tokenize as Variables, so this also rejects the
-    // engine's reserved `_do-agg` / `_agg-result` / `_choose` / `_constrain`.
-    return { line, message: `macro name must be a symbol (got '${tok.headText.trim()}')` };
-  }
-  if (head.name.startsWith("*")) {
-    return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
-  }
-  if (macros.has(head.name)) {
-    return { line, message: `duplicate macro definition for '${head.name}'` };
-  }
-
-  const params: string[] = [];
-  for (const t of terms.slice(1)) {
-    if (t.tag === "Wildcard" || (t.tag === "Variable" && t.name === "_")) {
-      return { line, message: `macro parameter cannot be '_' (in '${head.name}')` };
-    }
-    if (t.tag !== "Variable") {
-      return { line, message: `macro parameters must be variables (in '${head.name}')` };
-    }
-    if (params.includes(t.name)) {
-      return { line, message: `duplicate macro parameter '${t.name}' (in '${head.name}')` };
-    }
-    params.push(t.name);
-  }
-  // `saturateArity` pads uses to the head's lexical arity, so the parameter
-  // count must match it exactly for a padded use to line up.
-  const want = colonCount(head.name) + 1;
-  if (params.length !== want) {
-    return {
-      line,
-      message:
-        `macro '${head.name}' has ${params.length} parameter(s) but its name implies ` +
-        `arity ${want}`,
-    };
-  }
-
-  // Body. Skip `ruleEnd`s so the `[` may start on the following line.
-  let i = start;
-  while (i < tokens.length && tokens[i]!.tag === "ruleEnd") i++;
-  const bodyTok = tokens[i];
-  if (bodyTok === undefined || bodyTok.tag !== "aggcomp") {
-    return { line, message: `macro '${head.name}' body must be a '[ ... ]' aggregate expression` };
-  }
-  i++;
-  // A macro definition is self-delimiting: it ends at its body's closing
-  // `]`, so an ordinary rule may start on the next line with no blank line
-  // between. Only trailing content on the *same* line is a mistake.
-  const after = tokens[i];
-  if (after !== undefined && after.tag !== "ruleEnd" && after.line === bodyTok.endLine) {
-    return { line: after.line, message: `macro '${head.name}' definition must end after its body` };
-  }
-
-  const parsedComp = parseAggCompText(bodyTok.text, bodyTok.line);
-  if ("message" in parsedComp) return parsedComp;
-  const usedNames = new Set<string>(params);
-  collectUsedNames([parsedComp], usedNames);
-  const desugared = desugarBody([parsedComp], usedNames, { n: 1 }, undefined);
-  if (!Array.isArray(desugared)) return desugared;
-  const body = desugared[0];
-  if (desugared.length !== 1 || body === undefined || body.tag !== "AggComp") {
-    throw new Error("internal: macro body did not desugar to a single AggComp");
-  }
-  saturateArity([body]);
-  macros.set(head.name, { name: head.name, params, body, span: { line } });
-  return { next: i };
-}
 
 // Parse one rule body's tokens into `BodyItem`s. Consumes from `pos.i`
 // until a rule boundary (`ruleEnd` / command at depth 0) or end of
@@ -1053,12 +891,7 @@ function parseBodyItems(
       continue;
     }
     if (tok.tag === "aggcomp") {
-      const parsedComp = parseAggCompText(tok.text, tok.line);
-      if ("message" in parsedComp) return parsedComp;
-      top.items.push(parsedComp);
-      top.needsContent = false;
-      pos.i++;
-      continue;
+      return { line: tok.line, message: REMOVED_AGG("bracket aggregation '[ … ]'") };
     }
     if (tok.tag === "equal") {
       const parsedEq = parseEqualText(tok.text, tok.line, tok.startCol, tok.endCol);
@@ -1071,7 +904,7 @@ function parseBodyItems(
     if (tok.tag === "macroDef") {
       // `parseProgram` consumes these; reaching one here means a `#macro`
       // appeared where a rule body was expected (e.g. right after `#def`).
-      return { line: tok.line, message: "'#macro' must begin its own definition" };
+      return { line: tok.line, message: REMOVED_AGG("'#macro'") };
     }
     if (tok.tag === "slash") {
       // Acc rule separator (plans/v2-acc-relations.md). Legal only at the
@@ -1084,8 +917,8 @@ function parseBodyItems(
     const parsed = parseAtomText(tok.text, tok.marker, tok.line, tok.startCol, tok.endCol);
     if ("message" in parsed) return parsed;
     if (tok.after) {
-      if (parsed.tag !== "Atom" || (parsed.marker !== "match" && parsed.marker !== "episode")) {
-        return { line: tok.line, message: "'>' (continue after) applies only to a match ('>p') or an episode ('~>p')" };
+      if (parsed.tag !== "Atom" || (parsed.marker !== "match" && parsed.marker !== "episode") || parsed.negated) {
+        return { line: tok.line, message: "'>' (continue after) applies only to a match ('>p') or an episode ('~>p'), not to 'not'" };
       }
       parsed.after = true;
     }
@@ -1118,7 +951,7 @@ function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyIte
     return { line, message: "exception LHS cannot carry a marker" };
   }
   if (findTopArrow(lhsText) >= 0) {
-    return { line, message: "exception LHS cannot be an aggregate ('-> weight')" };
+    return { line, message: REMOVED_AGG("'-> weight'") };
   }
   const terms = parseTerms(tokenizeTermText(lhsText), line);
   if ("message" in terms) return terms;
@@ -1166,7 +999,6 @@ function remapItemLines(items: BodyItem[], line: number, colOffset: number): voi
     if (it.kind === "dot") { it.line = line; continue; }
     if (it.kind === "sub") { remapSpan(it.span); remapItemLines(it.inner, line, colOffset); continue; }
     if (it.kind === "exception") { remapSpan(it.span); remapItemLines(it.right, line, colOffset); continue; }
-    if (it.kind === "aggcomp") { remapSpan(it.span); remapItemLines(it.items, line, colOffset); continue; }
     remapSpan(it.atom.span);
   }
 }
@@ -1184,70 +1016,8 @@ function findTopFatArrow(text: string): number {
   return -1;
 }
 
-// Enforce surface restrictions for relations declared `-> bool`:
-// assertions must be literal `-> 1`; queries must be `-> 0` / `-> 1`
-// / a Variable. See plans/v2-bool-aggregate.md.
-function validateBoolWeights(rules: Rule[], schema: Map<string, string>): ParseError | null {
-  for (const r of rules) {
-    const err = walkBoolValidate(r.body, schema);
-    if (err !== null) return err;
-  }
-  return null;
-}
 
-function walkBoolValidate(body: RuleAtom[], schema: Map<string, string>): ParseError | null {
-  for (const a of body) {
-    if (a.tag === "Sub") {
-      const err = walkBoolValidate(a.body, schema);
-      if (err !== null) return err;
-      continue;
-    }
-    if (a.tag === "Exception") {
-      const err = walkBoolValidate(a.right, schema);
-      if (err !== null) return err;
-      continue;
-    }
-    if (a.tag !== "Atom") continue;
-    if (a.subAtoms !== undefined) {
-      // `!(...)` block. Plain sub-atoms have no weight; agg sub-atoms
-      // carry weight in the trailing term slot — treat as queries.
-      for (const sub of a.subAtoms) {
-        if (sub.kind !== "agg") continue;
-        const head = sub.atom.terms[0];
-        if (head === undefined || head.tag !== "Symbol") continue;
-        if (schema.get(head.name) !== "bool") continue;
-        const w = sub.atom.terms[sub.atom.terms.length - 1]!;
-        const err = checkBoolQueryWeight(w, head.name, a.span.line);
-        if (err !== null) return err;
-      }
-      continue;
-    }
-    if (a.weight === undefined) continue;
-    const head = a.atom.terms[0];
-    if (head === undefined || head.tag !== "Symbol") continue;
-    if (schema.get(head.name) !== "bool") continue;
-    if (a.marker === "aggregate") {
-      const err = checkBoolQueryWeight(a.weight, head.name, a.span.line);
-      if (err !== null) return err;
-    } else {
-      // Assertion side: fact / episode / anchor / ask. Must be literal `1`.
-      const w = a.weight;
-      if (w.tag !== "Symbol" || w.name !== "1") {
-        if (w.tag === "Symbol" && w.name === "0") {
-          return { line: a.span.line, message: `bool relation '${head.name}' cannot be asserted as 0; '-> 0' is reserved for queries` };
-        }
-        return { line: a.span.line, message: `bool relation '${head.name}' assertion weight must be literal '1' (got '${describeTerm(w)}')` };
-      }
-    }
-  }
-  return null;
-}
 
-function checkBoolQueryWeight(w: Term, relName: string, line: number): ParseError | null {
-  if (w.tag === "Variable") return null;
-  if (w.tag === "Symbol" && (w.name === "0" || w.name === "1")) return null;
-  return { line, message: `bool relation '${relName}' query weight must be '0', '1', or a variable (got '${describeTerm(w)}')` };
-}
 
 function describeTerm(t: Term): string {
   if (t.tag === "Symbol") return t.name;
@@ -1292,13 +1062,6 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
       collectUsedNames(it.right, out);
       continue;
     }
-    if (it.kind === "aggcomp") {
-      collectUsedNames(it.items, out);
-      // A name occurring only in an `Out` position must not be reused by
-      // fresh-name minting either.
-      collectVarsInTerm(it.reduce.out, out);
-      continue;
-    }
     const a = it.atom;
     if (a.tag === "Atom") {
       if (a.subAtoms !== undefined) {
@@ -1308,7 +1071,6 @@ function collectUsedNames(items: BodyItem[], out: Set<string>): void {
       } else {
         for (const t of a.atom.terms) collectVarsInTerm(t, out);
       }
-      if (a.weight !== undefined) collectVarsInTerm(a.weight, out);
       if (a.lLit !== undefined) collectVarsInTerm(a.lLit, out);
       if (a.rLit !== undefined) collectVarsInTerm(a.rLit, out);
     } else if (a.tag === "Equal") {
@@ -1336,45 +1098,7 @@ function mintName(usedNames: Set<string>, counter: { n: number }): string {
   }
 }
 
-// Mint a fresh query-side name for a bare reduction over `base`, e.g.
-// `Y` -> `Y_1`. Kept readable (rather than `_dotN`-style) because it shows
-// up in IR dumps of aggregate expressions.
-function mintReduceName(base: string, usedNames: Set<string>): string {
-  let k = 1;
-  while (true) {
-    const name = `${base}_${k++}`;
-    if (!usedNames.has(name)) {
-      usedNames.add(name);
-      return name;
-    }
-  }
-}
 
-// Rename every Variable named `from` to `to` throughout an aggregate
-// query's items, descending into nested expressions (their items, their
-// reduction variable, and their output patterns) — all of those are query
-// positions of the enclosing level.
-function renameInQuery(items: RuleAtom[], from: string, to: string): void {
-  const rw = (t: Term): Term => {
-    if (t.tag === "Variable") return t.name === from ? { tag: "Variable", name: to } : t;
-    if (t.tag === "Atom" || t.tag === "Id") {
-      return { tag: t.tag, atom: { terms: t.atom.terms.map(rw) } };
-    }
-    return t;
-  };
-  for (const it of items) {
-    if (it.tag === "AggComp") {
-      renameInQuery(it.body, from, to);
-      it.reduce = {
-        ...it.reduce,
-        varName: it.reduce.varName === from ? to : it.reduce.varName,
-        out: rw(it.reduce.out),
-      };
-      continue;
-    }
-    if (it.tag === "Atom") it.atom = { terms: it.atom.terms.map(rw) };
-  }
-}
 
 // Anchor frame for the dot-desugar walk. See plans/v2-dot-notation.md.
 //   anchor:      the most recent `tag === "Atom"` RuleAtom in this frame
@@ -1410,7 +1134,7 @@ function ensureFresh(frame: Frame, usedNames: Set<string>, counter: { n: number 
 // atom: `T X _dot1, p _dot1`.)
 function loneVariable(a: AtomItem): Term | null {
   if (a.marker !== "match" || a.atom.terms.length !== 1) return null;
-  if (a.weight !== undefined || a.subAtoms !== undefined || a.lLit !== undefined || a.rLit !== undefined) return null;
+  if (a.subAtoms !== undefined || a.lLit !== undefined || a.rLit !== undefined) return null;
   const t = a.atom.terms[0]!;
   return t.tag === "Variable" ? t : null;
 }
@@ -1461,9 +1185,6 @@ function desugarBody(
         return { line: it.line, message: "dot must follow an atom" };
       }
       if (frame.anchor !== null) {
-        if (frame.anchor.marker === "aggregate") {
-          return { line: it.line, message: "aggregate atom (with '-> weight') cannot appear on the left of '.'" };
-        }
         const lone = loneVariable(frame.anchor);
         if (lone !== null) {
           // `A . p`: drop the placeholder atom and thread `A` itself.
@@ -1474,34 +1195,6 @@ function desugarBody(
       }
       frame.pendingDot = true;
       frame.dotLine = it.line;
-      continue;
-    }
-
-    if (it.kind === "aggcomp") {
-      afterException = false;
-      // A bracket aggregation never participates in a surrounding dot
-      // chain (it binds no single anchor atom), and it does not advance
-      // the local anchor — like `=`.
-      if (incomingPending || frame.pendingDot) {
-        const ln = frame.pendingDot ? frame.dotLine : incoming!.dotLine;
-        return { line: ln, message: "right of '.' must be a plain atom (not '[')" };
-      }
-      // Dots *inside* `Q` resolve against a fresh frame, sharing the
-      // rule's name minting so `_dotN` vars can't collide.
-      const inner = desugarBody(it.items, usedNames, counter, undefined);
-      if (!Array.isArray(inner)) return inner;
-      let reduce = it.reduce;
-      if (reduce.bare) {
-        // Bare form `[ Q | op V ]` desugars to `[ Q[V ↦ V'] | V = op V' ]`
-        // with `V'` compiler-fresh, so the reduced column and the outward
-        // name are distinct even here (plans/v2-agg-output-var.md). Fresh
-        // names are minted here rather than in `parseAggCompText` because
-        // this is where the rule's used-name set lives.
-        const fresh = mintReduceName(reduce.varName, usedNames);
-        renameInQuery(inner, reduce.varName, fresh);
-        reduce = { ...reduce, varName: fresh };
-      }
-      out.push({ tag: "AggComp", body: inner, reduce, span: it.span });
       continue;
     }
 
@@ -1582,9 +1275,7 @@ function desugarBody(
 }
 
 // Auto-fill trailing wildcards so every Symbol-headed atom reaches its lexical
-// arity. Arity = (number of ':' in the head symbol) + 1. A trailing `-> weight`
-// counts as the atom's last argument (so `+ dmg -> 3` ≡ `+ dmg 3`, already
-// saturated at arity 1 — no fresh-id column). Runs on the dot-desugared body,
+// arity. Arity = (number of ':' in the head symbol) + 1. Runs on the dot-desugared body,
 // so dot-threaded linking vars are already counted. Over-arity atoms are left
 // untouched (non-strict; see plans/v2-arity-auto-wildcard.md).
 function saturateArity(body: RuleAtom[]): void {
@@ -1595,21 +1286,14 @@ function saturateArity(body: RuleAtom[]): void {
       saturateArity(a.right);
       continue;
     }
-    if (a.tag === "AggComp") { saturateAggComp(a); continue; }
     if (a.tag !== "Atom") continue; // Equal / Match / Emit / etc. have no head arity
     if (a.subAtoms !== undefined) {
-      // `!(...)` block. `agg` subs fold the weight into the trailing term slot,
-      // so it is already counted; pad before it. `plain` subs have no weight.
-      // The `atom` field is a placeholder alias of the first sub — skip it.
-      for (const s of a.subAtoms) {
-        if (s.kind === "agg") saturateAggSub(s.atom.terms);
-        else saturateHead(s.atom.terms, false);
-      }
+      // `!(...)` block. The `atom` field is a placeholder alias of the first
+      // sub — skip it.
+      for (const s of a.subAtoms) saturateHead(s.atom.terms, false);
       continue;
     }
-    // The trailing `-> weight` lives in `a.weight`, not in `atom.terms`; it
-    // counts as one argument, so a weighted atom needs one fewer padded term.
-    saturateHead(a.atom.terms, a.weight !== undefined);
+    saturateHead(a.atom.terms, false);
   }
 }
 
@@ -1623,23 +1307,7 @@ function saturateHead(terms: Term[], hasWeight: boolean): void {
   while (terms.length < want) terms.push({ tag: "Wildcard" });
 }
 
-// Pad every atom inside a bracket-aggregation query (plain matches; no
-// weights inside `[...]`), recursing through nested expressions.
-function saturateAggComp(comp: Extract<RuleAtom, { tag: "AggComp" }>): void {
-  for (const b of comp.body) {
-    if (b.tag === "AggComp") saturateAggComp(b);
-    else if (b.tag === "Atom") saturateHead(b.atom.terms, false);
-  }
-}
 
-// Pad a `!(...)` aggregate sub-atom `[head, ...args, weight]` by inserting
-// wildcards before the trailing weight term (which counts as an argument).
-function saturateAggSub(terms: Term[]): void {
-  const head = terms[0];
-  if (head === undefined || head.tag !== "Symbol" || head.name.startsWith("*")) return;
-  const want = colonCount(head.name) + 2; // head + (colons + 1) args, weight included
-  while (terms.length < want) terms.splice(terms.length - 1, 0, { tag: "Wildcard" });
-}
 
 function colonCount(s: string): number {
   let n = 0;
@@ -1647,29 +1315,6 @@ function colonCount(s: string): number {
   return n;
 }
 
-function parseSchemaText(text: string, line: number): SchemaDecl | ParseError {
-  // `% rel arg1 arg2 -> func` — relation name is the first token; args are
-  // tokens before `->`; aggregator is the single token after `->`. For now
-  // we only honour the relation name and aggregator (no per-relation args
-  // beyond the head sym).
-  const arrow = findTopArrow(text);
-  if (arrow < 0) return { line, message: "schema decl requires '->'" };
-  const head = text.slice(0, arrow).trim();
-  const tail = text.slice(arrow + 2).trim();
-  if (head.length === 0) return { line, message: "schema decl missing relation before '->'" };
-  if (tail.length === 0) return { line, message: "schema decl missing aggregator after '->'" };
-  const headTokens = tokenizeTermText(head);
-  if (headTokens.length === 0) return { line, message: "schema decl missing relation" };
-  const relation = headTokens[0]!;
-  if (!isSymToken(relation)) return { line, message: `schema relation must be lower-case (got '${relation}')` };
-  const tailTokens = tokenizeTermText(tail);
-  if (tailTokens.length !== 1) return { line, message: "schema aggregator must be a single token" };
-  const aggregator = tailTokens[0]!;
-  if (!aggregators.has(aggregator)) {
-    return { line, message: `unknown aggregator '${aggregator}'` };
-  }
-  return { relation, aggregator, span: { line } };
-}
 
 // `#acc name : col...` (plans/v2-acc-relations.md §1.1). Each column is a
 // base-type Symbol (a key column), a bare `@op`, or a group `(@op base)`;
@@ -1732,7 +1377,7 @@ function parseAccDeclText(text: string, line: number): AccDecl | ParseError {
 
 function parseEqualText(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   if (findTopArrow(text) >= 0) {
-    return { line, message: "'=' atom cannot carry '-> weight'" };
+    return { line, message: REMOVED_AGG("'-> weight'") };
   }
   const tokens = tokenizeTermText(text);
   const terms = parseTerms(tokens, line);
@@ -1768,29 +1413,23 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
     actor = name;
     text = text.slice(close + 1).trim();
   }
-  // Optional trailing `-> term` weight. Top-level arrow only (depth 0).
-  const arrow = findTopArrow(text);
-  let head: string;
-  let weight: Term | undefined;
-  if (arrow >= 0) {
-    head = text.slice(0, arrow).trim();
-    const tail = text.slice(arrow + 2).trim();
-    if (tail.length === 0) return { line, message: "missing weight term after '->'" };
-    const tailTokens = tokenizeTermText(tail);
-    const tailTerms = parseTerms(tailTokens, line);
-    if ("message" in tailTerms) return tailTerms;
-    if (tailTerms.length !== 1) return { line, message: "weight must be a single term" };
-    weight = tailTerms[0]!;
-  } else {
-    head = text;
+  // A trailing `-> term` weight fed the removed `#agg`/`#reactive`.
+  if (findTopArrow(text) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
+  const tokens = tokenizeTermText(text);
+  const parsedTerms = parseTerms(tokens, line);
+  if ("message" in parsedTerms) return parsedTerms;
+  // `not r t̄` (plans/v2-caret-fresh-left.md §3): a negated read. `not` is
+  // reserved — only valid as the prefix of an unmarked atom without a weight.
+  const neg = splitNot(parsedTerms, line);
+  if ("message" in neg) return neg;
+  const terms = neg.terms;
+  if (neg.negated && marker !== "match") {
+    return { line, message: "'not' only prefixes a plain read (no marker)" };
   }
-  const tokens = tokenizeTermText(head);
-  const terms = parseTerms(tokens, line);
-  if ("message" in terms) return terms;
   const atom: Atom = { terms };
   // Head syms starting with `*` are reserved for compiler-generated identity
   // terms (e.g. `*id`, `*mom`, `*choose`). Engine-emitted predicates like
-  // `_choose` / `_constrain` / `_do-agg` / `_agg-result` are reserved by the
+  // `_choose` / `_constrain` / `_exn-wait` / `_acc-settled` are reserved by the
   // general `_`-prefix rule (such tokens parse as Variables, not Symbols, so
   // they cannot appear as a Symbol head from user source).
   const headTerm = atom.terms[0];
@@ -1799,11 +1438,8 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
   }
   // Ask-shape validation (plans/v2-choice-actors.md): `?[actor] V1 .. Vn`
   // accepts only one or more distinct variables — no symbols, no compounds,
-  // no bare `_`, no duplicates, no weight.
+  // no bare `_`, no duplicates.
   if (marker === "ask") {
-    if (weight !== undefined) {
-      return { line, message: "'?' atom cannot carry a '-> weight'" };
-    }
     if (atom.terms.length === 0) {
       return { line, message: "'?' requires at least one variable" };
     }
@@ -1818,28 +1454,34 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
       seenAsk.add(t.name);
     }
   }
-  // A default-marker (`match`) atom that carries a trailing `-> weight`
-  // is an aggregate, not a match.
-  let outMarker: Marker = marker;
-  if (marker === "match" && weight !== undefined) outMarker = "aggregate";
-  const out: RuleAtom = { tag: "Atom", marker: outMarker, atom, span: { line, startCol, endCol } };
-  if (weight !== undefined) out.weight = weight;
+  const out: RuleAtom = { tag: "Atom", marker, atom, span: { line, startCol, endCol } };
   if (actor !== undefined) out.actor = actor;
+  if (neg.negated) out.negated = true;
   return out;
 }
 
+// Strip a leading reserved `not`. `not` followed by a Symbol-headed atom is a
+// negated read; any other use of the word (`not` alone, `+not x`, a `not`
+// argument position is fine) is an error, so the name never denotes a
+// relation.
+function splitNot(terms: Term[], line: number): { terms: Term[]; negated: boolean } | ParseError {
+  const h = terms[0];
+  if (h === undefined || h.tag !== "Symbol" || h.name !== "not") return { terms, negated: false };
+  const inner = terms[1];
+  if (inner === undefined || inner.tag !== "Symbol") {
+    return { line, message: "'not' is reserved: write 'not rel args…' to read that no row of an '#acc' relation matches" };
+  }
+  return { terms: terms.slice(1), negated: true };
+}
+
 // Parse a `!` body (text already stripped of the leading `!`). May be:
-//   single-atom plain: `foo X Y`
-//   single-atom agg:   `foo X -> W`
-//   compound:          `(sub, sub, ...)` where each sub is one of the above
+//   single atom: `foo X Y` (or `not foo X Y`)
+//   compound:    `(sub, sub, ...)` where each sub is one of the above
 function parseConstrainBody(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   const trimmed = text.trim();
   const subs: SubConstrain[] = [];
   if (trimmed.startsWith("(")) {
-    // Outer parens. Reject `!(...) -> w` — outer weight is undefined.
-    if (findTopArrow(trimmed) >= 0) {
-      return { line, message: "'!(...)' block cannot carry an outer '-> weight'" };
-    }
+    if (findTopArrow(trimmed) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
     if (!trimmed.endsWith(")")) {
       return { line, message: "'!(...)' block has unbalanced parens" };
     }
@@ -1871,8 +1513,8 @@ function parseConstrainBody(text: string, line: number, startCol: number, endCol
 }
 
 // Parse one sub-atom inside `!(...)` (or the entire body of a
-// single-atom `!`). Accepts only the plain or aggregate shape; no
-// markers, no equality, no nested parens-list.
+// single-atom `!`). A plain or `not` atom; no markers, no equality, no
+// nested parens-list.
 function parseConstrainSubAtom(text: string, line: number): SubConstrain | ParseError {
   if (text.length === 0) return { line, message: "empty sub-atom inside '!(...)'" };
   // Reject embedded markers / equalities by checking the first char.
@@ -1883,234 +1525,24 @@ function parseConstrainSubAtom(text: string, line: number): SubConstrain | Parse
   if (m === "(") {
     return { line, message: "sub-atom inside '!(...)' cannot be a parenthesised block" };
   }
-  const arrow = findTopArrow(text);
-  let headText: string;
-  let weight: Term | undefined;
-  if (arrow >= 0) {
-    headText = text.slice(0, arrow).trim();
-    const tail = text.slice(arrow + 2).trim();
-    if (tail.length === 0) return { line, message: "missing weight term after '->'" };
-    const tailTerms = parseTerms(tokenizeTermText(tail), line);
-    if ("message" in tailTerms) return tailTerms;
-    if (tailTerms.length !== 1) return { line, message: "weight must be a single term" };
-    weight = tailTerms[0]!;
-  } else {
-    headText = text;
-  }
-  const headTerms = parseTerms(tokenizeTermText(headText), line);
-  if ("message" in headTerms) return headTerms;
+  if (findTopArrow(text) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
+  const parsedHead = parseTerms(tokenizeTermText(text), line);
+  if ("message" in parsedHead) return parsedHead;
+  const neg = splitNot(parsedHead, line);
+  if ("message" in neg) return neg;
+  const headTerms = neg.terms;
   if (headTerms.length === 0) return { line, message: "sub-atom is empty" };
+  if (neg.negated) return { atom: { terms: headTerms }, negated: true };
   const headTerm = headTerms[0]!;
   if (headTerm.tag === "Symbol" && headTerm.name.startsWith("*")) {
     return { line, message: `head syms starting with '*' are reserved (got '${headTerm.name}')` };
   }
-  if (weight !== undefined) {
-    return { kind: "agg", atom: { terms: [...headTerms, weight] } };
-  }
-  return { kind: "plain", atom: { terms: headTerms } };
+  return { atom: { terms: headTerms } };
 }
 
-// Reduction ops accepted in `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-// `some`/`none` are the existence reductions (plans/v2-bracket-some.md): they
-// take no output pattern and eliminate their reduction variable from scope.
-// `none` is the negation of `some` — it succeeds exactly when `some` fails.
-const AGG_COMP_OPS = new Set(["count", "sum", "last", "some", "none"]);
 
-// Parse the inner text of a `[ Q | Out = op V ]` bracket aggregation
-// (brackets already stripped by the tokenizer; possibly joined from several
-// source lines). `Q` is a comma-separated list of plain match atoms and
-// nested `[...]` expressions, optionally chained with `.` dot notation
-// (resolved later by `desugarBody`); the reduction is `op V` with op in
-// AGG_COMP_OPS, and `Out` is a pattern unified against the folded value
-// (plans/v2-agg-output-var.md).
-//
-// The bare form `[ Q | op V ]` sets `out` to the Variable `V` and flags
-// `bare`; `desugarBody` then freshens the query-side occurrences of `V`,
-// which is what makes the bare form a special case of the general one.
-// Reduce-var binding restrictions (occurs in Q, not bound earlier in the
-// rule) and the Out/query disjointness rule are checked at decompose time,
-// where the prefix-bound set is known.
-function parseAggCompText(
-  text: string,
-  line: number,
-): Extract<BodyItem, { kind: "aggcomp" }> | ParseError {
-  // Locate the single top-level `|` (outside `(...)` and `[...]`).
-  let depth = 0;
-  let pipe = -1;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (c === "|" && depth === 0) {
-      if (pipe >= 0) {
-        return { line, message: "aggregate expression has more than one top-level '|'" };
-      }
-      pipe = i;
-    }
-  }
-  if (pipe < 0) {
-    return { line, message: "aggregate expression requires '| <op> <Var>'" };
-  }
-  const qText = text.slice(0, pipe).trim();
-  const rText = text.slice(pipe + 1).trim();
 
-  // Split an optional output pattern off the front: `Out = op V`.
-  const eq = findTopEq(rText);
-  const redText = eq < 0 ? rText : rText.slice(eq + 1).trim();
 
-  // Reduction: exactly `op V`.
-  const rToks = tokenizeTermText(redText);
-  if (rToks.length !== 2) {
-    return { line, message: "reduction must be '<op> <Var>'" };
-  }
-  const op = rToks[0]!;
-  if (!AGG_COMP_OPS.has(op)) {
-    return { line, message: `unknown reduction op '${op}' (expected count, sum, last, some, or none)` };
-  }
-  const vTok = rToks[1]!;
-  if (vTok === "_") {
-    return { line, message: "reduction variable cannot be '_'" };
-  }
-  if (!isVariableToken(vTok)) {
-    return { line, message: `reduction must name a variable (got '${vTok}')` };
-  }
-
-  // Output pattern. Absent: the bare form, whose `out` is the Variable `V`
-  // itself (desugarBody freshens the query side).
-  let out: Term;
-  let bare = false;
-  if (op === "some" || op === "none") {
-    // Existence reductions: no folded value, and the reduction variable is
-    // eliminated from scope (plans/v2-bracket-some.md). `out` is a Wildcard,
-    // which encodes to `*cq-any` — it binds nothing and contributes no
-    // output column, so `[ p X | some X ]` is a pass/fail guard binding
-    // nothing and `[ p X Y | some Y ]` binds only `X`. `none` is the
-    // negation of `some`. An output pattern would have no value to receive,
-    // so `Out = some V` / `Out = none V` is rejected.
-    if (eq >= 0) {
-      return { line, message: `'${op}' takes no output pattern (write '[ Q | ${op} V ]')` };
-    }
-    out = { tag: "Wildcard" };
-  } else if (eq < 0) {
-    out = { tag: "Variable", name: vTok };
-    bare = true;
-  } else {
-    const outToks = tokenizeTermText(rText.slice(0, eq).trim());
-    const outTerms = parseTerms(outToks, line);
-    if ("message" in outTerms) return outTerms;
-    if (outTerms.length !== 1) {
-      return { line, message: "left of '=' in a reduction must be a single term" };
-    }
-    out = outTerms[0]!;
-    const mentions = new Set<string>();
-    collectVarsInTerm(out, mentions);
-    if (mentions.has(vTok)) {
-      return {
-        line,
-        message: `reduction output cannot mention the reduction variable '${vTok}'`,
-      };
-    }
-  }
-
-  // Query items. `,` and `.` both separate items at top level; the `.`s
-  // survive as `dot` BodyItems for the shared dot-desugar pass.
-  const items: BodyItem[] = [];
-  const pieces = splitCompItems(qText, line);
-  if (!Array.isArray(pieces)) return pieces;
-  for (const p of pieces) {
-    if (p === ".") {
-      items.push({ kind: "dot", line });
-      continue;
-    }
-    const piece = p;
-    if (piece.startsWith("[")) {
-      if (!piece.endsWith("]")) {
-        return { line, message: "unbalanced '[' in aggregate query" };
-      }
-      const inner = parseAggCompText(piece.slice(1, -1), line);
-      if ("message" in inner) return inner;
-      items.push(inner);
-      continue;
-    }
-    if (piece.includes("[") || piece.includes("]")) {
-      return { line, message: "'[' inside an aggregate query must start a standalone item" };
-    }
-    const c0 = piece[0]!;
-    if (isMarkerChar(c0) || c0 === "=") {
-      return { line, message: "aggregate query atoms cannot carry a marker or '='" };
-    }
-    if (findTopArrow(piece) >= 0) {
-      return { line, message: "aggregate query atoms cannot carry '-> weight'" };
-    }
-    if (piece.includes(";") || piece.includes("{") || piece.includes("}")) {
-      return { line, message: "aggregate query atoms must be plain atoms" };
-    }
-    const terms = parseTerms(tokenizeTermText(piece), line);
-    if ("message" in terms) return terms;
-    if (terms.length === 0) {
-      return { line, message: "empty item in aggregate query" };
-    }
-    const head = terms[0]!;
-    if (head.tag === "Symbol" && head.name.startsWith("*")) {
-      return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
-    }
-    items.push({ kind: "atom", atom: { tag: "Atom", marker: "match", atom: { terms }, span: { line } } });
-  }
-  if (items.length === 0) {
-    return { line, message: "aggregate query must contain at least one item" };
-  }
-  return { kind: "aggcomp", items, reduce: { op, varName: vTok, out, bare }, span: { line } };
-}
-
-// Index of the first top-level `=` in `text` (depth counts `(...)` and
-// `[...]`), or -1.
-function findTopEq(text: string): number {
-  let depth = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (c === "=" && depth === 0) return i;
-  }
-  return -1;
-}
-
-// Split an aggregate query into items separated by top-level `,` and `.`
-// (depth counts both `(...)` and `[...]`). Dots are returned as the literal
-// `"."` marker; every other entry is a nonempty trimmed item text. An empty
-// stretch around a `.` is left to `desugarBody` to diagnose (it owns the
-// "dot must follow an atom" / "trailing '.'" messages).
-function splitCompItems(text: string, line: number): Array<string> | ParseError {
-  const out: string[] = [];
-  let depth = 0;
-  let start = 0;
-  const flush = (end: number, sep: "," | "." | "eof"): ParseError | null => {
-    const piece = text.slice(start, end).trim();
-    if (piece.length === 0) {
-      // Around a dot an empty stretch is a dot-placement error, reported
-      // downstream by `desugarBody`; anywhere else it's an empty item.
-      if (sep === "." || out[out.length - 1] === ".") return null;
-      if (sep === "eof" && out.length === 0) return null;
-      return { line, message: "empty item in aggregate query" };
-    }
-    out.push(piece);
-    return null;
-  };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (depth === 0 && (c === "," || c === ".")) {
-      const err = flush(i, c as "," | ".");
-      if (err !== null) return err;
-      if (c === ".") out.push(".");
-      start = i + 1;
-    }
-  }
-  const err = flush(text.length, "eof");
-  if (err !== null) return err;
-  return out;
-}
 
 // Split `text` on top-level commas (paren-depth 0). Returns the pieces,
 // not stripped.

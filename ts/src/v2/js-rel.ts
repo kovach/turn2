@@ -162,7 +162,6 @@ function resolveRule(rule: Rule, jsRels: Map<string, JsRelDef[]>): Rule {
       case "Atom":
       case "Sub":
       case "Exception":
-      case "AggComp":
         // Pre-expand kinds shouldn't reach this pass. Pass through.
         return a;
     }

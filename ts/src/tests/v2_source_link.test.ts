@@ -13,11 +13,13 @@ const SOURCE = `
   ( ~step here );
   ( ~look )
 
-#agg at * -> last
+#acc at : e (@last loc)
 
-step L, +at me -> L
+step L, +put me L
 
-look, at me -> L, ^print L
+put X L / at X L
+
+look, at me L, ^print L
 `;
 
 const parsed = parse(SOURCE);
@@ -28,17 +30,18 @@ if ("message" in parsed) {
 const spans = collectPositiveSpans(parsed.rules);
 
 // Emitting atoms: ~game (2), ~step (3), ~look (4) — the latter two inside
-// Sub bodies, which must be walked — +at (8), ^print (10).
+// Sub bodies, which must be walked — +put (8), ^print (12).
 assert.deepEqual(
   [...spans.keys()].sort((a, b) => a - b),
-  [2, 3, 4, 8, 10],
+  [2, 3, 4, 8, 12],
   `positive lines mismatch: got {${[...spans.keys()].sort((a, b) => a - b).join(", ")}}`,
 );
 
-// Non-rule and match-only positions never qualify: blank (1, 5), the #agg
-// directive (6), and lines whose only atoms are pure matches would be
-// absent — 8 and 10 qualify through their asserts, not their matches.
-for (const l of [1, 5, 6, 7, 9]) {
+// Non-rule and match-only positions never qualify: blanks (1, 5, 7, 9, 11),
+// the #acc directive (6), the acc rule (10: it contributes, it never emits a
+// tuple), and lines whose only atoms are pure matches would be absent — 8 and
+// 12 qualify through their asserts, not their matches.
+for (const l of [1, 5, 6, 7, 9, 10, 11]) {
   assert.ok(!spans.has(l), `line ${l} should not be positive`);
 }
 
@@ -55,10 +58,10 @@ for (const [line, list] of spans) {
     assert.ok(text.length > 0 && text === text.trim(), `bad extent for ${key}: "${text}"`);
   }
 }
-// The two emitting atoms on line 8/10 sit at distinct keys from their lines'
-// match atoms (which are absent), and `+at me -> L` slices exactly.
-const atSpan = spans.get(8)![0]!;
-assert.equal(lines[7]!.slice(atSpan.startCol, atSpan.endCol), "+at me -> L");
+// The two emitting atoms on line 8/12 sit at distinct keys from their lines'
+// match atoms (which are absent), and `+put me L` slices exactly.
+const putSpan = spans.get(8)![0]!;
+assert.equal(lines[7]!.slice(putSpan.startCol, putSpan.endCol), "+put me L");
 assert.equal(keyed.size, [...spans.values()].flat().length, "span keys must be distinct");
 
 console.log("ALL v2 source-link tests passed");

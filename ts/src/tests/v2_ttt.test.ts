@@ -4,13 +4,12 @@
 // 9 → 8 → 7 across turns 1, 2, 3.
 //
 // This exercises:
-//   - rule splitting at a weighted match nested inside a sub-rule
-//     (`( el-check, cell R C, fills (cell R C) -> z )`),
-//   - cross-turn visibility of `+ fills … -> 1` contributions,
-//   - free / `_free` handling in the wrapped do-agg pattern,
-//   - the empty-group guard that prevents `_free` leakage,
-//   - constraint-query interval scoping (the `! eligible` row's stored
-//     interval gates which `eligible` candidates appear as options).
+//   - an `#acc` view with stratified negation (`eligible` from `cell` and
+//     `not taken`) read inside a `!(...)` block at the choice's moment,
+//   - cross-turn visibility of `+ was-filled` facts through `taken`,
+//   - `is` rows anchored at their choice's ask moment,
+//   - constraint-query scoping (acc rows at the component's moment gate
+//     which `eligible` candidates appear as options).
 //
 // If any of those pieces regresses, the option count for some turn will
 // either go to 0 (engine stuck) or stay at 9 (fills not seen).
