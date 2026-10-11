@@ -727,8 +727,14 @@ async function run(): Promise<void> {
   let result;
   try {
     // `?lattice` in the page URL: moment-lattice max/min (v2/store.ts).
-    const lattice = new URLSearchParams(location.search).has("lattice");
-    result = runFixpoint(parsed, gas, tupleGas, { lattice });
+    const params = new URLSearchParams(location.search);
+    const lattice = params.has("lattice");
+    // `#acc` rows at every settled moment: the timeline's acc bars and the
+    // moment inspector draw each moment's stored rows, and the engine's
+    // default (demand) writes rows only where something reads them.
+    // `?acc=demand` runs the faster demand mode (bars only at read moments).
+    const accMode = params.get("acc") === "demand" ? "demand" : "eager";
+    result = runFixpoint(parsed, gas, tupleGas, { lattice, accMode });
   } catch (e) {
     // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
     // other evaluation failure — show it rather than swallowing it.

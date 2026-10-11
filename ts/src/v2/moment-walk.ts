@@ -41,6 +41,14 @@ export interface MomentHandler {
   // moments are run alongside the frontier without being re-opened —
   // everything below them is settled, so the answer is as final as it gets.
   demanded?(store: Store): Iterable<number>;
+  // Optional: the handler completes the monotone state rather than judging
+  // it. An exclusive handler runs first in every walk round, at its
+  // `demanded` moments only (whatever their state — the handler decides
+  // what it may serve), and a round in which it adds a tuple runs no other
+  // handler: the inner loop takes over, so the others never judge a state
+  // whose readers have not yet seen its rows. Used by the acc handler
+  // (acc.ts) to serve late demand from a moment's snapshot.
+  exclusive?: boolean;
   // Optional: called once per moment, the first time a walk round with the
   // moment on the frontier is quiet (`settleMoments`; the moment is then in
   // `store.settled`). Every `run` round at `m` has settled by then, but `m`
@@ -166,11 +174,24 @@ export interface WalkRound {
 // unblocked frontier moments are resolved and the walk continues; if every
 // frontier moment is blocked, the choices there surface.
 export function runWalkRound(store: Store, handlers: readonly MomentHandler[]): WalkRound {
+  // Exclusive handlers first, at their own demanded moments; progress there
+  // ends the round (frontier left empty: the caller re-runs the rules before
+  // anything is judged).
+  for (const h of handlers) {
+    if (h.exclusive !== true || h.demanded === undefined) continue;
+    const toks = [...h.demanded(store)];
+    let progress = false;
+    for (const tok of toks) {
+      const m = store.momentTerms.get(tok);
+      if (m !== undefined && h.run(store, m).progress) progress = true;
+    }
+    if (progress) return { frontier: [], late: toks, progress: true, blocked: new Set(), exhausted: false };
+  }
   const U = unresolvedMoments(store);
   const F = frontier(store, U);
   const lateSet = new Set<number>();
   for (const h of handlers) {
-    if (h.demanded === undefined) continue;
+    if (h.exclusive === true || h.demanded === undefined) continue;
     for (const tok of h.demanded(store)) {
       if (store.resolved.has(tok)) lateSet.add(tok);
     }
@@ -188,6 +209,7 @@ export function runWalkRound(store: Store, handlers: readonly MomentHandler[]): 
     const m = store.momentTerms.get(tok);
     if (m === undefined) continue; // unreachable: tokens come from momentTerms
     for (const h of handlers) {
+      if (h.exclusive === true) continue;
       const r = h.run(store, m);
       if (r.progress) round.progress = true;
       if (r.blocked) round.blocked.add(tok);

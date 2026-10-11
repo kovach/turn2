@@ -22,6 +22,7 @@ import {
   candidatesByHead,
   candidatesByHeadAt,
   comparable,
+  demandAcc,
   internAtom,
   leastUpperBound,
   lessEq,
@@ -68,6 +69,9 @@ export interface AccRow {
 export interface AccEvalCtx {
   rows(relation: string): readonly AccRow[];
   contribute(relation: string, terms: Term[], moment: Term, firing: string): void;
+  // Snapshot bound (store.ts `accWatermark`): stored-tuple matches see only
+  // tuples with index below it. Absent = the whole store.
+  tupleBound?: number;
 }
 
 interface Ctx {
@@ -78,6 +82,9 @@ interface Ctx {
   ruleName: string;
   ruleIdx: number;
   acc?: AccEvalCtx;
+  // Stored-tuple matches skip candidates at or past this index (an acc
+  // snapshot's watermark; `Infinity` otherwise).
+  bound: number;
 }
 
 export function evaluateRule(
@@ -95,6 +102,7 @@ export function evaluateRule(
     trail: newTrail(),
     ruleName: rule.name,
     ruleIdx,
+    bound: acc?.tupleBound ?? Infinity,
   };
   if (acc !== undefined) ctx.acc = acc;
   const rs = ruleIdx >= 0 ? store.stats.rules[ruleIdx] : undefined;
@@ -261,6 +269,9 @@ function evalAccContribute(
 // `decomposeAccRule` binds every read to it; acc.ts prepends `Equal` of it
 // to the moment being resolved).
 export const ACC_MOMENT_VAR = "_acc_m";
+// Head of the marker row the acc handler writes at a moment when it computes
+// the rows there (expand.ts `SYM_ACC_AT`).
+export const ACC_AT_HEAD = "_acc-at";
 const SYM_ACC_ROW: Term = { tag: "Symbol", name: "*acc-row" };
 
 // Compute a non-Term `Expr` to a Term, or `null` for relational failure
@@ -326,22 +337,37 @@ function evalMatch(
   const rs = ctx.ruleIdx >= 0 ? ctx.store.stats.rules[ctx.ruleIdx] : undefined;
   const hs = getOrCreateHead(ctx.store.stats, head);
   hs.scanCount++;
-  // Display bookkeeping (plans/v2-acc-timeline-display.md): an ordinary
-  // rule's point read of an acc relation is recorded at its moment whether
-  // or not a row matches, so the timeline can mark where a relation was
-  // consulted. Acc rules read through `AccMatch`, so they never land here.
-  if (ctx.store.accRelations.size > 0 && ctx.store.accRelations.has(head)) {
-    const at = substTerm(a.l, ctx.trail);
-    if (at.tag !== "Variable" && at.tag !== "Wildcard") {
-      let seen = ctx.store.accConsulted.get(head);
-      if (seen === undefined) { seen = new Set(); ctx.store.accConsulted.set(head, seen); }
-      seen.add(tokenOf(ctx.store, at));
+  // An ordinary rule's point read of an acc relation — or of `_acc-at`, the
+  // marker a `not` read waits on (expand.ts decomposeAccRead) — demands the
+  // acc rows at its moment (store.ts `accDemand`; acc.ts computes them at
+  // settle or, for an already-settled moment, from its watermark). The acc
+  // read is also display bookkeeping (plans/v2-acc-timeline-display.md):
+  // recorded whether or not a row matches, so the timeline can mark where a
+  // relation was consulted. Acc rules read through `AccMatch`, so they
+  // never land here.
+  if (ctx.store.accRelations.size > 0) {
+    const isAcc = ctx.store.accRelations.has(head);
+    if (isAcc || head === ACC_AT_HEAD) {
+      const at = substTerm(a.l, ctx.trail);
+      if (at.tag !== "Variable" && at.tag !== "Wildcard") {
+        const tok = tokenOf(ctx.store, at);
+        demandAcc(ctx.store, tok);
+        if (isAcc) {
+          let seen = ctx.store.accConsulted.get(head);
+          if (seen === undefined) { seen = new Set(); ctx.store.accConsulted.set(head, seen); }
+          seen.add(tok);
+        }
+      }
     }
   }
+  // Candidate buckets list tuple indices in insertion order, so a snapshot
+  // bound (acc evaluation at a watermark) ends the scan.
+  const bound = ctx.bound;
   if (a.negated) {
     // `not r t̄` (expand.ts decomposeAccRead): succeed once, binding
     // nothing, iff no stored row unifies at the given endpoints.
     for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+      if (idx >= bound) break;
       const tup = ctx.store.tuples[idx]!;
       const mark = trailLength(ctx.trail);
       const hit =
@@ -355,6 +381,7 @@ function evalMatch(
     return;
   }
   for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+    if (idx >= bound) break;
     if (rs !== undefined) rs.candScanned++;
     const gen = ctx.store.gens[idx]!;
     if (constraint === "delta") {

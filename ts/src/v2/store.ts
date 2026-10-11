@@ -95,9 +95,10 @@ export interface Store {
   // fresh store.
   resolved: Set<number>;
   // Moments whose `settle` hooks have run (moment-walk.ts `settleMoments`):
-  // the walk was quiet there, and the acc rows at the moment are written. A
-  // superset of `resolved` — a moment with a pending choice is settled but
-  // not resolved.
+  // the walk was quiet there, and the acc snapshot at the moment is fixed
+  // (`accWatermark`; its rows are written then or on demand). A superset of
+  // `resolved` — a moment with a pending choice is settled but not
+  // resolved.
   settled: Set<number>;
   // `#acc` display bookkeeping (plans/v2-acc-timeline-display.md); never
   // consulted by evaluation. `accRelations` names every declared acc
@@ -107,6 +108,23 @@ export interface Store {
   // a row matched (`evalMatch`).
   accRelations: Map<string, { readByRules: boolean }>;
   accConsulted: Map<string, Set<number>>;
+  // Demand-driven `#acc` evaluation (acc.ts `accHandler`). Acc rows at a
+  // moment are computed only where something reads them. `accDemand` holds
+  // every moment token at which acc rows were asked for — an ordinary rule's
+  // point read of an acc relation, a `not` read's `_acc-at` read (both in
+  // `evalMatch`), or a `_constrain` row's moment when some `!(...)` reads an
+  // acc relation (the handler). `accPending` is `accDemand` minus
+  // `accComputed` (the moments whose rows have been written). Use
+  // `demandAcc` to add demand. `accWatermark` maps each settled moment to
+  // `tuples.length` at its settle: the rows at `m` are a pure function of
+  // the tuples with index below it (the store is append-only, and by the
+  // creation-time ordering invariant — `addOrder` — whether an old tuple is
+  // alive at `m` never changes), so they can be computed at any later time
+  // and equal the settle-time snapshot.
+  accDemand: Set<number>;
+  accPending: Set<number>;
+  accComputed: Set<number>;
+  accWatermark: Map<number, number>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
   // Hard cap on inserted tuples. When exceeded, `addTuple` throws GasError;
@@ -195,6 +213,10 @@ export function createStore(opts: StoreOptions = {}): Store {
     settled: new Set(),
     accRelations: new Map(),
     accConsulted: new Map(),
+    accDemand: new Set(),
+    accPending: new Set(),
+    accComputed: new Set(),
+    accWatermark: new Map(),
     tupleSet: new Set(),
     tupleGas: 0,
     iteration: 1,
@@ -462,6 +484,16 @@ export function intervalContains(
   if (!lessEq(store, outerL, innerL)) return false;
   if (!lessEq(store, innerR, outerR)) return false;
   return true;
+}
+
+// Record that acc rows at the moment `tok` are read (store.ts `accDemand`).
+// A moment already computed needs nothing more; otherwise it is pending
+// until the acc handler computes it (at settle, or later from the
+// watermark).
+export function demandAcc(store: Store, tok: number): void {
+  if (store.accDemand.has(tok)) return;
+  store.accDemand.add(tok);
+  if (!store.accComputed.has(tok)) store.accPending.add(tok);
 }
 
 // Tuple candidates whose first term is the given symbol. Returned by index

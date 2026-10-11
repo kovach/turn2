@@ -69,7 +69,9 @@ ${STAGE_HELP}
 
   --out applies to the eval stage only (default: tuples).
   --lattice (eval only): max/min of incomparable moments build lattice-node
-    moments instead of failing the match.`;
+    moments instead of failing the match.
+  --acc-eager (eval only): compute '#acc' rows at every settled moment, not
+    only where read (ordinary tuples are the same; v2/acc.ts).`;
 
 export type EvalFormat = "tuples" | "timeline" | "debug";
 
@@ -87,6 +89,8 @@ export interface RunOptions {
   pretty: boolean;
   // Eval with moment-lattice max/min (v2/store.ts "Moment lattice").
   lattice: boolean;
+  // Eval with eager `#acc` rows (v2/acc.ts): every settled moment.
+  accEager: boolean;
 }
 
 export const DEFAULT_OPTIONS: RunOptions = {
@@ -99,6 +103,7 @@ export const DEFAULT_OPTIONS: RunOptions = {
   lines: false,
   pretty: false,
   lattice: false,
+  accEager: false,
 };
 
 function isStage(s: string): s is Stage {
@@ -128,7 +133,10 @@ function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
 // print to stdout. `eval`'s run status is reported separately by the caller.
 export function runStage(stage: Stage, parsed: Program, opts: RunOptions): string {
   if (stage === "eval") {
-    const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas, { lattice: opts.lattice });
+    const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas, {
+      lattice: opts.lattice,
+      accMode: opts.accEager ? "eager" : "demand",
+    });
     console.error(`status: ${describeErrorStatus(store, status) ?? status.kind}`);
     return renderStore(store, opts.out);
   }
@@ -253,6 +261,9 @@ function main(argv: string[]): void {
         break;
       case "--lattice":
         opts.lattice = true;
+        break;
+      case "--acc-eager":
+        opts.accEager = true;
         break;
       case "-h":
       case "--help":

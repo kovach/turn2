@@ -18,7 +18,7 @@ import {
 } from "../v2/store.js";
 import { expandTerm } from "../v2/hashcons.js";
 import { ACC_OPS, accOp, natValue, type AccOpDef } from "../v2/acc-ops.js";
-import { accHandler, compileAcc } from "../v2/acc.js";
+import { accHandler, compileAcc, computeAccAt } from "../v2/acc.js";
 import { frontier, markResolved, settleMoments, unresolvedMoments } from "../v2/moment-walk.js";
 import type { Atom, Term } from "../v2/term.js";
 
@@ -201,7 +201,7 @@ c, at me L, ^at-c L
 
 // ===== 4) Count and threshold; keyless zero row ==============================
 {
-  const { store, status } = runFixpoint(ok(`
+  const src4 = `
 #acc occupancy : location @count
 #acc crowded : location
 #acc n : @count
@@ -221,16 +221,25 @@ a, +at other there
 c, occupancy L N, ^occ L N
 c, crowded L, ^crowded-c L
 c, n N, ^total N
-`));
-  assert.equal(status.kind, "done");
-  assert.deepEqual(withHead(store, "occ"), [`occ here ${three}`, "occ there (s z)"]);
-  assert.deepEqual(withHead(store, "crowded-c"), ["crowded-c here"]);
-  assert.deepEqual(withHead(store, "total"), ["total (s (s (s (s z))))"]);
-  // The keyless count has its zero row at bot (nothing alive there).
-  const nAtBot = store.tuples.filter((t) =>
-    rt(store, t.atom.terms[0]!) === "n" && tokenOf(store, t.l) === store.botTok);
-  assert.equal(nAtBot.length, 1);
-  assert.equal(ra(store, nAtBot[0]!.atom), "n z");
+`;
+  for (const accMode of ["demand", "eager"] as const) {
+    const { store, status } = runFixpoint(ok(src4), 200, 5000, { accMode });
+    assert.equal(status.kind, "done");
+    assert.deepEqual(withHead(store, "occ"), [`occ here ${three}`, "occ there (s z)"]);
+    assert.deepEqual(withHead(store, "crowded-c"), ["crowded-c here"]);
+    assert.deepEqual(withHead(store, "total"), ["total (s (s (s (s z))))"]);
+    // The keyless count has its zero row at bot (nothing alive there) —
+    // written when every settled moment is computed; nobody reads `n` at
+    // bot, so under demand there is no row there.
+    const nAtBot = store.tuples.filter((t) =>
+      rt(store, t.atom.terms[0]!) === "n" && tokenOf(store, t.l) === store.botTok);
+    if (accMode === "eager") {
+      assert.equal(nAtBot.length, 1);
+      assert.equal(ra(store, nAtBot[0]!.atom), "n z");
+    } else {
+      assert.equal(nAtBot.length, 0);
+    }
+  }
   console.log("PASS: @count under a wildcard, threshold pattern, keyless zero row");
 }
 
@@ -313,10 +322,13 @@ min-path a d P, ^mp P
   console.log("PASS: @arg-min yields every argument attaining the minimum");
 }
 {
+  // (Read at a moment where the bad contribution is alive: rows are computed
+  // only where read, so an unread relation's op error never surfaces.)
   const msg = runErr(`
 #acc distance : location location @min
 edge A B / distance A B 1
 ^edge a b
+edge a b, distance a b D, ^d D
 `);
   assert.match(msg, /acc 'distance': @min expects a Peano nat/);
   console.log("PASS: @min rejects a numeric-symbol contribution");
@@ -441,6 +453,7 @@ seed X / n X
 n X / n (s X)
 
 ^seed z
+seed _, n X, ^got X
 `);
   assert.match(msg, /acc: stratum \{n\} did not converge at moment/);
   console.log("PASS: a diverging recursive stratum reports the round cap");
@@ -888,6 +901,126 @@ check, pairs N, ^closure-pairs N
   assert.deepEqual(withHead(store, "via-tuples"), [`via-tuples ${peanoText(3)}`]);
   assert.deepEqual(withHead(store, "closure-pairs"), [`closure-pairs ${peanoText(9)}`]);
   console.log("PASS: counting acc rows read in an acc body");
+}
+
+// ===== 21) Demand-driven evaluation ==========================================
+// `runFixpoint` computes acc rows only at moments something reads them
+// (`accMode: "demand"`, the default); "eager" computes every settled moment.
+// Ordinary tuples are the same either way.
+{
+  const ordinary = (s: Store): string[] =>
+    s.tuples
+      .filter((t) => {
+        const h = rt(s, t.atom.terms[0]!);
+        return !s.accRelations.has(h) && h !== "_acc-at";
+      })
+      .map((t) => ra(s, t.atom))
+      .sort();
+  const rowMoments = (s: Store, rel: string): number[] =>
+    [...new Set(s.tuples.filter((t) => rt(s, t.atom.terms[0]!) === rel).map((t) => tokenOf(s, t.l)))];
+  const src = `
+#acc n : @count
+#acc has : e
+thing X / n ()
+thing X / has X
+
+~game
+  ~a; ~b; ~c
+
+a, +thing x
+b, +thing y
+b, not has z, ^no-z ok
+c, n N, ^total N
+`;
+  const dem = runFixpoint(ok(src), 200, 5000, { accMode: "demand" });
+  const eag = runFixpoint(ok(src), 200, 5000, { accMode: "eager" });
+  assert.equal(dem.status.kind, "done");
+  assert.equal(eag.status.kind, "done");
+  assert.deepEqual(ordinary(dem.store), ordinary(eag.store), "ordinary tuples are the same in both modes");
+  assert.deepEqual(withHead(dem.store, "total"), ["total (s (s z))"]);
+  assert.deepEqual(withHead(dem.store, "no-z"), ["no-z ok"]);
+  // Demand: rows only where some relation is read — `n` at c's start,
+  // `has` (via `not`) at b's start. A computed moment gets every relation's
+  // rows, and the `_acc-at` marker.
+  const cStart = tokenOf(dem.store, dem.store.tuples.find((t) => rt(dem.store, t.atom.terms[0]!) === "c")!.l);
+  const bStart = tokenOf(dem.store, dem.store.tuples.find((t) => rt(dem.store, t.atom.terms[0]!) === "b")!.l);
+  const read = [bStart, cStart].sort();
+  assert.deepEqual(rowMoments(dem.store, "n").sort(), read);
+  assert.deepEqual(rowMoments(dem.store, "has").sort(), read);
+  assert.deepEqual(rowMoments(dem.store, "_acc-at").sort(), read);
+  assert.deepEqual([...dem.store.accComputed].sort(), read);
+  assert.ok(dem.store.accComputed.size < dem.store.settled.size, "unread moments are not computed");
+  // Eager: rows at every settled moment, as before.
+  assert.equal(eag.store.accComputed.size, eag.store.settled.size);
+  assert.ok(rowMoments(eag.store, "n").length > 1);
+  assert.equal(rowMoments(eag.store, "_acc-at").length, eag.store.settled.size);
+  console.log("PASS: demand computes acc rows only where read; eager everywhere; same ordinary tuples");
+}
+{
+  // Late demand is served from the moment's watermark. The continuation
+  // reads `chosen` at the ask moment after the choice resolved — long after
+  // the moment settled — and the `is` row it would count is alive there but
+  // was added after the snapshot, so it is not counted.
+  const src = `
+#acc chosen : v
+is _ V / chosen V
+
+^opt a
+~go
+
+go, ?[rng] X, !(opt X), is X V, not chosen V, ^unseen V
+go, ?[rng] X, !(opt X), is X V, chosen V, ^seen V
+`;
+  for (const accMode of ["demand", "eager"] as const) {
+    const program = ok(src);
+    const { store, status } = runFixpoint(program, 200, 5000, { accMode, random: () => 0 });
+    assert.equal(status.kind, "done");
+    assert.deepEqual(withHead(store, "unseen"), ["unseen a"], accMode);
+    assert.deepEqual(withHead(store, "seen"), [], accMode);
+    const isIdx = store.tuples.findIndex((t) => rt(store, t.atom.terms[0]!) === "is");
+    const ask = store.tuples[isIdx]!.l;
+    const askTok = tokenOf(store, ask);
+    assert.ok(store.settled.has(askTok) && store.accComputed.has(askTok));
+    assert.ok(store.accWatermark.get(askTok)! <= isIdx, "the `is` row came after the ask moment's snapshot");
+    // Demand computed the ask moment late (after the `is` row); eager at
+    // its settle.
+    const markerIdx = store.tuples.findIndex((t) =>
+      rt(store, t.atom.terms[0]!) === "_acc-at" && tokenOf(store, t.l) === askTok);
+    assert.ok(accMode === "demand" ? markerIdx > isIdx : markerIdx < isIdx, `${accMode}: marker at ${markerIdx}, is at ${isIdx}`);
+    // The rows at the ask moment are the snapshot; the whole store would
+    // count the choice.
+    assert.deepEqual(
+      store.tuples.filter((t) => rt(store, t.atom.terms[0]!) === "chosen" && tokenOf(store, t.l) === askTok),
+      [],
+    );
+    const full = computeAccAt(store, compileAcc(program), ask, new Map(), new Map());
+    assert.deepEqual(full.get("chosen")!.map((r) => r.terms.map((t) => rt(store, t)).join(" ")), ["a"]);
+    const snap = computeAccAt(store, compileAcc(program), ask, new Map(), new Map(), store.accWatermark.get(askTok));
+    assert.deepEqual(snap.get("chosen"), []);
+  }
+  console.log("PASS: a late read at a settled moment sees its snapshot, not later tuples");
+}
+{
+  // `!(...)` is the only reader: every `_constrain` row's moment is demanded,
+  // so the rows exist before its component is enumerated.
+  const src = `
+#acc at : e (@last location)
+move A B / at A B
+~game
+  ~a; ~pick
+a, +move me here
+a, +move you there
+pick, ?C, !(at C here)
+pick, ?L, !(not at me L, at _ L)
+`;
+  for (const accMode of ["demand", "eager"] as const) {
+    const { store, status } = runFixpoint(ok(src), 200, 5000, { accMode });
+    assert.equal(status.kind, "active-choices");
+    if (status.kind !== "active-choices") throw new Error("unreachable");
+    const opts = status.components.map((c) => c.options.map((o) => o.map((t) => rt(store, t)).join(" ")).sort()).sort();
+    assert.deepEqual(opts, [["me"], ["there"]], accMode);
+  }
+  console.log("PASS: acc reads inside !(...) (positive and not) are demanded at the component moment");
 }
 
 console.log("ALL v2 acc tests passed");

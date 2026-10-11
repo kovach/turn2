@@ -541,7 +541,9 @@ function runComponent(
   const actors = activeKeys.map((k) => actorByTok.get(k) ?? "you");
 
   // The component's moment — the ask moment of its terms, which is also
-  // where every one of its rows sits.
+  // where every one of its rows sits. Acc rows there exist: when a `!(...)`
+  // reads an acc relation, the acc handler demands every `_constrain` row's
+  // moment and computes it before the walk lets components surface (acc.ts).
   const M = comp.moment;
 
   const seen = new Set<string>();

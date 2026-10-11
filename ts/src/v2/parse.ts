@@ -1429,7 +1429,7 @@ function parseAtomText(text: string, marker: Marker, line: number, startCol: num
   const atom: Atom = { terms };
   // Head syms starting with `*` are reserved for compiler-generated identity
   // terms (e.g. `*id`, `*mom`, `*choose`). Engine-emitted predicates like
-  // `_choose` / `_constrain` / `_exn-wait` / `_acc-settled` are reserved by the
+  // `_choose` / `_constrain` / `_exn-wait` / `_acc-at` are reserved by the
   // general `_`-prefix rule (such tokens parse as Variables, not Symbols, so
   // they cannot appear as a Symbol head from user source).
   const headTerm = atom.terms[0];

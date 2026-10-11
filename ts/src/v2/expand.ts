@@ -14,7 +14,7 @@ import { exprTerms } from "./types.js";
 import { pruneChains } from "./expand-liveness.js";
 import { resolveJsModes } from "./js-rel.js";
 import { accOp, UNIT } from "./acc-ops.js";
-import { ACC_MOMENT_VAR } from "./eval.js";
+import { ACC_AT_HEAD, ACC_MOMENT_VAR } from "./eval.js";
 
 // `_is-input` (scheduler.ts) — defined here to keep expand free of scheduler imports.
 const SYM_IS_INPUT: Term = { tag: "Symbol", name: "_is-input" };
@@ -593,9 +593,10 @@ const SYM_C_PLAIN: Term = { tag: "Symbol", name: "*c-plain" };
 const SYM_C_JS: Term = { tag: "Symbol", name: "*c-js" };
 const SYM_CHOOSE_ROW: Term = { tag: "Symbol", name: "_choose" };
 const SYM_CONSTRAIN_ROW: Term = { tag: "Symbol", name: "_constrain" };
-// Written by the acc handler at every settled moment when the program has a
-// negated read (acc.ts); a `not` read waits on it.
-export const SYM_ACC_SETTLED: Term = { tag: "Symbol", name: "_acc-settled" };
+// Written by the acc handler at a moment when it computes the acc rows there,
+// if the program has a negated read (acc.ts); a `not` read waits on it, and
+// reading it demands the rows at that moment (eval.ts `evalMatch`).
+export const SYM_ACC_AT: Term = { tag: "Symbol", name: ACC_AT_HEAD };
 // Exception default checks (decomposeExnCheck; answered in scheduler.ts).
 export const SYM_EXN_WAIT: Term = { tag: "Symbol", name: "_exn-wait" };
 export const SYM_EXN_CLEAR: Term = { tag: "Symbol", name: "_exn-clear" };
@@ -817,16 +818,17 @@ function decomposeAccRead(
   const matchAtom: Atom = { terms: [...a.atom.terms, { tag: "Wildcard" }] };
   if (a.negated) {
     // `not r t̄`: range-restricted, binds nothing, anchor unchanged. The
-    // positive `_acc-settled` point read blocks the rule until XL has
-    // settled (the rows at XL are then final — plans/v2-caret-fresh-left.md
-    // §2.2) and is what wakes it then: an absent row produces no delta.
+    // positive `_acc-at` point read demands the acc rows at XL and blocks
+    // the rule until they are computed (at XL's settle snapshot, so they are
+    // final — plans/v2-caret-fresh-left.md §2.2); the marker, written with
+    // the rows, is what wakes it then: an absent row produces no delta.
     const unbound = termsVars(a.atom.terms).filter((n) => !state.seen.has(n));
     if (unbound.length > 0) {
       throw new Error(
         `rule '${state.ruleName}': 'not ${h.name} …' needs its variables bound before it (unbound: ${unbound.join(", ")})`,
       );
     }
-    state.out.push({ tag: "Match", atom: { terms: [SYM_ACC_SETTLED, { tag: "Wildcard" }] }, l: XL, r: XL, span: a.span });
+    state.out.push({ tag: "Match", atom: { terms: [SYM_ACC_AT, { tag: "Wildcard" }] }, l: XL, r: XL, span: a.span });
     state.out.push({ tag: "Match", atom: matchAtom, l: XL, r: XL, negated: true, span: a.span });
     return true;
   }

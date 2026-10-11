@@ -215,7 +215,7 @@ export interface TimelineLayout {
 
 const SIDEBAR_HEADS = new Set(["is", "_constrain"]);
 const INTERNAL_HEADS = new Set([
-  "_choose", "_constrain", "_dead-choice", "_acc-settled", "_exn-wait", "_exn-clear", "_exn-held", "_is-input",
+  "_choose", "_constrain", "_dead-choice", "_acc-at", "_exn-wait", "_exn-clear", "_exn-held", "_is-input",
 ]);
 
 function headSym(atom: Atom): string | null {

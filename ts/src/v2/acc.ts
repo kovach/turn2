@@ -1,11 +1,12 @@
-// `#acc` relations: computed when a moment settles (plans/v2-acc-relations.md;
-// timing from plans/v2-choice-components-by-moment.md step 6).
+// `#acc` relations: a snapshot per settled moment, computed where read
+// (plans/v2-acc-relations.md; timing from
+// plans/v2-choice-components-by-moment.md step 6).
 //
 // An acc relation's rows are a function of the state alive at a moment:
 // `body / head` rules derive contributions from the stored tuples alive at
 // `m` (and from other acc relations' rows at `m`), the declared op folds
 // them per key (acc-ops.ts: η, ⊕, ρ), and the result is written as point
-// rows `name k… v <id>` at `[m, m]` when the moment walk settles `m`.
+// rows `name k… v <id>` at `[m, m]`.
 // Ordinary rules read them with a point match at their anchor's left
 // endpoint (expand.ts `decomposeAccRead`); a `!(...)` block reads them with
 // its ordinary stored-tuple match at the component's moment.
@@ -17,23 +18,38 @@
 // is a least fixpoint; otherwise the program is assumed well-defined (the
 // section's clause) and a round cap turns divergence into an error.
 //
-// Timing: the handler does nothing in `run` rounds; its `settle` hook fires
-// once per moment, the first time a walk round with `m` on the frontier is
-// quiet — after every fold and same-moment `^` chain at `m` has settled,
-// before `m` is marked resolved and before any choice at `m` surfaces. The
-// rows it writes are progress, so the inner loop runs and readers at `m`
-// fire — but acc at `m` is written once, so what they (or a choice's
-// continuation) emit at `m` is not folded into `m`'s acc rows (a snapshot),
+// Timing: the snapshot at `m` is fixed by the handler's `settle` hook, which
+// fires once per moment, the first time a walk round with `m` on the
+// frontier is quiet — after every fold and same-moment `^` chain at `m` has
+// settled, before `m` is marked resolved and before any choice at `m`
+// surfaces. It records the watermark `store.accWatermark[m] =
+// tuples.length`; the rows at `m` are a function of the tuples below it
+// (store.ts), so they can be computed then or at any later time with the
+// same result. Rows are written once per moment, so what readers (or a
+// choice's continuation) emit at `m` is not folded into `m`'s acc rows,
 // only into later moments'. A second choice chained at the same moment
 // therefore sees the acc state from before the first.
+//
+// Demand (the default under `runFixpoint`, `accMode: "demand"`): rows are
+// computed only at moments something reads (`store.accDemand`): an ordinary
+// rule's acc read or a `not` read's `_acc-at` read (eval.ts `evalMatch`),
+// or a `_constrain` row's moment when some `!(...)` reads an acc relation
+// (scanned here). `settle` computes at once if `m` is already demanded;
+// demand arriving later is served from the watermark through `demanded` /
+// `run`. The handler is `exclusive` (moment-walk.ts): a walk round in which
+// it writes rows runs no other handler, so readers of late rows fire before
+// anything is judged — the same state the eager mode reaches. Eager mode
+// computes at every settled moment (for displays that draw every moment's
+// rows). Rows written are progress either way: readers wake through the
+// ordinary semi-naive delta.
 
 import type { Atom, Term } from "./term.js";
 import { hashconsTerm } from "./hashcons.js";
 import type { AccDecl, Program, Rule, RuleAtom } from "./types.js";
-import { addTuple, leastUpperBound, tokenOf, type Store } from "./store.js";
+import { addTuple, candidatesByHead, demandAcc, leastUpperBound, tokenOf, type Store } from "./store.js";
 import { ACC_MOMENT_VAR, evaluateRule, type AccEvalCtx, type AccRow, type CompiledJs } from "./eval.js";
 import { resolveJsModes, type CompiledJsRel } from "./js-rel.js";
-import { decomposeAccRule, SYM_ACC_SETTLED } from "./expand.js";
+import { decomposeAccRule, SYM_ACC_AT } from "./expand.js";
 import { accOp, type AccOpDef } from "./acc-ops.js";
 import type { MomentHandler } from "./moment-walk.js";
 
@@ -41,7 +57,7 @@ import type { MomentHandler } from "./moment-walk.js";
 export const ACC_ROUND_CAP = 1000;
 
 const SYM_ACC_ID: Term = { tag: "Symbol", name: "*acc" };
-const SYM_SETTLED_ID: Term = { tag: "Symbol", name: "*acc-settled" };
+const SYM_ACC_AT_ID: Term = { tag: "Symbol", name: "*acc-at" };
 
 export interface AccStratum {
   relations: string[];
@@ -148,13 +164,16 @@ interface Contribution {
   moment: Term;
 }
 
-// Compute every acc relation's rows at the point `m` (§5.2).
+// Compute every acc relation's rows at the point `m` (§5.2). `bound`: only
+// stored tuples with index below it are read (the moment's watermark;
+// default the whole store).
 export function computeAccAt(
   store: Store,
   compiled: CompiledAcc,
   m: Term,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
+  bound?: number,
 ): Map<string, AccRow[]> {
   const rows = new Map<string, AccRow[]>();
   for (const name of compiled.decls.keys()) rows.set(name, []);
@@ -191,6 +210,7 @@ export function computeAccAt(
           if (!bucket.has(sig)) bucket.set(sig, { key, value, moment });
         },
       };
+      if (bound !== undefined) ctx.tupleBound = bound;
       for (const rule of stratum.rules) {
         evaluateRule({ ...rule, body: [pin, ...rule.body] }, store, jsFuncs, jsRels, -1, ctx);
       }
@@ -274,42 +294,87 @@ function renderMoment(store: Store, m: Term): string {
   return `#${tokenOf(store, m)}`;
 }
 
-// The moment handler (§5.5): nothing in `run`; at `settle`, compute the
-// rows at `m` and write them as point tuples with a deterministic id.
+export type AccMode = "eager" | "demand";
+
+export interface AccHandlerOptions {
+  // "eager": rows at every settled moment. "demand": only where read. The
+  // handler's default is eager; `runFixpoint` defaults to demand.
+  mode?: AccMode;
+  // Write an `_acc-at` point row wherever rows are computed: the program
+  // has a `not` read, which waits on it (expand.ts decomposeAccRead).
+  marker?: boolean;
+  // Some `!(...)` reads an acc relation: every `_constrain` row's moment is
+  // demanded, so the rows exist before its component is enumerated
+  // (constraint-query.ts reads them at the component's moment).
+  constrainReads?: boolean;
+}
+
+// The moment handler (§5.5). `settle` fixes the snapshot (the watermark)
+// and computes it when wanted; `demanded` / `run` serve demand at
+// already-settled moments. One handler per store (it keeps a cursor into
+// the store's `_constrain` rows).
 export function accHandler(
   compiled: CompiledAcc,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
-  // Write an `_acc-settled` point row at every settled moment: the program
-  // has a `not` read, which waits on it (expand.ts decomposeAccRead).
-  markSettled = false,
+  opts: AccHandlerOptions = {},
 ): MomentHandler {
+  const mode = opts.mode ?? "eager";
+  let constrainSeen = 0;
+  const scanConstrain = (store: Store): void => {
+    if (opts.constrainReads !== true) return;
+    const rows = candidatesByHead(store, "_constrain");
+    for (; constrainSeen < rows.length; constrainSeen++) {
+      demandAcc(store, tokenOf(store, store.tuples[rows[constrainSeen]!]!.l));
+    }
+  };
+  // Compute the rows at `m` from its watermark and write them (and the
+  // marker). True iff a tuple was added.
+  const compute = (store: Store, m: Term, tok: number): boolean => {
+    store.accComputed.add(tok);
+    store.accPending.delete(tok);
+    let any = false;
+    if (opts.marker === true) {
+      const id: Term = hashconsTerm({ tag: "Id", atom: { terms: [SYM_ACC_AT_ID, m] } }, store.hash);
+      if (addTuple(store, { terms: [SYM_ACC_AT, id] }, m, m)) any = true;
+    }
+    if (compiled.decls.size === 0) return any;
+    const rows = computeAccAt(store, compiled, m, jsFuncs, jsRels, store.accWatermark.get(tok));
+    for (const [relation, rs] of rows) {
+      const head: Term = { tag: "Symbol", name: relation };
+      for (const r of rs) {
+        const id: Term = hashconsTerm(
+          { tag: "Id", atom: { terms: [SYM_ACC_ID, head, ...r.terms, m] } },
+          store.hash,
+        );
+        const atom: Atom = { terms: [head, ...r.terms, id] };
+        if (addTuple(store, atom, m, m)) any = true;
+      }
+    }
+    return any;
+  };
   return {
     name: "acc",
-    run() {
-      return { progress: false, blocked: false };
+    exclusive: true,
+    // Pending demand at a settled moment (frontier or resolved): compute it
+    // from the watermark. Anything else is left to `settle`.
+    run(store, m) {
+      const tok = tokenOf(store, m);
+      if (!store.accPending.has(tok) || !store.settled.has(tok)) return { progress: false, blocked: false };
+      return { progress: compute(store, m, tok), blocked: false };
+    },
+    demanded(store) {
+      scanConstrain(store);
+      const out: number[] = [];
+      for (const tok of store.accPending) if (store.settled.has(tok)) out.push(tok);
+      return out;
     },
     settle(store, m) {
-      let marked = false;
-      if (markSettled) {
-        const id: Term = hashconsTerm({ tag: "Id", atom: { terms: [SYM_SETTLED_ID, m] } }, store.hash);
-        marked = addTuple(store, { terms: [SYM_ACC_SETTLED, id] }, m, m);
-      }
-      if (compiled.decls.size === 0) return marked;
-      const rows = computeAccAt(store, compiled, m, jsFuncs, jsRels);
-      let any = false;
-      for (const [relation, rs] of rows) {
-        const head: Term = { tag: "Symbol", name: relation };
-        for (const r of rs) {
-          const id: Term = hashconsTerm(
-            { tag: "Id", atom: { terms: [SYM_ACC_ID, head, ...r.terms, m] } },
-            store.hash,
-          );
-          const atom: Atom = { terms: [head, ...r.terms, id] };
-          if (addTuple(store, atom, m, m)) any = true;
-        }
-      }
-      return any || marked;
+      const tok = tokenOf(store, m);
+      store.accWatermark.set(tok, store.tuples.length);
+      scanConstrain(store);
+      if (mode === "demand" && !store.accDemand.has(tok)) return false;
+      return compute(store, m, tok);
     },
   };
 }

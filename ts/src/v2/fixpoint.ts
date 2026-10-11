@@ -9,9 +9,9 @@
 import type { Actor, ComponentOptions, FixpointStatus, Program, ProvLink, Rule } from "./types.js";
 import { maxActor } from "./types.js";
 import type { Span, Term } from "./term.js";
-import { compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
+import { ACC_AT_HEAD, compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
-import { type Store, createStore, candidatesByHead, tokenOf, GasError } from "./store.js";
+import { type Store, createStore, candidatesByHead, demandAcc, intern, tokenOf, GasError } from "./store.js";
 import { applyExceptions, expand } from "./expand.js";
 import {
   choiceHandler,
@@ -24,7 +24,7 @@ import {
   type RngCommit,
 } from "./scheduler.js";
 import { markResolved, settleMoments, runWalkRound, type MomentHandler } from "./moment-walk.js";
-import { accHandler, compileAcc } from "./acc.js";
+import { accHandler, compileAcc, type AccMode } from "./acc.js";
 import { renderTermShallow } from "./print.js";
 import { checkConstrainPlacement, computeComponents, type ConstraintPlacementError } from "./constraint-query.js";
 import { attachRules } from "./stats.js";
@@ -49,7 +49,11 @@ export function runFixpoint(
   tupleGas = 5000,
   // `lattice`: moment-lattice semantics for max/min (store.ts "Moment
   // lattice"); off = the original fail-on-incomparable semantics.
-  options?: { stats?: boolean; random?: () => number; lattice?: boolean },
+  // `accMode`: "demand" (default) computes `#acc` rows only at moments
+  // something reads them; "eager" computes them at every settled moment
+  // (displays that draw every moment's rows). Ordinary tuples are the same
+  // either way (acc.ts).
+  options?: { stats?: boolean; random?: () => number; lattice?: boolean; accMode?: AccMode },
 ): FixpointResult {
   // Eliminate `{...}` exception atoms first: the generated rules are part
   // of the program the handlers see.
@@ -57,19 +61,6 @@ export function runFixpoint(
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
   const jsRelFuncs = compileJsRels(expanded.jsRels);
-  // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).
-  const handlers: MomentHandler[] = [
-    isInputHandler(),
-    choiceHandler(),
-    exceptionCheckHandler(),
-    // `#acc` relations (plans/v2-acc-relations.md): computed at `resolve`,
-    // once a moment's other handlers have settled.
-    accHandler(
-      compileAcc(expanded), jsFuncs, jsRelFuncs,
-      expanded.rules.some((r) => r.body.some((a) =>
-        a.tag === "Match" && a.atom.terms[0]?.tag === "Symbol" && a.atom.terms[0].name === "_acc-settled")),
-    ),
-  ];
   const store = createStore({ lattice: options?.lattice ?? false });
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
@@ -78,12 +69,14 @@ export function runFixpoint(
   // which acc relations exist, and which of them some ordinary rule reads.
   for (const name of expanded.accDecls.keys()) store.accRelations.set(name, { readByRules: false });
   // A read inside `!(...)` counts too: those sub-atoms travel as terms
-  // nested in the `_constrain` row an `Emit` writes.
+  // nested in the `_constrain` row an `Emit` writes. Such a read also makes
+  // the acc handler demand every `_constrain` row's moment.
+  let constrainReadsAcc = false;
   const markAccReads = (t: Term): void => {
     if (t.tag !== "Atom" && t.tag !== "Id") return;
     const h = t.atom.terms[0];
     const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
-    if (info !== undefined) info.readByRules = true;
+    if (info !== undefined) { info.readByRules = true; constrainReadsAcc = true; }
     for (const u of t.atom.terms) markAccReads(u);
   };
   for (const rule of expanded.rules) {
@@ -99,6 +92,45 @@ export function runFixpoint(
       if (info !== undefined) info.readByRules = true;
     }
   }
+  // Static acc demand. A read is demanded when the evaluator reaches it
+  // (eval.ts `evalMatch`), but a rule whose first match is an acc read (or a
+  // `not` read's `_acc-at`) has only that read as its delta, and the
+  // inner loop's empty-delta skip never runs it until rows appear there. Its
+  // moment is the rule's initial anchor (`bot`): demand it up front. (A read
+  // after another match is reached by the variants whose delta is earlier.)
+  const rules: Rule[] = [];
+  for (const rule of expanded.rules) {
+    const first = rule.body.find((a) => a.tag === "Match");
+    const h = first?.tag === "Match" ? first.atom.terms[0] : undefined;
+    if (first?.tag !== "Match" || h === undefined || h.tag !== "Symbol" ||
+        !(store.accRelations.has(h.name) || h.name === ACC_AT_HEAD)) {
+      rules.push(rule);
+      continue;
+    }
+    if (first.l.tag === "Symbol" || first.l.tag === "Ref") {
+      demandAcc(store, tokenOf(store, intern(store, first.l)));
+      rules.push(rule);
+    } else {
+      // Not a fixed moment: never skip the rule, so the read is reached.
+      rules.push({ ...rule, deltaSafeSkip: false });
+    }
+  }
+  expanded.rules = rules;
+  // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).
+  const handlers: MomentHandler[] = [
+    isInputHandler(),
+    choiceHandler(),
+    exceptionCheckHandler(),
+    // `#acc` relations (plans/v2-acc-relations.md): the snapshot at a
+    // moment is fixed when it settles, once its other handlers are quiet;
+    // rows are computed there or on demand (acc.ts).
+    accHandler(compileAcc(expanded), jsFuncs, jsRelFuncs, {
+      mode: options?.accMode ?? "demand",
+      marker: expanded.rules.some((r) => r.body.some((a) =>
+        a.tag === "Match" && a.atom.terms[0]?.tag === "Symbol" && a.atom.terms[0].name === ACC_AT_HEAD)),
+      constrainReads: constrainReadsAcc,
+    }),
+  ];
   let totalIters = 0;
   const rngCommits: RngCommit[] = [];
 
@@ -281,7 +313,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     }
     if (round.progress) {
       // Semi-naive: rows emitted by the handlers (acc rows, exception
-      // checks, `_acc-settled`) are the next inner-loop pass's delta.
+      // checks, `_acc-at`) are the next inner-loop pass's delta.
       store.iteration++;
       swapHeads(store);
       continue;

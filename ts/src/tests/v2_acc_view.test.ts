@@ -11,10 +11,12 @@ import { accRuns, accSnapshot, isAccRow, type AccRun } from "../v2/acc-view.js";
 import { layoutTimeline, renderTimeline, DEFAULT_OPTS } from "../v2/timeline.js";
 import { momentKey } from "../v2/render-output.js";
 
+// Eager acc evaluation: these tests check how every settled moment's rows
+// are drawn, and the default (demand) mode writes rows only where read.
 function run(src: string, random?: () => number): Store {
   const p = parse(src);
   if ("message" in p) throw new Error(`parse error line ${p.line}: ${p.message}`);
-  return runFixpoint(p, 200, 5000, random === undefined ? undefined : { random }).store;
+  return runFixpoint(p, 200, 5000, random === undefined ? { accMode: "eager" } : { random, accMode: "eager" }).store;
 }
 
 const label = (store: Store, r: AccRun): string => renderAtom(store, store.tuples[r.tupleIndex]!.atom);
