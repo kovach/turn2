@@ -154,12 +154,13 @@ take-blight L, +blight-taken L
 -- either 'lose' or 'flip the card over'": the Healthy side flips to
 -- Blighted Island (simplified: 5 more Blight, no other effect); running
 -- out again loses.
-#agg flipped -> bool
-add-blight L, blight-on-card 0, flipped -> 0
+#acc flipped : island
+did-flip _ / flipped island
+add-blight L, blight-on-card 0, not flipped island
   ~>flip-blight-card
   ~add-blight L
-flip-blight-card, +blight-card-start 5, +flipped -> 1, +blighted-island
-add-blight L, blight-on-card 0, flipped -> 1, ~lose blight
+flip-blight-card, +blight-card-start 5, +did-flip, +blighted-island
+add-blight L, blight-on-card 0, flipped island, ~lose blight
 
 -- "1. Destroy Presence: In that land, destroy one Presence from each
 --     Spirit with Presence there."
@@ -252,12 +253,14 @@ game
   ~>initial-explore
   ~turn 1
 
-#agg over -> bool
-lose Why, +over -> 1, +lost Why
-win Why, +over -> 1, +won Why
+#acc over : outcome
+lost _ / over lost
+won _ / over won
+lose Why, +lost Why
+win Why, +won Why
 
 -- the next turn follows the last one, unless the game is over
-game, >turn N, over -> 0, plus N 1 M, ~turn M
+game, >turn N, not over _, plus N 1 M, ~turn M
 
 -- p8 "Each turn has the following phases"
 turn N
@@ -298,15 +301,16 @@ turn N, invader-card N C / card-at N explore C
 -- land at a time (order by the game).
 #acc ravage-target : n land
 card-at N ravage C, card-matches C L, has-invaders L / ravage-target N L
-#agg ravaged -> bool
+#acc ravaged : land n
+did-ravage L N / ravaged L N
 ravage-step N, ~ravage-next N
 ravage-next N
   ?[rng] L
-  !(ravage-target N L, ravaged L N -> 0)
+  !(ravage-target N L, not ravaged L N)
   ~ravage-chosen N L
 ravage-chosen N C, is C L
   ~>ravage L
-  +ravaged L N -> 1
+  +did-ravage L N
   ~ravage-next N
 
 -- "First, Invaders deal Damage to the land and Dahan. Then, any surviving
@@ -316,7 +320,9 @@ ravage L
   ~dahan-fight-back L
 
 -- "Invaders deal Damage: 1 per Explorer, 2 per Town, and 3 per City."
-invaders-deal-damage L, at P L, piece:kind P K, kind:damage K D, ^deals L P D
+-- (the per-piece views are derived inside `tally`, the step the damage total
+--  waits for, so each holds at `tally`'s end where the total is read)
+tally L, at P L, piece:kind P K, kind:damage K D, ^deals L P D
 #acc invader-damage : land @sum
 invaders-deal-damage L / invader-damage L 0
 deals L P D / invader-damage L D
@@ -616,13 +622,14 @@ slow-phase N, spirit S, ~power-phase S N slow
 #acc power-ready : spirit e n speed
 turn T, played S C T, power:speed C Sp / power-ready S C T Sp
 power-phase S T Sp / power-ready S done T Sp
-#agg used -> bool
+#acc used : e n
+did-use C T / used C T
 power-phase S T Sp
   ?[rng] C
-  !(power-ready S C T Sp, used C T -> 0)
+  !(power-ready S C T Sp, not used C T)
   ~ask resolve C S T Sp
 ask resolve C S T Sp, is C X, neq X done
-  +used X T -> 1
+  +did-use X T
   ~>use-power S X T
   ~power-phase S T Sp
 
