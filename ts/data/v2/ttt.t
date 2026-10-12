@@ -7,12 +7,10 @@
 -- Setup players and board
 --   each `+` is a fact: overlaps every later episode
 setup
-  +player x
-  +player o
-  +other x o
-  +other o x
+  +player x, +player o
+  +other x o, +other o x
   +n (s (s z))
-setup, n (s X), +n X
+setup, n (s X), +n X  -- make numbers 2,1,0
 
 -- For each pair of numbers, create a cell
 setup, n R, n C
@@ -24,20 +22,19 @@ setup, n R, n C
 filled Cell _ / taken Cell
 
 turn, actor P
-  not winner _
   ?C
   !(sq C, not taken C)
-  ( ~choice C
-    ^chooser P );
-
-game, other P Op
-  (turn, actor P, not winner _);
-  ~turn
-  ^actor Op
+  ~choice C
 
 -- The external harness writes `is` rows for each user input
-choice C, (chooser P), is C Cell
+turn, actor P, choice C, is C Cell
   +filled Cell P
+  ~turn-done
+
+game, other P Op
+  (turn, (actor P, turn-done));
+  not winner _
+  ~turn, ^actor Op
 
 -- Directions and Adjacency
 -- (excessively general; could use to implement go-moku, etc)
