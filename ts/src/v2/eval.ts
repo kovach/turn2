@@ -581,13 +581,21 @@ function evalLe(
 ): void {
   const aT = substTerm(a.a, ctx.trail);
   const bT = substTerm(a.b, ctx.trail);
+  const aTok = tokenOf(ctx.store, aT);
+  const bTok = tokenOf(ctx.store, bT);
+  // Strict: a match whose window would shrink to a single point fails.
+  if (a.strict === true && aTok === bTok) return;
   const cone = ctx.acc?.cone;
-  if (cone !== undefined) {
-    const le = coneLe(ctx.store, cone, tokenOf(ctx.store, aT), tokenOf(ctx.store, bT));
+  if (cone !== undefined && !(a.strict === true && ctx.store.lattice)) {
+    const le = coneLe(ctx.store, cone, aTok, bTok);
     if (le !== undefined) {
       if (le) next();
       return;
     }
+  }
+  if (a.strict === true) {
+    if (lessThan(ctx.store, aT, bT)) next();
+    return;
   }
   if (!comparable(ctx.store, aT, bT)) return;
   if (lessEq(ctx.store, aT, bT)) next();

@@ -93,7 +93,7 @@ export function renderRuleAtom(atom: RuleAtom): string {
     case "Emit":
       return `Emit ${renderAtomRaw(atom.atom)} @ (${renderTermRaw(atom.l)}, ${renderTermRaw(atom.r)})`;
     case "Le":
-      return `Le ${renderTermRaw(atom.a)} <= ${renderTermRaw(atom.b)}`;
+      return `Le ${renderTermRaw(atom.a)} ${atom.strict === true ? "<" : "<="} ${renderTermRaw(atom.b)}`;
     case "AssertLt":
       return `AssertLt ${renderTermRaw(atom.a)} < ${renderTermRaw(atom.b)}`;
   }

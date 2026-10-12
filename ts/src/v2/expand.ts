@@ -1201,19 +1201,25 @@ function decomposeMatch(
   }
 
   // `>p`: intersect the anchor with `[r_p, top]` instead of `[l_p, r_p]`.
-  // The `XL ≤ top` half of the overlap check is trivial and the right end
+  // The `XL < top` half of the overlap check is trivial and the right end
   // stays `XR` (= min(XR, top)), so only the left end moves.
   if (a.after) {
-    state.out.push({ tag: "Le", a: rVar, b: XR, span: a.span });
+    state.out.push({ tag: "Le", a: rVar, b: XR, strict: true, span: a.span });
     const XLafter = freshAnchorVar(state, "xl");
     state.out.push({ tag: "Equal", lhs: XLafter, rhs: { tag: "Max", a: XL, b: rVar }, span: a.span });
     for (const t of a.atom.terms) collectVarsTerm(t, state);
     return { XL: XLafter, XR };
   }
 
-  // Overlap check + anchor intersection.
-  state.out.push({ tag: "Le", a: XL, b: rVar, span: a.span });
-  state.out.push({ tag: "Le", a: lVar, b: XR, span: a.span });
+  // Overlap check + anchor intersection. The checks are strict: a match
+  // fails, like a unification failure, when the intersection
+  // `[max(XL, l), min(XR, r)]` would be a single point. Since the anchor
+  // starts as `[bot, top]` and never shrinks to a point, `XL < XR` holds
+  // already; the other three pairings are checked here. A `~p` inside a
+  // point window would need `XL < l' < r' < XR` with `XL = XR`: a cycle.
+  state.out.push({ tag: "Le", a: XL, b: rVar, strict: true, span: a.span });
+  state.out.push({ tag: "Le", a: lVar, b: XR, strict: true, span: a.span });
+  state.out.push({ tag: "Le", a: lVar, b: rVar, strict: true, span: a.span });
   const XLnext = freshAnchorVar(state, "xl");
   const XRnext = freshAnchorVar(state, "xr");
   state.out.push({ tag: "Equal", lhs: XLnext, rhs: { tag: "Max", a: XL, b: lVar }, span: a.span });

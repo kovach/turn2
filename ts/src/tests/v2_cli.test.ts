@@ -81,9 +81,11 @@ const OPTS: RunOptions = { ...DEFAULT_OPTIONS };
   assert.equal(first, [
     "#def r1",
     "  Δ a @ [l₁, r₁]",
+    "  l₁ < r₁",
     "  b @ [l₂, r₂]",
-    "  l₁ ≤ r₂",
-    "  l₂ ≤ r₁",
+    "  l₁ < r₂",
+    "  l₂ < r₁",
+    "  l₂ < r₂",
     "  xl₁ = max(l₁, l₂)",
     "  xr₁ = min(r₁, r₂)",
     "  κ₁ := ⟨l₁ r₁ l₂ r₂ xl₁ xr₁⟩",

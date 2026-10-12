@@ -75,6 +75,17 @@ function parseError(src: string): string {
   console.log("PASS: >p requires p to end within the anchor");
 }
 
+// 5b) `>p` with p ending exactly where the anchor ends leaves a single-point
+// window: the match fails (it used to fire and order the new episode's
+// right end before its left, a cycle)
+{
+  const s = run("~game\ngame, ^v\ngame, >v, ~x\nstep, ^w\nstep, >w, ~y\n~step\n");
+  assert.equal(rows(s, "x").length, 0, "v ends where game ends");
+  assert.equal(rows(s, "y").length, 0, "w ends where step ends");
+  for (const t of s.tuples) assert(!lessThan(s, t.r, t.l), "no interval ends before it starts");
+  console.log("PASS: >p fails when the window would be a single point");
+}
+
 // 6) sequence `;` is unchanged and still available alongside `>`
 {
   const s = run("~game\ngame, ~a; ~b\n");

@@ -156,7 +156,7 @@ function line(a: RuleAtom, ctx: Ctx): string | null {
       const x = resolve(a.a, ctx), y = resolve(a.b, ctx);
       if (isSym(x, "bot") || isSym(y, "top")) return null;
       const xs = term(x, ctx), ys = term(y, ctx);
-      return xs === ys ? null : `${xs} ≤ ${ys}`;
+      return xs === ys && a.strict !== true ? null : `${xs} ${a.strict === true ? "<" : "≤"} ${ys}`;
     }
     case "AssertLt":
       return `+ ${term(a.a, ctx)} < ${term(a.b, ctx)}`;

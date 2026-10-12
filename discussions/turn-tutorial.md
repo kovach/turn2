@@ -48,6 +48,9 @@ game, ~setup; ~play         -- `;`: after the whole preceding group ends
   even when `a` finished before `b` began.
 - `>` combines only with a plain match or `~`. A fact never ends, so
   `>fact, ~x` never fires.
+- `p` has to end strictly before the window does. If they end together
+  (typically a `^p` view of the same episode), "after `p`" is a single
+  moment and the match fails; see "Joins need constructive overlap".
 - `;` still works. It continues after the *earliest* end in the preceding
   group, which `>p` / `~>p` say more directly for a single atom.
 
@@ -145,6 +148,24 @@ placed at a fresh moment constructed strictly inside it. That placement must
 be *provable* in the moment partial order. Two tuples both persisting to `top`
 still fail to join if their start moments are incomparable, because no moment
 can be shown to lie inside both.
+
+**A window that shrinks to a single point is a failed match.** Overlap has
+to have width: if matching a tuple would leave the anchor interval as one
+moment (the tuple only touches the window at an endpoint, or a `>p` lands
+exactly where the window ends), that match fails, quietly, like a failed
+unification. Nothing could be placed strictly inside a point anyway. The
+usual way to hit this is a `^` view read back with `>` by a sibling rule:
+
+```
+explore-step N, ^exploring N
+explore-step N, >exploring N, ~explore L     -- never fires
+```
+
+`^exploring N` ends where `explore-step N` ends, so "after `exploring N`,
+inside `explore-step N`" is the single moment where both end. To act after
+the view exists, give it room, e.g. a later sub-episode:
+`explore-step N, ^exploring N, ~>do-explore N`, then
+`do-explore N, …, ~explore L`.
 
 This bites with sibling emissions. Here each `pin` comes from an independent
 firing of one rule, so the pins sit on sibling branches of the moment order:

@@ -213,12 +213,13 @@ export type RuleAtom =
       r: Term;
       span: Span;
     }
-  // Moment-order *check*. Succeeds iff `a ≤ b` in the current closure.
-  // Both ground.
+  // Moment-order *check*. Succeeds iff `a ≤ b` in the current closure
+  // (`a < b` when `strict`). Both ground.
   | {
       tag: "Le";
       a: Term;
       b: Term;
+      strict?: boolean;
       span: Span;
     }
   // Moment-order *insert*. Records the edge `a < b` (calls `addOrder`).
