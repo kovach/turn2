@@ -50,6 +50,14 @@ export interface Store {
   // (every acc point read, `[l, l]`) visits only the rows at that moment
   // instead of every row the relation has had at every moment.
   byHeadL: Map<string, Map<number, number[]>>;
+  // Argument indexes (`argIndexFor`): head-sym name -> indexed argument
+  // positions ("1,3") -> the head's tuples bucketed by the tokens at those
+  // positions, in insertion order. Built on first use, then kept current by
+  // `addTuple`. Off when `!useArgIndex`.
+  argIndex: Map<string, Map<string, ArgIndex>>;
+  useArgIndex: boolean;
+  // Groundness of hashconsed Refs (`groundStored`), memoized.
+  groundRefs: Map<number, boolean>;
   // Forward adjacency on the moment-order relation. Keyed and valued by
   // hashcons token (NodeId from tokenOfId). Closure is computed lazily by
   // BFS in `lessThan`.
@@ -108,22 +116,24 @@ export interface Store {
   // a row matched (`evalMatch`).
   accRelations: Map<string, { readByRules: boolean }>;
   accConsulted: Map<string, Set<number>>;
-  // Demand-driven `#acc` evaluation (acc.ts `accHandler`). Acc rows at a
-  // moment are computed only where something reads them. `accDemand` holds
-  // every moment token at which acc rows were asked for — an ordinary rule's
-  // point read of an acc relation, a `not` read's `_acc-at` read (both in
-  // `evalMatch`), or a `_constrain` row's moment when some `!(...)` reads an
-  // acc relation (the handler). `accPending` is `accDemand` minus
-  // `accComputed` (the moments whose rows have been written). Use
+  // Demand-driven `#acc` evaluation (acc.ts `accHandler`), per relation:
+  // a relation's rows at a moment are computed only where something reads
+  // it. `accDemand` maps a moment token to the relations asked for there —
+  // by an ordinary rule's point read of the relation, a `not` read's
+  // `_acc-at r` read (both in `evalMatch`), or a `_constrain` row's moment
+  // for the relations some `!(...)` reads (the handler). `accComputed` maps
+  // a moment to the relations whose rows have been written there (the
+  // demanded ones plus the relations their acc rules read). `accPending`
+  // holds the moments with a demanded relation not yet computed. Use
   // `demandAcc` to add demand. `accWatermark` maps each settled moment to
   // `tuples.length` at its settle: the rows at `m` are a pure function of
   // the tuples with index below it (the store is append-only, and by the
   // creation-time ordering invariant — `addOrder` — whether an old tuple is
   // alive at `m` never changes), so they can be computed at any later time
   // and equal the settle-time snapshot.
-  accDemand: Set<number>;
+  accDemand: Map<number, Set<string>>;
   accPending: Set<number>;
-  accComputed: Set<number>;
+  accComputed: Map<number, Set<string>>;
   accWatermark: Map<number, number>;
   // Dedup set for tuples, keyed as `${atomTok},${lTok},${rTok}`.
   tupleSet: Set<string>;
@@ -168,6 +178,20 @@ export interface LatticeNode {
 export interface StoreOptions {
   // Moment-lattice semantics for `max` / `min` (see `latticeMax`).
   lattice?: boolean;
+  // Index stored tuples by bound argument positions (default on).
+  argIndex?: boolean;
+}
+
+// One argument index: `positions` are atom term positions (1 = the first
+// argument after the head; 0, the head's slot, stands for the left
+// endpoint, since the head is fixed per index). A stored tuple whose argument at an indexed
+// position is not ground would unify with any probe, so it makes the index
+// `usable: false` and lookups fall back to the head bucket (stored tuples
+// are ground in practice; this is a guard).
+export interface ArgIndex {
+  positions: number[];
+  buckets: Map<string | number, number[]>;
+  usable: boolean;
 }
 
 // Sentinel thrown by `addTuple` when `tupleGas` is exhausted. Caught by
@@ -196,6 +220,9 @@ export function createStore(opts: StoreOptions = {}): Store {
     tupleSource: [],
     byHead: new Map(),
     byHeadL: new Map(),
+    argIndex: new Map(),
+    useArgIndex: opts.argIndex ?? true,
+    groundRefs: new Map(),
     orderFwd: new Map(),
     bot,
     top,
@@ -213,9 +240,9 @@ export function createStore(opts: StoreOptions = {}): Store {
     settled: new Set(),
     accRelations: new Map(),
     accConsulted: new Map(),
-    accDemand: new Set(),
+    accDemand: new Map(),
     accPending: new Set(),
-    accComputed: new Set(),
+    accComputed: new Map(),
     accWatermark: new Map(),
     tupleSet: new Set(),
     tupleGas: 0,
@@ -288,6 +315,8 @@ export function addTuple(
     const lBucket = byL.get(lTok);
     if (lBucket === undefined) byL.set(lTok, [idx]);
     else lBucket.push(idx);
+    const argIdx = store.argIndex.get(head.name);
+    if (argIdx !== undefined) for (const ai of argIdx.values()) argIndexAdd(store, ai, atom.terms, l, idx);
     store.currHeads.add(head.name);
     const hs = getOrCreateHead(store.stats, head.name);
     hs.bucketSize = bucket.length;
@@ -297,6 +326,8 @@ export function addTuple(
     const rs = store.stats.rules[sourceRuleIdx];
     if (rs !== undefined) rs.tuplesEmitted++;
   }
+  const cf = store.stats.cost?.cur;
+  if (cf !== undefined) cf.entry.added++;
   return true;
 }
 
@@ -536,14 +567,16 @@ export function intervalContains(
   return true;
 }
 
-// Record that acc rows at the moment `tok` are read (store.ts `accDemand`).
-// A moment already computed needs nothing more; otherwise it is pending
-// until the acc handler computes it (at settle, or later from the
-// watermark).
-export function demandAcc(store: Store, tok: number): void {
-  if (store.accDemand.has(tok)) return;
-  store.accDemand.add(tok);
-  if (!store.accComputed.has(tok)) store.accPending.add(tok);
+// Record that `relation`'s rows at the moment `tok` are read (store.ts
+// `accDemand`). A relation already computed there needs nothing more;
+// otherwise the moment is pending until the acc handler computes it (at
+// settle, or later from the watermark).
+export function demandAcc(store: Store, tok: number, relation: string): void {
+  let d = store.accDemand.get(tok);
+  if (d === undefined) { d = new Set(); store.accDemand.set(tok, d); }
+  if (d.has(relation)) return;
+  d.add(relation);
+  if (store.accComputed.get(tok)?.has(relation) !== true) store.accPending.add(tok);
 }
 
 // Tuple candidates whose first term is the given symbol. Returned by index
@@ -561,6 +594,78 @@ const NO_CANDIDATES: readonly number[] = [];
 export function candidatesByHeadAt(store: Store, head: string, l: Term): readonly number[] {
   if (l.tag !== "Ref" && l.tag !== "Symbol") return candidatesByHead(store, head);
   return store.byHeadL.get(head)?.get(tokenOf(store, l)) ?? NO_CANDIDATES;
+}
+
+// The argument index on `head` at `positions` (sorted, 1-based atom term
+// positions), building it from the head's tuples on first use. Undefined
+// when indexing is off or the index met a non-ground argument.
+export function argIndexFor(store: Store, head: string, positions: number[]): ArgIndex | undefined {
+  if (!store.useArgIndex) return undefined;
+  const pk = positions.join(",");
+  let byPos = store.argIndex.get(head);
+  if (byPos === undefined) { byPos = new Map(); store.argIndex.set(head, byPos); }
+  let ai = byPos.get(pk);
+  if (ai === undefined) {
+    ai = { positions, buckets: new Map(), usable: true };
+    for (const idx of store.byHead.get(head) ?? NO_CANDIDATES) {
+      const t = store.tuples[idx]!;
+      argIndexAdd(store, ai, t.atom.terms, t.l, idx);
+    }
+    byPos.set(pk, ai);
+  }
+  return ai.usable ? ai : undefined;
+}
+
+// The bucket key for ground terms at an index's positions (`l` at
+// position 0): the token for one position, the joined tokens otherwise.
+// Undefined if any is not ground.
+export function argKey(
+  store: Store, terms: readonly Term[], positions: number[], l: Term | undefined,
+): string | number | undefined {
+  if (positions.length === 1) {
+    const p = positions[0]!;
+    const t = p === 0 ? l : terms[p];
+    return t !== undefined && groundStored(store, t) ? tokenOf(store, intern(store, t)) : undefined;
+  }
+  const toks: number[] = [];
+  for (const p of positions) {
+    const t = p === 0 ? l : terms[p];
+    if (t === undefined || !groundStored(store, t)) return undefined;
+    toks.push(tokenOf(store, intern(store, t)));
+  }
+  return toks.join(",");
+}
+
+function argIndexAdd(store: Store, ai: ArgIndex, terms: readonly Term[], l: Term, idx: number): void {
+  if (!ai.usable) return;
+  const key = argKey(store, terms, ai.positions, l);
+  if (key === undefined) { ai.usable = false; ai.buckets.clear(); return; }
+  const b = ai.buckets.get(key);
+  if (b === undefined) ai.buckets.set(key, [idx]);
+  else b.push(idx);
+}
+
+// No Variable or Wildcard anywhere inside (Refs walked through the hashcons
+// table, memoized per Ref).
+export function groundStored(store: Store, t: Term): boolean {
+  switch (t.tag) {
+    case "Variable":
+    case "Wildcard":
+      return false;
+    case "Symbol":
+      return true;
+    case "Atom":
+    case "Id":
+      return t.atom.terms.every((x) => groundStored(store, x));
+    case "Ref": {
+      const known = store.groundRefs.get(t.id);
+      if (known !== undefined) return known;
+      const atom = store.hash.refToAtom.get(t.id);
+      const g = atom === undefined || atom.terms.every((x) => groundStored(store, x));
+      store.groundRefs.set(t.id, g);
+      return g;
+    }
+  }
 }
 
 // Least upper bound (join) of a finite set of moments under the moment-

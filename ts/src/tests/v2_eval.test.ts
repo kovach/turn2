@@ -450,4 +450,26 @@ pp A / p A
   console.log("PASS: removed aggregation syntax gives migration errors");
 }
 
+// Rules that read nothing from the store (no match; term `=`, emits, order
+// assertions) run once per run, not every inner-loop sweep (`runOnce`):
+// a saved choice's `= V… ^ is …` rule re-derived the same row each sweep.
+{
+  const src = `
+= V1 (pair a b)
+  +seed V1
+seed X, +n (s z) X
+n (s N) X, +n N X
+`;
+  const r = runFixpoint(ok(src), 200, 5000, { profile: true });
+  assert.equal(r.status.kind, "done");
+  const calls = (line: number) => r.store.stats.cost!.entries.get(`rule:${line}`)?.calls;
+  assert.equal(calls(2), 1, "the matchless rule ran once");
+  assert.ok(calls(5)! > 1, "the recursive rule ran every sweep");
+  const rows = r.store.tuples.map((t) => renderAtom(r.store, t.atom)).sort();
+  assert.deepEqual(rows, ["n (s z) (pair a b)", "n z (pair a b)", "seed (pair a b)"]);
+  const once = (r.rules ?? []).filter((x) => x.runOnce === true).map((x) => x.span.line);
+  assert.deepEqual(once, [2]);
+  console.log("PASS: store-independent rules run once per run");
+}
+
 console.log("ALL v2 eval tests passed");

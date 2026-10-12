@@ -9,7 +9,7 @@
 import type { Actor, ComponentOptions, FixpointStatus, Program, ProvLink, Rule } from "./types.js";
 import { maxActor } from "./types.js";
 import type { Span, Term } from "./term.js";
-import { ACC_AT_HEAD, compileJsDefs, evaluateRule, type CompiledJs } from "./eval.js";
+import { ACC_AT_HEAD, compileJsDefs, evaluateRule, type AccRow, type CompiledJs } from "./eval.js";
 import { compileJsRels, type CompiledJsRel } from "./js-rel.js";
 import { type Store, createStore, candidatesByHead, demandAcc, intern, tokenOf, GasError } from "./store.js";
 import { applyExceptions, expand } from "./expand.js";
@@ -24,10 +24,10 @@ import {
   type RngCommit,
 } from "./scheduler.js";
 import { markResolved, settleMoments, runWalkRound, type MomentHandler } from "./moment-walk.js";
-import { accHandler, compileAcc, type AccMode } from "./acc.js";
+import { accHandler, accRowsAt, compileAcc, type AccMode } from "./acc.js";
 import { renderTermShallow } from "./print.js";
 import { checkConstrainPlacement, computeComponents, type ConstraintPlacementError } from "./constraint-query.js";
-import { attachRules } from "./stats.js";
+import { attachRules, costEnter, costExit, inFrame } from "./stats.js";
 
 export interface FixpointResult {
   store: Store;
@@ -41,6 +41,10 @@ export interface FixpointResult {
   // (plans/v2-choice-actors.md). The harness persists these as `^ is` rows
   // so a roll happens exactly once. Empty when nothing was rolled.
   rngCommits: RngCommit[];
+  // Every acc relation's rows at a settled moment, computed on the spot for
+  // inspection (acc.ts `accRowsAt`; nothing is written). Set by
+  // `runFixpoint` when the program declares acc relations.
+  accAt?: (tok: number) => Map<string, AccRow[]> | undefined;
 }
 
 export function runFixpoint(
@@ -52,8 +56,9 @@ export function runFixpoint(
   // `accMode`: "demand" (default) computes `#acc` rows only at moments
   // something reads them; "eager" computes them at every settled moment
   // (displays that draw every moment's rows). Ordinary tuples are the same
-  // either way (acc.ts).
-  options?: { stats?: boolean; random?: () => number; lattice?: boolean; accMode?: AccMode },
+  // either way (acc.ts). `argIndex: false` turns off the argument indexes
+  // (store.ts `argIndexFor`; results are the same, for A/B checks).
+  options?: { stats?: boolean; profile?: boolean; random?: () => number; lattice?: boolean; accMode?: AccMode; argIndex?: boolean },
 ): FixpointResult {
   // Eliminate `{...}` exception atoms first: the generated rules are part
   // of the program the handlers see.
@@ -61,24 +66,27 @@ export function runFixpoint(
   const expanded = expand(program);
   const jsFuncs = compileJsDefs(expanded.jsDefs);
   const jsRelFuncs = compileJsRels(expanded.jsRels);
-  const store = createStore({ lattice: options?.lattice ?? false });
+  const store = createStore({ lattice: options?.lattice ?? false, argIndex: options?.argIndex ?? true });
   store.tupleGas = tupleGas;
   store.stats.enabled = options?.stats === true;
+  if (options?.profile === true) store.stats.cost = { entries: new Map(), cur: undefined };
   attachRules(store.stats, expanded.rules.map((r) => r.name));
   // Display bookkeeping for the timeline (plans/v2-acc-timeline-display.md):
   // which acc relations exist, and which of them some ordinary rule reads.
   for (const name of expanded.accDecls.keys()) store.accRelations.set(name, { readByRules: false });
   // A read inside `!(...)` counts too: those sub-atoms travel as terms
   // nested in the `_constrain` row an `Emit` writes. Such a read also makes
-  // the acc handler demand every `_constrain` row's moment.
-  let constrainReadsAcc = false;
+  // the acc handler demand the relation at every `_constrain` row's moment.
+  const constrainReads = new Set<string>();
   const markAccReads = (t: Term): void => {
     if (t.tag !== "Atom" && t.tag !== "Id") return;
     const h = t.atom.terms[0];
     const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
-    if (info !== undefined) { info.readByRules = true; constrainReadsAcc = true; }
+    if (info !== undefined) { info.readByRules = true; constrainReads.add((h as { name: string }).name); }
     for (const u of t.atom.terms) markAccReads(u);
   };
+  // Relations some `not` reads (through their `_acc-at r` marker).
+  const markerReads = new Set<string>();
   for (const rule of expanded.rules) {
     for (const a of rule.body) {
       if (a.tag === "Emit") {
@@ -90,6 +98,7 @@ export function runFixpoint(
       const h = a.atom.terms[0];
       const info = h !== undefined && h.tag === "Symbol" ? store.accRelations.get(h.name) : undefined;
       if (info !== undefined) info.readByRules = true;
+      if (h !== undefined && h.tag === "Symbol" && h.name === ACC_AT_HEAD) markerReads.add(accAtRelation(a.atom));
     }
   }
   // Static acc demand. A read is demanded when the evaluator reaches it
@@ -100,6 +109,10 @@ export function runFixpoint(
   // after another match is reached by the variants whose delta is earlier.)
   const rules: Rule[] = [];
   for (const rule of expanded.rules) {
+    if (readsNothing(rule)) {
+      rules.push({ ...rule, runOnce: true });
+      continue;
+    }
     const first = rule.body.find((a) => a.tag === "Match");
     const h = first?.tag === "Match" ? first.atom.terms[0] : undefined;
     if (first?.tag !== "Match" || h === undefined || h.tag !== "Symbol" ||
@@ -108,7 +121,7 @@ export function runFixpoint(
       continue;
     }
     if (first.l.tag === "Symbol" || first.l.tag === "Ref") {
-      demandAcc(store, tokenOf(store, intern(store, first.l)));
+      demandAcc(store, tokenOf(store, intern(store, first.l)), h.name === ACC_AT_HEAD ? accAtRelation(first.atom) : h.name);
       rules.push(rule);
     } else {
       // Not a fixed moment: never skip the rule, so the read is reached.
@@ -116,6 +129,14 @@ export function runFixpoint(
     }
   }
   expanded.rules = rules;
+  const compiledAcc = compileAcc(expanded);
+  const accAtMemo = new Map<number, Map<string, AccRow[]> | undefined>();
+  const accAt = compiledAcc.decls.size === 0 ? {} : {
+    accAt: (tok: number): Map<string, AccRow[]> | undefined => {
+      if (!accAtMemo.has(tok)) accAtMemo.set(tok, accRowsAt(store, compiledAcc, jsFuncs, jsRelFuncs, tok));
+      return accAtMemo.get(tok);
+    },
+  };
   // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).
   const handlers: MomentHandler[] = [
     isInputHandler(),
@@ -124,28 +145,34 @@ export function runFixpoint(
     // `#acc` relations (plans/v2-acc-relations.md): the snapshot at a
     // moment is fixed when it settles, once its other handlers are quiet;
     // rows are computed there or on demand (acc.ts).
-    accHandler(compileAcc(expanded), jsFuncs, jsRelFuncs, {
+    accHandler(compiledAcc, jsFuncs, jsRelFuncs, {
       mode: options?.accMode ?? "demand",
-      marker: expanded.rules.some((r) => r.body.some((a) =>
-        a.tag === "Match" && a.atom.terms[0]?.tag === "Symbol" && a.atom.terms[0].name === ACC_AT_HEAD)),
-      constrainReads: constrainReadsAcc,
+      markers: markerReads,
+      constrainReads,
     }),
   ];
   let totalIters = 0;
   const rngCommits: RngCommit[] = [];
 
+  // The run's outermost cost frame: its self time is what no rule, fold or
+  // handler frame claims (the inner loop's sweep, the moment walk, choice
+  // components).
+  const cost = store.stats.cost;
+  const frame = cost !== undefined ? costEnter(cost, "engine", 0, "engine (rest)") : undefined;
   try {
     const result = runLoop(expanded, store, gas, totalIters, jsFuncs, jsRelFuncs, handlers, options?.random, rngCommits);
     resolveExceptionProvenance(store, program.provLinks);
-    return { ...result, rules: expanded.rules };
+    return { ...result, rules: expanded.rules, ...accAt };
   } catch (e) {
     if (e instanceof GasError) {
       // Partial (gas-limited) stores feed the views too — fix up their
       // provenance as well.
       resolveExceptionProvenance(store, program.provLinks);
-      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rules: expanded.rules, rngCommits };
+      return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rules: expanded.rules, rngCommits, ...accAt };
     }
     throw e;
+  } finally {
+    if (frame !== undefined) costExit(cost!, frame);
   }
 }
 
@@ -195,6 +222,13 @@ function chaseProvSpan(
   const primeIdx = findPrimeTuple(store, link.prime, idx);
   if (primeIdx === undefined) return undefined;
   return chaseProvSpan(store, byHead, primeIdx) ?? store.tupleSource[primeIdx];
+}
+
+// The relation of a `_acc-at r _` marker read (expand.ts decomposeAccRead).
+function accAtRelation(atom: { terms: Term[] }): string {
+  const r = atom.terms[1];
+  if (r === undefined || r.tag !== "Symbol") throw new Error("internal: '_acc-at' read without a relation");
+  return r.name;
 }
 
 function headName(t: { tag: string; name?: string } | undefined): string {
@@ -265,8 +299,10 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
   // quiescence by then); else Math.random. `rng-seed` tuples appearing
   // after the latch have no effect ("seed once, at startup").
   let random: (() => number) | null = explicitRandom ?? null;
+  const cost = store.stats.cost;
+  const ranOnce = new Set<Rule>();
   while (true) {
-    const innerIters = innerLoop(expanded, store, gas - totalIters, jsFuncs, jsRelFuncs);
+    const innerIters = inFrame(cost, "inner-loop sweeps", () => innerLoop(expanded, store, gas - totalIters, jsFuncs, jsRelFuncs, ranOnce));
     totalIters += innerIters;
     if (totalIters >= gas) {
       return { store, iterations: totalIters, status: { kind: "gas", iterations: totalIters, tuples: store.tuples.length }, rngCommits };
@@ -279,7 +315,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
     // frontier moments and continue without re-running the rules (nothing
     // changed). Only when every frontier moment is blocked do the choices
     // there surface.
-    let round = runWalkRound(store, handlers);
+    let round = inFrame(cost, "walk rounds", () => runWalkRound(store, handlers));
     let resolvedProgress = false;
     while (!round.progress && !round.exhausted) {
       // A quiet round: the folds at every frontier moment have settled.
@@ -287,14 +323,14 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       // surface (acc rows; plans/v2-choice-components-by-moment.md step 6).
       // Rows written here are progress: readers must see them, and may emit
       // at the same moment (even a new `?`), so hand back to the inner loop.
-      if (settleMoments(store, handlers, round.frontier)) {
+      if (inFrame(cost, "walk settle", () => settleMoments(store, handlers, round.frontier))) {
         resolvedProgress = true;
         break;
       }
       const toMark = round.frontier.filter((tok) => !round.blocked.has(tok));
       if (toMark.length === 0) break;
-      markResolved(store, toMark);
-      round = runWalkRound(store, handlers);
+      inFrame(cost, "walk mark resolved", () => markResolved(store, toMark));
+      round = inFrame(cost, "walk rounds", () => runWalkRound(store, handlers));
     }
     if (resolvedProgress) {
       store.iteration++;
@@ -328,9 +364,11 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       // neither for a demanded moment could land here.
       throw new Error("internal: moment walk stalled with no progress, no block, and moments pending");
     }
-    const choices = collectBlockedChooses(store);
-    const seedChoices = choices.filter((c) => round.blocked.has(tokenOf(store, c.l)));
-    const cc = computeComponents(store, choices, seedChoices, jsRelFuncs);
+    const cc = inFrame(cost, "choice components", () => {
+      const choices = collectBlockedChooses(store);
+      const seedChoices = choices.filter((c) => round.blocked.has(tokenOf(store, c.l)));
+      return computeComponents(store, choices, seedChoices, jsRelFuncs);
+    });
     if (cc.kind === "late-constraint-error") {
       return { store, iterations: totalIters, status: lateConstraintStatus(store, cc), rngCommits };
     }
@@ -381,7 +419,7 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
       if (random === null) random = programSeededRandom(store) ?? Math.random;
       let committed = false;
       for (const comp of rngComps) {
-        const got = resolveRngChoice(store, comp, random);
+        const got = inFrame(cost, "rng choice", () => resolveRngChoice(store, comp, random!));
         if (got !== null) {
           rngCommits.push(...got);
           committed = true;
@@ -404,7 +442,18 @@ function runLoop(expanded: Program, store: Store, gas: number, startIters: numbe
   }
 }
 
-function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>): number {
+// A rule body that reads nothing from the store (`Rule.runOnce`): no match
+// of any kind, no `≤` / max / min (they consult the moment order, which
+// grows), only term or js `=`, emits, order assertions and js relations.
+function readsNothing(rule: Rule): boolean {
+  return rule.body.every((a) =>
+    a.tag === "Emit" || a.tag === "AssertLt" || a.tag === "JsIterate" ||
+    (a.tag === "Equal" && a.rhs.tag !== "Max" && a.rhs.tag !== "Min"));
+}
+
+// `ran`: the `runOnce` rules already evaluated this run (they are skipped
+// from then on: running one again only re-derives its tuples).
+function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<string, CompiledJs>, jsRelFuncs: Map<string, CompiledJsRel[]>, ran: Set<Rule>): number {
   let iter = 0;
   while (iter < gas) {
     const before = storeSize(store);
@@ -419,6 +468,10 @@ function innerLoop(program: Program, store: Store, gas: number, jsFuncs: Map<str
       // when no positive atom precedes the delta — otherwise we'd skip
       // the early asserts too. `deltaHead` is `undefined` for matchless
       // rules (always run) and `null` when the head is a non-Symbol.
+      if (rule.runOnce === true) {
+        if (ran.has(rule)) { rulesSkipped++; continue; }
+        ran.add(rule);
+      }
       const dh = rule.deltaHead;
       if (
         rule.deltaSafeSkip === true

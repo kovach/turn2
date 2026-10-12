@@ -14,6 +14,7 @@ import { expand, expandStages } from "./v2/expand.js";
 import { describeErrorStatus, runFixpoint } from "./v2/fixpoint.js";
 import { renderProgram } from "./v2/print-ir.js";
 import { renderTimelineAscii } from "./v2/timeline.js";
+import { formatCostReport, formatJoinReport } from "./v2/stats.js";
 import { renderAtomShallow, renderTermShallow, renderDebugDump } from "./v2/print.js";
 import type { Program, Rule, RuleAtom } from "./v2/types.js";
 import type { Atom } from "./v2/term.js";
@@ -71,7 +72,11 @@ ${STAGE_HELP}
   --lattice (eval only): max/min of incomparable moments build lattice-node
     moments instead of failing the match.
   --acc-eager (eval only): compute '#acc' rows at every settled moment, not
-    only where read (ordinary tuples are the same; v2/acc.ts).`;
+    only where read (ordinary tuples are the same; v2/acc.ts).
+  --join-stats (eval only): print per-join-site candidate counts to stderr
+    (scanned, args unified, surviving later filters; v2/stats.ts).
+  --rule-profile (eval only): print self time and work per source rule (and
+    per acc fold / moment handler) to stderr (v2/stats.ts "Cost profile").`;
 
 export type EvalFormat = "tuples" | "timeline" | "debug";
 
@@ -91,6 +96,8 @@ export interface RunOptions {
   lattice: boolean;
   // Eval with eager `#acc` rows (v2/acc.ts): every settled moment.
   accEager: boolean;
+  joinStats: boolean;
+  ruleProfile: boolean;
 }
 
 export const DEFAULT_OPTIONS: RunOptions = {
@@ -104,6 +111,8 @@ export const DEFAULT_OPTIONS: RunOptions = {
   pretty: false,
   lattice: false,
   accEager: false,
+  joinStats: false,
+  ruleProfile: false,
 };
 
 function isStage(s: string): s is Stage {
@@ -131,13 +140,18 @@ function rulesForStage(stage: Exclude<Stage, "eval">, parsed: Program): Rule[] {
 
 // Render a parsed program at the requested pipeline stage. Returns the text to
 // print to stdout. `eval`'s run status is reported separately by the caller.
-export function runStage(stage: Stage, parsed: Program, opts: RunOptions): string {
+// `source` (the program text) labels the --rule-profile report.
+export function runStage(stage: Stage, parsed: Program, opts: RunOptions, source?: string): string {
   if (stage === "eval") {
     const { store, status } = runFixpoint(parsed, opts.gas, opts.tupleGas, {
       lattice: opts.lattice,
       accMode: opts.accEager ? "eager" : "demand",
+      stats: opts.joinStats,
+      profile: opts.ruleProfile,
     });
     console.error(`status: ${describeErrorStatus(store, status) ?? status.kind}`);
+    if (opts.joinStats) console.error(formatJoinReport(store.stats));
+    if (store.stats.cost !== undefined) console.error(formatCostReport(store.stats.cost, source));
     return renderStore(store, opts.out);
   }
   const rules = rulesForStage(stage, parsed).filter((r) => ruleMatches(r, opts));
@@ -265,6 +279,12 @@ function main(argv: string[]): void {
       case "--acc-eager":
         opts.accEager = true;
         break;
+      case "--join-stats":
+        opts.joinStats = true;
+        break;
+      case "--rule-profile":
+        opts.ruleProfile = true;
+        break;
       case "-h":
       case "--help":
         console.log(USAGE);
@@ -287,7 +307,7 @@ function main(argv: string[]): void {
     fail(`parse error (line ${parsed.line}): ${parsed.message}`);
   }
 
-  console.log(runStage(stage, parsed, opts));
+  console.log(runStage(stage, parsed, opts, source));
 }
 
 // Only run when invoked as the entry script — importing for tests must not

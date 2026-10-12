@@ -73,3 +73,6 @@ html.mode-dark .timeline-svg { --tl-acc-bg: #263140; }
 .tl-inspector-new { color: var(--syn-head); }
 .tl-inspector-gone { color: var(--fg-faint); text-decoration: line-through; }
 .tl-inspector-none { color: var(--fg-faint); }
+.tl-inspector-head .tl-inspector-all { margin-left: auto; margin-right: 6px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; font-size: 10px; font-family: inherit; }
+.tl-inspector-inspected { margin-left: 8px; padding: 0 4px; border: 1px dashed var(--fg-mute); border-radius: 3px; color: var(--fg-mute); font-size: 10px; }
+.tl-inspector-rel-inspected .tl-inspector-row { font-style: italic; }

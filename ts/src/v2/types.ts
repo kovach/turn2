@@ -281,6 +281,11 @@ export interface Rule {
   // the body. When false, the rule may emit tuples earlier in its body
   // that the short-circuit would incorrectly suppress.
   deltaSafeSkip?: boolean;
+  // Set by `runFixpoint` when the body reads nothing from the store (no
+  // match; only term `=` / js calls, emits, order assertions, js
+  // relations): its firings are the same every time, so the inner loop runs
+  // it once instead of every sweep (a saved choice's `= V… ^ is …` rule).
+  runOnce?: boolean;
 }
 
 // One column of an `#acc` declaration (plans/v2-acc-relations.md §1.1): a

@@ -2,9 +2,10 @@
 // DOM-free; consumed by timeline.ts (merged bars, read markers) and
 // render-output.ts (the moment inspector).
 //
-// The engine writes every acc relation's rows as point tuples at every
-// settled moment (acc.ts), so a value that holds for a while is stored once
-// per moment. Nothing here changes that; these functions only fold the
+// The engine writes an acc relation's rows as point tuples at each settled
+// moment it is computed at — every one in eager mode, where something reads
+// it in demand mode (acc.ts) — so a value that holds for a while is stored
+// once per moment. Nothing here changes that; these functions only fold the
 // repetition back up for display:
 //
 //  - `accRuns` merges each distinct row content into bars: one bar per
@@ -19,6 +20,10 @@
 import type { Term } from "./term.js";
 import { lessThan, tokenOf, type Store } from "./store.js";
 import { renderAtom, userTerms } from "./print.js";
+import type { AccRow } from "./eval.js";
+
+// Placeholder id slot for rendering an inspected row (`renderAtom` drops it).
+const NO_ID: Term = { tag: "Symbol", name: "_" };
 
 // One merged bar: a row content holding along a chain of moments.
 export interface AccRun {
@@ -219,6 +224,7 @@ export function accRuns(store: Store): AccRun[] {
 // --- Moment inspector ---------------------------------------------------------
 
 export interface AccSnapshotRow {
+  // The stored row; -1 for an inspected one (not in the store).
   tupleIndex: number;
   label: string;
   // "new": some immediate predecessor of the moment lacks this row.
@@ -230,6 +236,12 @@ export interface AccSnapshotRelation {
   readByRules: boolean;
   // An ordinary rule read this relation at this moment.
   consulted: boolean;
+  // Where the rows come from: "run" — the run computed the relation here
+  // (`store.accComputed`; every relation in eager mode); "inspect" —
+  // computed just now for the inspector (`accSnapshot`'s `inspect`), not
+  // part of the run; "none" — not computed here (demand mode, nothing read
+  // it), so `rows` / `gone` are empty.
+  source: "run" | "inspect" | "none";
   rows: AccSnapshotRow[];
   // Rows some immediate predecessor has and this moment lacks.
   gone: string[];
@@ -257,27 +269,60 @@ function coverPreds(store: Store, tok: number): number[] {
 }
 
 // The full acc state at one moment, every relation included (the inspector
-// ignores the timeline's per-relation visibility).
-export function accSnapshot(store: Store, tok: number): AccSnapshot {
+// ignores the timeline's per-relation visibility). In demand mode the run
+// computes a relation only where something reads it; `inspect` (the fixpoint
+// result's `accAt`) fills in the others, here and at the predecessors the
+// diff is taken against, without touching the store.
+export function accSnapshot(
+  store: Store,
+  tok: number,
+  inspect?: (tok: number) => Map<string, AccRow[]> | undefined,
+): AccSnapshot {
   const preds = coverPreds(store, tok).filter((p) => store.settled.has(p));
   const relations: AccSnapshotRelation[] = [];
   for (const [relation, info] of store.accRelations) {
     // content key → label / tuple index, per moment of interest.
     const here = new Map<string, { tupleIndex: number; label: string }>();
     const before = preds.map(() => new Map<string, string>());
+    // Moments with stored rows of the relation: computed there, like the
+    // ones `accComputed` records (which also has the empty results).
+    const stored = new Set<number>();
     for (const i of store.byHead.get(relation) ?? []) {
       if (!isAccRow(store, i)) continue;
       const t = store.tuples[i]!;
       const at = tokenOf(store, t.l);
+      stored.add(at);
       const key = userTerms(t.atom).map((x) => tokenOf(store, x)).join(",");
       if (at === tok) here.set(key, { tupleIndex: i, label: renderAtom(store, t.atom) });
       const pi = preds.indexOf(at);
       if (pi >= 0) before[pi]!.set(key, renderAtom(store, t.atom));
     }
+    const byRun = (at: number): boolean => stored.has(at) || store.accComputed.get(at)?.has(relation) === true;
+    // Moments the run did not compute this relation at: inspected rows.
+    const head: Term = { tag: "Symbol", name: relation };
+    const inspected = (at: number): { key: string; label: string }[] | undefined =>
+      inspect?.(at)?.get(relation)?.map((r) => ({
+        key: [head, ...r.terms].map((x) => tokenOf(store, x)).join(","),
+        label: renderAtom(store, { terms: [head, ...r.terms, NO_ID] }),
+      }));
+    let source: AccSnapshotRelation["source"] = "run";
+    if (!byRun(tok)) {
+      const rows = store.settled.has(tok) ? inspected(tok) : undefined;
+      source = rows === undefined ? "none" : "inspect";
+      for (const r of rows ?? []) here.set(r.key, { tupleIndex: -1, label: r.label });
+    }
+    // A predecessor where neither the run nor `inspect` has the relation's
+    // rows is left out of the diff (its rows are unknown, not empty).
+    const known = preds.map((p, pi) => {
+      if (byRun(p)) return true;
+      const rs = source === "none" ? undefined : inspected(p);
+      for (const r of rs ?? []) before[pi]!.set(r.key, r.label);
+      return rs !== undefined;
+    });
     const rows: AccSnapshotRow[] = [...here.entries()].map(([key, r]) => ({
       tupleIndex: r.tupleIndex,
       label: r.label,
-      status: before.some((b) => !b.has(key)) ? "new" as const : "same" as const,
+      status: before.some((b, pi) => known[pi] && !b.has(key)) ? "new" as const : "same" as const,
     }));
     rows.sort((a, b) => a.label.localeCompare(b.label));
     const gone = new Map<string, string>();
@@ -286,8 +331,9 @@ export function accSnapshot(store: Store, tok: number): AccSnapshot {
       relation,
       readByRules: info.readByRules,
       consulted: store.accConsulted.get(relation)?.has(tok) ?? false,
+      source,
       rows,
-      gone: [...gone.values()].sort(),
+      gone: source === "none" ? [] : [...gone.values()].sort(),
     });
   }
   return { tok, settled: store.settled.has(tok), resolved: store.resolved.has(tok), relations };

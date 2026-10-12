@@ -4,6 +4,7 @@ import { atomFingerprint, renderTermShallow } from "./print.js";
 import { lessThan, tokenOf, type Store } from "./store.js";
 import { renderTimeline, type CollapsedInterval } from "./timeline.js";
 import { accRelationVisible, accSnapshot } from "./acc-view.js";
+import type { AccRow } from "./eval.js";
 
 export interface TuplesOptions {
   hideInternal?: boolean;
@@ -25,6 +26,12 @@ export interface TimelineOptions {
   // bare timeline).
   accControls?: boolean;
   inspectKey?: string | null;
+  // Demand mode computes a relation only where something reads it. With
+  // `inspectAll`, the inspector fills in the other relations through
+  // `accAt` (the fixpoint result's, computed for display only); otherwise
+  // it offers a button for it (`data-acc-inspect-all`) when `accAt` is set.
+  accAt?: ((tok: number) => Map<string, AccRow[]> | undefined) | undefined;
+  inspectAll?: boolean;
 }
 
 function escapeHtml(s: string): string {
@@ -242,8 +249,13 @@ function renderAccToggles(store: Store, overrides: ReadonlyMap<string, boolean>)
 // predecessor, struck `−` rows are rows a predecessor has and this moment
 // lacks. It ignores the timeline's per-relation visibility — this is where
 // the hidden relations can still be looked up.
-function renderMomentInspector(store: Store, tok: number): HTMLElement {
-  const snap = accSnapshot(store, tok);
+function renderMomentInspector(
+  store: Store,
+  tok: number,
+  accAt: ((tok: number) => Map<string, AccRow[]> | undefined) | undefined,
+  inspectAll: boolean,
+): HTMLElement {
+  const snap = accSnapshot(store, tok, inspectAll ? accAt : undefined);
   const panel = document.createElement("div");
   panel.classList.add("tl-inspector");
   const head = document.createElement("div");
@@ -261,6 +273,15 @@ function renderMomentInspector(store: Store, tok: number): HTMLElement {
   close.title = "Close";
   close.setAttribute("data-acc-inspector-close", "");
   head.appendChild(title);
+  if (accAt !== undefined && snap.settled && snap.relations.some((r) => r.source === "none")) {
+    const all = document.createElement("button");
+    all.type = "button";
+    all.classList.add("tl-inspector-all");
+    all.textContent = "compute all here";
+    all.title = "Compute every acc relation at this moment for inspection (the run is unchanged)";
+    all.setAttribute("data-acc-inspect-all", "");
+    head.appendChild(all);
+  }
   head.appendChild(close);
   panel.appendChild(head);
   for (const rel of snap.relations) {
@@ -275,8 +296,21 @@ function renderMomentInspector(store: Store, tok: number): HTMLElement {
       badge.textContent = "read here";
       h.appendChild(badge);
     }
+    if (rel.source === "inspect") {
+      const badge = document.createElement("span");
+      badge.classList.add("tl-inspector-inspected");
+      badge.textContent = "for inspection";
+      badge.title = "Not computed by the run (nothing read it here); computed now from this moment's snapshot";
+      h.appendChild(badge);
+      section.classList.add("tl-inspector-rel-inspected");
+    }
     section.appendChild(h);
-    if (rel.rows.length === 0 && rel.gone.length === 0) {
+    if (rel.source === "none" && snap.settled) {
+      const none = document.createElement("div");
+      none.classList.add("tl-inspector-row", "tl-inspector-none");
+      none.textContent = "(not computed here: nothing read it)";
+      section.appendChild(none);
+    } else if (rel.rows.length === 0 && rel.gone.length === 0) {
       const none = document.createElement("div");
       none.classList.add("tl-inspector-row", "tl-inspector-none");
       none.textContent = "(no rows)";
@@ -287,7 +321,7 @@ function renderMomentInspector(store: Store, tok: number): HTMLElement {
       r.classList.add("tl-inspector-row");
       if (row.status === "new") r.classList.add("tl-inspector-new");
       r.textContent = `${row.status === "new" ? "+" : " "} ${row.label}`;
-      r.setAttribute("data-tl-tuple", String(row.tupleIndex));
+      if (row.tupleIndex >= 0) r.setAttribute("data-tl-tuple", String(row.tupleIndex));
       section.appendChild(r);
     }
     for (const label of rel.gone) {
@@ -319,6 +353,6 @@ export function renderTimelineH(host: HTMLElement, store: Store, opts: TimelineO
     return;
   }
   const parts: Element[] = [renderAccToggles(store, accOverrides), out.main];
-  if (inspectTok !== null) parts.push(renderMomentInspector(store, inspectTok));
+  if (inspectTok !== null) parts.push(renderMomentInspector(store, inspectTok, opts.accAt, opts.inspectAll === true));
   host.replaceChildren(...parts);
 }

@@ -822,7 +822,7 @@ function decomposeAccRead(
   const matchAtom: Atom = { terms: [...a.atom.terms, { tag: "Wildcard" }] };
   if (a.negated) {
     // `not r t̄`: range-restricted, binds nothing, anchor unchanged. The
-    // positive `_acc-at` point read demands the acc rows at XL and blocks
+    // positive `_acc-at r` point read demands r's rows at XL and blocks
     // the rule until they are computed (at XL's settle snapshot, so they are
     // final — plans/v2-caret-fresh-left.md §2.2); the marker, written with
     // the rows, is what wakes it then: an absent row produces no delta.
@@ -832,7 +832,7 @@ function decomposeAccRead(
         `rule '${state.ruleName}': 'not ${h.name} …' needs its variables bound before it (unbound: ${unbound.join(", ")})`,
       );
     }
-    state.out.push({ tag: "Match", atom: { terms: [SYM_ACC_AT, { tag: "Wildcard" }] }, l: XL, r: XL, span: a.span });
+    state.out.push({ tag: "Match", atom: { terms: [SYM_ACC_AT, h, { tag: "Wildcard" }] }, l: XL, r: XL, span: a.span });
     state.out.push({ tag: "Match", atom: matchAtom, l: XL, r: XL, negated: true, span: a.span });
     return true;
   }

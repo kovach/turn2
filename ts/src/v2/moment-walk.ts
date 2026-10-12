@@ -19,6 +19,7 @@
 
 import type { Term } from "./term.js";
 import { lessThan, type Store } from "./store.js";
+import { inFrame } from "./stats.js";
 
 export interface HandlerOutcome {
   // True iff the handler added at least one new tuple at this moment.
@@ -147,7 +148,7 @@ export function settleMoments(store: Store, handlers: readonly MomentHandler[], 
     if (m === undefined) continue;
     for (const h of handlers) {
       if (h.settle === undefined) continue;
-      if (h.settle(store, m)) progress = true;
+      if (inFrame(store.stats.cost, `settle ${h.name}`, () => h.settle!(store, m))) progress = true;
     }
   }
   return progress;
@@ -183,7 +184,7 @@ export function runWalkRound(store: Store, handlers: readonly MomentHandler[]): 
     let progress = false;
     for (const tok of toks) {
       const m = store.momentTerms.get(tok);
-      if (m !== undefined && h.run(store, m).progress) progress = true;
+      if (m !== undefined && inFrame(store.stats.cost, `handler ${h.name}`, () => h.run(store, m)).progress) progress = true;
     }
     if (progress) return { frontier: [], late: toks, progress: true, blocked: new Set(), exhausted: false };
   }
@@ -210,7 +211,7 @@ export function runWalkRound(store: Store, handlers: readonly MomentHandler[]): 
     if (m === undefined) continue; // unreachable: tokens come from momentTerms
     for (const h of handlers) {
       if (h.exclusive === true) continue;
-      const r = h.run(store, m);
+      const r = inFrame(store.stats.cost, `handler ${h.name}`, () => h.run(store, m));
       if (r.progress) round.progress = true;
       if (r.blocked) round.blocked.add(tok);
     }

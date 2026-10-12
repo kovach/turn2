@@ -30,13 +30,16 @@
 // only into later moments'. A second choice chained at the same moment
 // therefore sees the acc state from before the first.
 //
-// Demand (the default under `runFixpoint`, `accMode: "demand"`): rows are
-// computed only at moments something reads (`store.accDemand`): an ordinary
-// rule's acc read or a `not` read's `_acc-at` read (eval.ts `evalMatch`),
-// or a `_constrain` row's moment when some `!(...)` reads an acc relation
-// (scanned here). `settle` computes at once if `m` is already demanded;
-// demand arriving later is served from the watermark through `demanded` /
-// `run`. The handler is `exclusive` (moment-walk.ts): a walk round in which
+// Demand (the default under `runFixpoint`, `accMode: "demand"`): a
+// relation's rows are computed only at moments something reads it
+// (`store.accDemand`): an ordinary rule's acc read or a `not` read's
+// `_acc-at r` read (eval.ts `evalMatch`), or a `_constrain` row's moment
+// for the relations some `!(...)` reads (scanned here). Computing a
+// relation computes the relations its acc rules read too (`accClosure`;
+// whole strata), so a moment's rows for any one relation are complete and
+// consistent with any computed later — all come from the same watermark.
+// `settle` computes at once what `m` already demands; demand arriving
+// later is served from the watermark through `demanded` / `run`. The handler is `exclusive` (moment-walk.ts): a walk round in which
 // it writes rows runs no other handler, so readers of late rows fire before
 // anything is judged — the same state the eager mode reaches. Eager mode
 // computes at every settled moment (for displays that draw every moment's
@@ -47,6 +50,7 @@ import type { Atom, Term } from "./term.js";
 import { hashconsTerm } from "./hashcons.js";
 import type { AccDecl, Program, Rule, RuleAtom } from "./types.js";
 import { addTuple, candidatesByHead, demandAcc, leastUpperBound, momentCone, tokenOf, type Store } from "./store.js";
+import { costEnter, costExit, inFrame } from "./stats.js";
 import { ACC_MOMENT_VAR, evaluateRule, type AccEvalCtx, type AccRow, type CompiledJs } from "./eval.js";
 import { resolveJsModes, type CompiledJsRel } from "./js-rel.js";
 import { decomposeAccRule, SYM_ACC_AT } from "./expand.js";
@@ -68,6 +72,8 @@ export interface AccStratum {
 export interface CompiledAcc {
   decls: Map<string, AccDecl>;
   strata: AccStratum[];
+  // Relation -> the acc relations its rules read.
+  reads: Map<string, Set<string>>;
 }
 
 // Lower every acc rule, resolve js modes, and stratify (§5.1).
@@ -85,10 +91,11 @@ export function compileAcc(program: Program): CompiledAcc {
   const readsOf = (r: Rule): string[] =>
     r.body.flatMap((a) => (a.tag === "AccMatch" ? [a.relation] : []));
   const succ = new Map<string, Set<string>>(); // r -> relations that read r
-  for (const name of program.accDecls.keys()) succ.set(name, new Set());
+  const reads = new Map<string, Set<string>>(); // r -> relations r's rules read
+  for (const name of program.accDecls.keys()) { succ.set(name, new Set()); reads.set(name, new Set()); }
   for (const r of lowered) {
     const h = headOf(r);
-    for (const read of readsOf(r)) succ.get(read)!.add(h);
+    for (const read of readsOf(r)) { succ.get(read)!.add(h); reads.get(h)!.add(read); }
   }
   const sccs = tarjan([...program.accDecls.keys()], (n) => succ.get(n) ?? new Set());
   // Stratified negation: `not r` in a rule for `h` needs `r` in a strictly
@@ -112,7 +119,20 @@ export function compileAcc(program: Program): CompiledAcc {
     const recursive = rules.some((r) => readsOf(r).some((x) => set.has(x)));
     return { relations, rules, recursive };
   });
-  return { decls: program.accDecls, strata };
+  return { decls: program.accDecls, strata, reads };
+}
+
+// `rels` and every acc relation they read, transitively.
+export function accClosure(compiled: CompiledAcc, rels: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  const stack = [...rels];
+  while (stack.length > 0) {
+    const r = stack.pop()!;
+    if (out.has(r)) continue;
+    out.add(r);
+    for (const d of compiled.reads.get(r) ?? []) stack.push(d);
+  }
+  return out;
 }
 
 // Tarjan's SCC, emitting components in topological order (a component is
@@ -164,9 +184,11 @@ interface Contribution {
   moment: Term;
 }
 
-// Compute every acc relation's rows at the point `m` (§5.2). `bound`: only
-// stored tuples with index below it are read (the moment's watermark;
-// default the whole store).
+// Compute acc relations' rows at the point `m` (§5.2): every relation, or
+// the strata holding a relation of `only` (which must be closed under
+// `accClosure`; the result then has just those strata's relations).
+// `bound`: only stored tuples with index below it are read (the moment's
+// watermark; default the whole store).
 export function computeAccAt(
   store: Store,
   compiled: CompiledAcc,
@@ -174,17 +196,21 @@ export function computeAccAt(
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
   bound?: number,
+  only?: ReadonlySet<string>,
 ): Map<string, AccRow[]> {
   const rows = new Map<string, AccRow[]>();
-  for (const name of compiled.decls.keys()) rows.set(name, []);
   const pin: RuleAtom = {
     tag: "Equal",
     lhs: { tag: "Variable", name: ACC_MOMENT_VAR },
     rhs: m,
     span: { line: 0 },
   };
-  const cone = momentCone(store, m);
+  const cost = store.stats.cost;
+  const cone = inFrame(cost, "acc cone", () => momentCone(store, m));
   for (const stratum of compiled.strata) {
+    if (only !== undefined && !stratum.relations.some((r) => only.has(r))) continue;
+    for (const rel of stratum.relations) rows.set(rel, []);
+    const frame = cost !== undefined ? costEnter(cost, "engine", 0, `acc fold {${stratum.relations.join(", ")}}`) : undefined;
     // Contributions accumulate across rounds, keyed by
     // (key tokens, value token, moment token, firing identity).
     const contribs = new Map<string, Map<string, Contribution>>();
@@ -233,8 +259,26 @@ export function computeAccAt(
         );
       }
     }
+    if (frame !== undefined) costExit(cost!, frame);
   }
   return rows;
+}
+
+// For inspection (the web moment inspector): every relation's rows at the
+// settled moment `tok`, computed from its watermark — what eager mode would
+// have written there — without writing anything or adding demand.
+// Undefined when `tok` has not settled.
+export function accRowsAt(
+  store: Store,
+  compiled: CompiledAcc,
+  jsFuncs: Map<string, CompiledJs>,
+  jsRels: Map<string, CompiledJsRel[]>,
+  tok: number,
+): Map<string, AccRow[]> | undefined {
+  const bound = store.accWatermark.get(tok);
+  const m = store.momentTerms.get(tok);
+  if (bound === undefined || m === undefined) return undefined;
+  return computeAccAt(store, compiled, m, jsFuncs, jsRels, bound);
 }
 
 // ρ(⊕ᵢ η(cᵢ)) per key group (§2.2). Generic over the op registry; no
@@ -302,13 +346,13 @@ export interface AccHandlerOptions {
   // "eager": rows at every settled moment. "demand": only where read. The
   // handler's default is eager; `runFixpoint` defaults to demand.
   mode?: AccMode;
-  // Write an `_acc-at` point row wherever rows are computed: the program
-  // has a `not` read, which waits on it (expand.ts decomposeAccRead).
-  marker?: boolean;
-  // Some `!(...)` reads an acc relation: every `_constrain` row's moment is
-  // demanded, so the rows exist before its component is enumerated
+  // Relations some `not` reads: computing one also writes its `_acc-at r`
+  // point row, which the read waits on (expand.ts decomposeAccRead).
+  markers?: ReadonlySet<string>;
+  // Relations some `!(...)` reads: they are demanded at every `_constrain`
+  // row's moment, so the rows exist before its component is enumerated
   // (constraint-query.ts reads them at the component's moment).
-  constrainReads?: boolean;
+  constrainReads?: ReadonlySet<string>;
 }
 
 // The moment handler (§5.5). `settle` fixes the snapshot (the watermark)
@@ -322,26 +366,36 @@ export function accHandler(
   opts: AccHandlerOptions = {},
 ): MomentHandler {
   const mode = opts.mode ?? "eager";
+  const all = [...compiled.decls.keys()];
   let constrainSeen = 0;
   const scanConstrain = (store: Store): void => {
-    if (opts.constrainReads !== true) return;
+    if (opts.constrainReads === undefined || opts.constrainReads.size === 0) return;
     const rows = candidatesByHead(store, "_constrain");
     for (; constrainSeen < rows.length; constrainSeen++) {
-      demandAcc(store, tokenOf(store, store.tuples[rows[constrainSeen]!]!.l));
+      const tok = tokenOf(store, store.tuples[rows[constrainSeen]!]!.l);
+      for (const rel of opts.constrainReads) demandAcc(store, tok, rel);
     }
   };
-  // Compute the rows at `m` from its watermark and write them (and the
-  // marker). True iff a tuple was added.
+  // Compute the relations wanted at `m` (all of them when eager, else the
+  // demanded ones not yet computed) and those they read, from its
+  // watermark, and write their rows and markers. True iff a tuple was added.
   const compute = (store: Store, m: Term, tok: number): boolean => {
-    store.accComputed.add(tok);
     store.accPending.delete(tok);
+    let done = store.accComputed.get(tok);
+    if (done === undefined) { done = new Set(); store.accComputed.set(tok, done); }
+    const want = (mode === "eager" ? all : [...(store.accDemand.get(tok) ?? [])]).filter((r) => !done.has(r));
+    const need = accClosure(compiled, want);
+    for (const r of need) done.add(r);
     let any = false;
-    if (opts.marker === true) {
-      const id: Term = hashconsTerm({ tag: "Id", atom: { terms: [SYM_ACC_AT_ID, m] } }, store.hash);
-      if (addTuple(store, { terms: [SYM_ACC_AT, id] }, m, m)) any = true;
+    for (const rel of need) {
+      if (opts.markers?.has(rel) !== true) continue;
+      const relSym: Term = { tag: "Symbol", name: rel };
+      const id: Term = hashconsTerm({ tag: "Id", atom: { terms: [SYM_ACC_AT_ID, relSym, m] } }, store.hash);
+      if (addTuple(store, { terms: [SYM_ACC_AT, relSym, id] }, m, m)) any = true;
     }
-    if (compiled.decls.size === 0) return any;
-    const rows = computeAccAt(store, compiled, m, jsFuncs, jsRels, store.accWatermark.get(tok));
+    if (need.size === 0) return any;
+    const rows = computeAccAt(store, compiled, m, jsFuncs, jsRels, store.accWatermark.get(tok), need);
+    const frame = store.stats.cost !== undefined ? costEnter(store.stats.cost, "engine", 0, "acc write rows") : undefined;
     for (const [relation, rs] of rows) {
       const head: Term = { tag: "Symbol", name: relation };
       for (const r of rs) {
@@ -353,6 +407,7 @@ export function accHandler(
         if (addTuple(store, atom, m, m)) any = true;
       }
     }
+    if (frame !== undefined) costExit(store.stats.cost!, frame);
     return any;
   };
   return {
@@ -375,7 +430,7 @@ export function accHandler(
       const tok = tokenOf(store, m);
       store.accWatermark.set(tok, store.tuples.length);
       scanConstrain(store);
-      if (mode === "demand" && !store.accDemand.has(tok)) return false;
+      if (mode === "demand" && !store.accPending.has(tok)) return false;
       return compute(store, m, tok);
     },
   };

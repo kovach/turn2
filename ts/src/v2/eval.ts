@@ -20,6 +20,8 @@ import {
   addOrder,
   addTuple,
   candidatesByHead,
+  argIndexFor,
+  argKey,
   candidatesByHeadAt,
   comparable,
   coneLe,
@@ -34,7 +36,7 @@ import {
   type MomentCone,
   type Store,
 } from "./store.js";
-import { getOrCreateHead } from "./stats.js";
+import { costEnter, costExit, getOrCreateHead, siteFor, type SiteStats } from "./stats.js";
 import { decodeTerm, encodeTerm } from "./js-values.js";
 import { JS_REL_YIELD_CAP, type CompiledJsRel } from "./js-rel.js";
 
@@ -90,6 +92,11 @@ interface Ctx {
   // Stored-tuple matches skip candidates at or past this index (an acc
   // snapshot's watermark; `Infinity` otherwise).
   bound: number;
+  // Join-site counters (stats.ts `SiteStats`), when stats are enabled:
+  // `site` is the atom evalSeq is dispatching, read by evalMatch /
+  // evalAccMatch before they recurse.
+  track: boolean;
+  site?: SiteStats;
 }
 
 export function evaluateRule(
@@ -108,6 +115,7 @@ export function evaluateRule(
     ruleName: rule.name,
     ruleIdx,
     bound: acc?.tupleBound ?? Infinity,
+    track: store.stats.enabled,
   };
   if (acc !== undefined) ctx.acc = acc;
   const rs = ruleIdx >= 0 ? store.stats.rules[ruleIdx] : undefined;
@@ -115,7 +123,17 @@ export function evaluateRule(
   const tracking = store.stats.enabled && rs !== undefined;
   const t0 = tracking ? performance.now() : 0;
   const onFire = rs !== undefined ? () => { rs.firings++; } : () => {};
-  evalSeq(rule.body, 0, ctx, onFire);
+  const cost = store.stats.cost;
+  const frame = cost !== undefined ? costEnter(cost, acc !== undefined ? "acc" : "rule", rule.span.line, rule.name) : undefined;
+  if (ctx.track) {
+    const done = store.stats.completions;
+    evalSeq(rule.body, 0, ctx, () => { done.set(rule.name, (done.get(rule.name) ?? 0) + 1); onFire(); });
+  } else if (frame !== undefined) {
+    evalSeq(rule.body, 0, ctx, () => { frame.entry.completions++; onFire(); });
+  } else {
+    evalSeq(rule.body, 0, ctx, onFire);
+  }
+  if (frame !== undefined) costExit(cost!, frame);
   if (tracking) rs!.wallMs += performance.now() - t0;
 }
 
@@ -123,6 +141,12 @@ function evalSeq(body: RuleAtom[], i: number, ctx: Ctx, k: () => void): void {
   if (i >= body.length) { k(); return; }
   const a = body[i]!;
   const next = () => evalSeq(body, i + 1, ctx, k);
+  if (ctx.track) {
+    const head = a.tag === "Match" ? headSymOf(a.atom) ?? "" : a.tag === "AccMatch" ? a.relation : "";
+    const site = siteFor(ctx.store.stats, body, i, ctx.ruleName, head);
+    site.entries++;
+    ctx.site = site;
+  }
 
   switch (a.tag) {
     case "Equal":      evalEqual(a, ctx, next); return;
@@ -218,10 +242,13 @@ function evalAccMatch(
   if (acc === undefined) {
     throw new Error(`internal: rule '${ctx.ruleName}': AccMatch outside an acc rule`);
   }
+  const ss = ctx.track ? ctx.site : undefined;
+  if (ss !== undefined) noteBound(ss, a.atom, ctx, undefined);
   const head: Term = { tag: "Symbol", name: a.relation };
   if (a.negated) {
     // `not r t̄` over a strictly lower stratum's (final) local rows.
-    for (const row of acc.rows(a.relation)) {
+    for (const row of accRowCandidates(a, acc.rows(a.relation), ctx)) {
+      if (ss !== undefined) ss.scanned++;
       const mark = trailLength(ctx.trail);
       const hit = unifyAtoms(a.atom, { terms: [head, ...row.terms] }, ctx.trail, ctx.store.hash);
       trailUnwind(ctx.trail, mark);
@@ -230,7 +257,8 @@ function evalAccMatch(
     next();
     return;
   }
-  for (const row of acc.rows(a.relation)) {
+  for (const row of accRowCandidates(a, acc.rows(a.relation), ctx)) {
+    if (ss !== undefined) { ss.scanned++; ss.passedGen++; ss.passedEnds++; }
     const mark = trailLength(ctx.trail);
     const rowAtom: Atom = { terms: [head, ...row.terms] };
     const rowId = a.id === undefined
@@ -241,6 +269,7 @@ function evalAccMatch(
       unifyTerms(a.moment, row.moment, ctx.trail, ctx.store.hash) &&
       (a.id === undefined || unifyTerms(a.id, rowId!, ctx.trail, ctx.store.hash))
     ) {
+      if (ss !== undefined) ss.passedUnify++;
       next();
     }
     trailUnwind(ctx.trail, mark);
@@ -274,8 +303,8 @@ function evalAccContribute(
 // `decomposeAccRule` binds every read to it; acc.ts prepends `Equal` of it
 // to the moment being resolved).
 export const ACC_MOMENT_VAR = "_acc_m";
-// Head of the marker row the acc handler writes at a moment when it computes
-// the rows there (expand.ts `SYM_ACC_AT`).
+// Head of the marker row `_acc-at r <id>` the acc handler writes at a
+// moment when it computes relation r's rows there (expand.ts `SYM_ACC_AT`).
 export const ACC_AT_HEAD = "_acc-at";
 const SYM_ACC_ROW: Term = { tag: "Symbol", name: "*acc-row" };
 
@@ -330,11 +359,110 @@ function evalEqual(
   trailUnwind(ctx.trail, mark);
 }
 
+// Argument positions to index a Match / AccMatch on: the args ground at
+// the atom's first evaluation, plus 0 for a Match whose left endpoint is
+// (an acc point read: the key then picks that moment's rows only). Body order is fixed, so which args are bound
+// there is the same every time (`--join-stats` masks confirm it); a later
+// evaluation that finds one unground just scans (`argKey` undefined).
+const argPlans = new WeakMap<Atom, number[]>();
+
+function argPlan(atom: Atom, ctx: Ctx, l: Term | undefined): number[] {
+  let plan = argPlans.get(atom);
+  if (plan === undefined) {
+    plan = [];
+    if (l !== undefined && isGround(substTerm(l, ctx.trail))) plan.push(0);
+    for (let j = 1; j < atom.terms.length; j++) {
+      if (isGround(substTerm(atom.terms[j]!, ctx.trail))) plan.push(j);
+    }
+    argPlans.set(atom, plan);
+  }
+  return plan;
+}
+
+// The probe key for `plan` under the current bindings, or undefined.
+function probeKey(atom: Atom, plan: number[], ctx: Ctx, l: Term | undefined): string | number | undefined {
+  const ts: Term[] = [];
+  for (const p of plan) if (p > 0) ts[p] = substTerm(atom.terms[p]!, ctx.trail);
+  return argKey(ctx.store, ts, plan, l === undefined ? undefined : substTerm(l, ctx.trail));
+}
+
+// Stored tuples a Match must consider, in insertion order: the argument
+// index bucket for its bound args, else the (head, left end) / head bucket.
+function matchCandidates(a: Extract<RuleAtom, { tag: "Match" }>, head: string, ctx: Ctx): readonly number[] {
+  if (ctx.store.useArgIndex) {
+    const plan = argPlan(a.atom, ctx, a.l);
+    if (plan.length > 0 && !(plan.length === 1 && plan[0] === 0)) {
+      const key = probeKey(a.atom, plan, ctx, a.l);
+      const ai = key === undefined ? undefined : argIndexFor(ctx.store, head, plan);
+      if (ai !== undefined) return ai.buckets.get(key!) ?? NO_ROWS;
+    }
+  }
+  return candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail));
+}
+
+const NO_ROWS: readonly never[] = [];
+
+// Acc rows an AccMatch must consider: the same argument index over one
+// rows array (rows arrays are replaced, never mutated, so the index is
+// cached per array). Small arrays are scanned.
+const accRowIndexes = new WeakMap<readonly AccRow[], Map<string, Map<string | number, AccRow[]> | null>>();
+
+function accRowCandidates(a: Extract<RuleAtom, { tag: "AccMatch" }>, rows: readonly AccRow[], ctx: Ctx): readonly AccRow[] {
+  if (!ctx.store.useArgIndex || rows.length < 8) return rows;
+  const plan = argPlan(a.atom, ctx, undefined);
+  if (plan.length === 0) return rows;
+  const key = probeKey(a.atom, plan, ctx, undefined);
+  if (key === undefined) return rows;
+  let byPlan = accRowIndexes.get(rows);
+  if (byPlan === undefined) { byPlan = new Map(); accRowIndexes.set(rows, byPlan); }
+  const pk = plan.join(",");
+  let idx = byPlan.get(pk);
+  if (idx === undefined) {
+    let built: Map<string | number, AccRow[]> | null = new Map();
+    for (const row of rows) {
+      // Row term j-1 sits at atom position j (position 0 is the head).
+      const k = argKey(ctx.store, [a.atom.terms[0]!, ...row.terms], plan, undefined);
+      if (k === undefined) { built = null; break; }
+      const b = built.get(k);
+      if (b === undefined) built.set(k, [row]);
+      else b.push(row);
+    }
+    idx = built;
+    byPlan.set(pk, idx);
+  }
+  if (idx === null) return rows;
+  return idx.get(key) ?? NO_ROWS;
+}
+
+// Join-site bookkeeping at a scan's start: which args (after the head) are
+// ground under the current bindings, and whether the left endpoint is (so
+// the byHeadL index applied; `l` undefined for acc rows, which have none).
+function noteBound(ss: SiteStats, atom: Atom, ctx: Ctx, l: Term | undefined): void {
+  let mask = "";
+  for (let j = 1; j < atom.terms.length; j++) mask += isGround(substTerm(atom.terms[j]!, ctx.trail)) ? "+" : "-";
+  ss.masks.set(mask, (ss.masks.get(mask) ?? 0) + 1);
+  if (l !== undefined && (l.tag === "Ref" || l.tag === "Symbol")) ss.lBound++;
+}
+
+function isGround(t: Term): boolean {
+  switch (t.tag) {
+    case "Variable":
+    case "Wildcard":
+      return false;
+    case "Atom":
+    case "Id":
+      return t.atom.terms.every(isGround);
+    default:
+      return true;
+  }
+}
+
 function evalMatch(
   a: Extract<RuleAtom, { tag: "Match" }>,
   ctx: Ctx,
   next: () => void,
 ): void {
+  const ss = ctx.track ? ctx.site : undefined;
   const head = headSymOf(a.atom);
   if (head === null) return;
   const it = ctx.store.iteration;
@@ -342,9 +470,9 @@ function evalMatch(
   const rs = ctx.ruleIdx >= 0 ? ctx.store.stats.rules[ctx.ruleIdx] : undefined;
   const hs = getOrCreateHead(ctx.store.stats, head);
   hs.scanCount++;
-  // An ordinary rule's point read of an acc relation — or of `_acc-at`, the
-  // marker a `not` read waits on (expand.ts decomposeAccRead) — demands the
-  // acc rows at its moment (store.ts `accDemand`; acc.ts computes them at
+  // An ordinary rule's point read of an acc relation — or of `_acc-at r`,
+  // the marker a `not r` read waits on (expand.ts decomposeAccRead) —
+  // demands that relation's rows at its moment (store.ts `accDemand`; acc.ts computes them at
   // settle or, for an already-settled moment, from its watermark). The acc
   // read is also display bookkeeping (plans/v2-acc-timeline-display.md):
   // recorded whether or not a row matches, so the timeline can mark where a
@@ -356,7 +484,8 @@ function evalMatch(
       const at = substTerm(a.l, ctx.trail);
       if (at.tag !== "Variable" && at.tag !== "Wildcard") {
         const tok = tokenOf(ctx.store, at);
-        demandAcc(ctx.store, tok);
+        const rel = isAcc ? head : a.atom.terms[1]!;
+        demandAcc(ctx.store, tok, typeof rel === "string" ? rel : (rel as { name: string }).name);
         if (isAcc) {
           let seen = ctx.store.accConsulted.get(head);
           if (seen === undefined) { seen = new Set(); ctx.store.accConsulted.set(head, seen); }
@@ -365,14 +494,16 @@ function evalMatch(
       }
     }
   }
+  if (ss !== undefined) noteBound(ss, a.atom, ctx, substTerm(a.l, ctx.trail));
   // Candidate buckets list tuple indices in insertion order, so a snapshot
   // bound (acc evaluation at a watermark) ends the scan.
   const bound = ctx.bound;
   if (a.negated) {
     // `not r t̄` (expand.ts decomposeAccRead): succeed once, binding
     // nothing, iff no stored row unifies at the given endpoints.
-    for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+    for (const idx of matchCandidates(a, head, ctx)) {
       if (idx >= bound) break;
+      if (ss !== undefined) ss.scanned++;
       const tup = ctx.store.tuples[idx]!;
       const mark = trailLength(ctx.trail);
       const hit =
@@ -385,9 +516,10 @@ function evalMatch(
     next();
     return;
   }
-  for (const idx of candidatesByHeadAt(ctx.store, head, substTerm(a.l, ctx.trail))) {
+  for (const idx of matchCandidates(a, head, ctx)) {
     if (idx >= bound) break;
     if (rs !== undefined) rs.candScanned++;
+    if (ss !== undefined) ss.scanned++;
     const gen = ctx.store.gens[idx]!;
     if (constraint === "delta") {
       if (gen !== it - 1) continue;
@@ -395,6 +527,7 @@ function evalMatch(
       if (!(gen < it - 1)) continue;
     }
     if (rs !== undefined) rs.candPassedGen++;
+    if (ss !== undefined) ss.passedGen++;
     const tup = ctx.store.tuples[idx]!;
     const mark = trailLength(ctx.trail);
     // Bind endpoints first — typically these are fresh `_l_<k>`/`_r_<k>`
@@ -410,12 +543,14 @@ function evalMatch(
       continue;
     }
     if (rs !== undefined) rs.candPassedOverlap++;
+    if (ss !== undefined) ss.passedEnds++;
     if (!unifyAtoms(a.atom, tup.atom, ctx.trail, ctx.store.hash)) {
       trailUnwind(ctx.trail, mark);
       continue;
     }
     if (rs !== undefined) rs.candPassedLiteral++;
     if (rs !== undefined) rs.candPassedUnify++;
+    if (ss !== undefined) ss.passedUnify++;
     next();
     trailUnwind(ctx.trail, mark);
   }

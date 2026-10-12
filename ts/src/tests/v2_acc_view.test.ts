@@ -305,4 +305,31 @@ after, n N, +seen N
   console.log("PASS: renderTimeline draws acc bars, open edges, read markers, moment hits");
 }
 
+// ===== 10) Inspector under demand: run / inspect / none ======================
+{
+  // Demand mode computes a relation only where something reads it: all
+  // three at c's start, nothing at b's. With the run's `accAt` the
+  // inspector fills b in — eager's rows there — and diffs against a's.
+  const p = parse(OCC);
+  if ("message" in p) throw new Error(p.message);
+  const dem = runFixpoint(p, 200, 5000, { accMode: "demand" });
+  const eag = run(OCC);
+  const src = (snap: ReturnType<typeof accSnapshot>): string[] => snap.relations.map((r) => `${r.relation}:${r.source}`);
+  const atC = accSnapshot(dem.store, startOf(dem.store, "c"));
+  assert.deepEqual(src(atC), ["at:run", "occupancy:run", "crowded:run"]);
+  const bTok = startOf(dem.store, "b");
+  const plain = accSnapshot(dem.store, bTok);
+  assert.deepEqual(src(plain), ["at:none", "occupancy:none", "crowded:none"]);
+  assert.ok(plain.relations.every((r) => r.rows.length === 0 && r.gone.length === 0));
+  const size = dem.store.tuples.length;
+  const insp = accSnapshot(dem.store, bTok, dem.accAt);
+  assert.equal(dem.store.tuples.length, size, "inspection writes nothing");
+  assert.deepEqual(src(insp), ["at:inspect", "occupancy:inspect", "crowded:inspect"]);
+  const want = accSnapshot(eag, startOf(eag, "b"));
+  const rows = (x: typeof insp) => x.relations.map((r) => [r.relation, r.rows.map((w) => [w.label, w.status]), r.gone]);
+  assert.deepEqual(rows(insp), rows(want), "inspected rows and diff equal eager's");
+  assert.ok(insp.relations.every((r) => r.rows.every((w) => w.tupleIndex === -1)));
+  console.log("PASS: the inspector fills in relations demand mode skipped, via accAt");
+}
+
 console.log("ALL v2 acc-view tests passed");

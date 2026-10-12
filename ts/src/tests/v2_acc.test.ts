@@ -904,8 +904,9 @@ check, pairs N, ^closure-pairs N
 }
 
 // ===== 21) Demand-driven evaluation ==========================================
-// `runFixpoint` computes acc rows only at moments something reads them
-// (`accMode: "demand"`, the default); "eager" computes every settled moment.
+// `runFixpoint` computes a relation's rows only at moments something reads
+// it (`accMode: "demand"`, the default), together with the relations its
+// acc rules read; "eager" computes every relation at every settled moment.
 // Ordinary tuples are the same either way.
 {
   const ordinary = (s: Store): string[] =>
@@ -921,8 +922,10 @@ check, pairs N, ^closure-pairs N
   const src = `
 #acc n : @count
 #acc has : e
+#acc big : @count
 thing X / n ()
 thing X / has X
+has X / big ()
 
 ~game
   ~a; ~b; ~c
@@ -931,6 +934,7 @@ a, +thing x
 b, +thing y
 b, not has z, ^no-z ok
 c, n N, ^total N
+c, big B, ^bigs B
 `;
   const dem = runFixpoint(ok(src), 200, 5000, { accMode: "demand" });
   const eag = runFixpoint(ok(src), 200, 5000, { accMode: "eager" });
@@ -939,22 +943,40 @@ c, n N, ^total N
   assert.deepEqual(ordinary(dem.store), ordinary(eag.store), "ordinary tuples are the same in both modes");
   assert.deepEqual(withHead(dem.store, "total"), ["total (s (s z))"]);
   assert.deepEqual(withHead(dem.store, "no-z"), ["no-z ok"]);
-  // Demand: rows only where some relation is read — `n` at c's start,
-  // `has` (via `not`) at b's start. A computed moment gets every relation's
-  // rows, and the `_acc-at` marker.
+  // Demand: a relation's rows only where it is read — `has` (via `not`) at
+  // b's start, `n` and `big` at c's start; `big` reads `has`, so `has` is
+  // computed at c's start too. The `_acc-at has` marker goes with `has`.
   const cStart = tokenOf(dem.store, dem.store.tuples.find((t) => rt(dem.store, t.atom.terms[0]!) === "c")!.l);
   const bStart = tokenOf(dem.store, dem.store.tuples.find((t) => rt(dem.store, t.atom.terms[0]!) === "b")!.l);
   const read = [bStart, cStart].sort();
-  assert.deepEqual(rowMoments(dem.store, "n").sort(), read);
+  assert.deepEqual(rowMoments(dem.store, "n"), [cStart]);
+  assert.deepEqual(rowMoments(dem.store, "big"), [cStart]);
   assert.deepEqual(rowMoments(dem.store, "has").sort(), read);
   assert.deepEqual(rowMoments(dem.store, "_acc-at").sort(), read);
-  assert.deepEqual([...dem.store.accComputed].sort(), read);
+  assert.deepEqual([...dem.store.accComputed.keys()].sort(), read);
+  assert.deepEqual([...dem.store.accComputed.get(bStart)!].sort(), ["has"]);
+  assert.deepEqual([...dem.store.accComputed.get(cStart)!].sort(), ["big", "has", "n"]);
+  assert.deepEqual(withHead(dem.store, "bigs"), withHead(eag.store, "bigs"));
+  // `accAt` (inspection) computes every relation at a settled moment from
+  // its watermark, writing nothing: eager's rows there.
+  const size = dem.store.tuples.length;
+  const atB = dem.accAt!(bStart)!;
+  assert.equal(dem.store.tuples.length, size, "accAt writes nothing");
+  const eagB = tokenOf(eag.store, eag.store.tuples.find((t) => rt(eag.store, t.atom.terms[0]!) === "b")!.l);
+  for (const rel of ["n", "has", "big"]) {
+    const mine = atB.get(rel)!.map((r) => r.terms.map((t) => rt(dem.store, t)).join(" ")).sort();
+    const theirs = eag.store.tuples
+      .filter((t) => rt(eag.store, t.atom.terms[0]!) === rel && tokenOf(eag.store, t.l) === eagB)
+      .map((t) => t.atom.terms.slice(1, -1).map((x) => rt(eag.store, x)).join(" ")).sort();
+    assert.deepEqual(mine, theirs, `accAt ${rel}`);
+  }
+  assert.equal(dem.accAt!(dem.store.topTok), undefined, "top never settles");
   assert.ok(dem.store.accComputed.size < dem.store.settled.size, "unread moments are not computed");
   // Eager: rows at every settled moment, as before.
   assert.equal(eag.store.accComputed.size, eag.store.settled.size);
   assert.ok(rowMoments(eag.store, "n").length > 1);
   assert.equal(rowMoments(eag.store, "_acc-at").length, eag.store.settled.size);
-  console.log("PASS: demand computes acc rows only where read; eager everywhere; same ordinary tuples");
+  console.log("PASS: demand computes each relation only where read (with what it reads); eager everywhere; accAt inspects");
 }
 {
   // Late demand is served from the moment's watermark. The continuation
@@ -1021,6 +1043,86 @@ pick, ?L, !(not at me L, at _ L)
     assert.deepEqual(opts, [["me"], ["there"]], accMode);
   }
   console.log("PASS: acc reads inside !(...) (positive and not) are demanded at the component moment");
+}
+
+// 22) Argument indexes (store.ts `argIndexFor`, eval.ts `matchCandidates` /
+// `accRowCandidates`) change only which candidates are scanned: the same
+// store with them off. Covers a Match on a bound arg (`weight I W`), an acc
+// body's AccMatch on a bound arg over 10 rows (`held P I`, past the
+// small-array cutoff), an ordinary point read keyed by moment + arg
+// (`load P N`), and `not` on an acc relation.
+{
+  const src = `
+~go; ~go2
+go
+  +person ann
+  +person bob
+go, person P
+  +owns P i1
+  +owns P i2
+  +owns P i3
+  +owns P i4
+  +owns P i5
+go, +owns ann sword
+go, +weight i1 1
+go, +weight i2 2
+go, +weight i3 3
+go, +weight i4 4
+go, +weight i5 5
+go, +weight sword 7
+#acc held : person item
+owns P I / held P I
+#acc load : person @sum
+person P, held P I, weight I W / load P W
+go2, person P, load P N, +report P N
+go2, person P, not held P sword, +unarmed P
+`;
+  for (const accMode of ["demand", "eager"] as const) {
+    const on = runFixpoint(ok(src), 2000, 100000, { accMode });
+    const off = runFixpoint(ok(src), 2000, 100000, { accMode, argIndex: false });
+    assert.deepEqual(tuples(on.store).sort(), tuples(off.store).sort(), `${accMode}: same tuples`);
+    assert.deepEqual(withHead(on.store, "report"), ["report ann 22", "report bob 15"], `${accMode}: report`);
+    assert.deepEqual(withHead(on.store, "unarmed"), ["unarmed bob"], `${accMode}: unarmed`);
+    assert(on.store.argIndex.get("weight")?.has("1"), `${accMode}: weight indexed on its first arg`);
+    assert.equal(off.store.argIndex.size, 0, `${accMode}: no indexes when off`);
+  }
+  console.log("PASS: argument indexes leave results unchanged");
+}
+
+// 23) Cost profile (stats.ts `CostProfile`, `--rule-profile`): entries keyed
+// by source line for ordinary and acc rules, the acc fold and the outer
+// engine frame; self times are exclusive, so they sum to no more than the
+// run; the store is the same with it off.
+{
+  const src = `
+~go; ~go2
+go, +item a
+go, +item b
+#acc n : @sum
+item I / n 1
+go2, n N, +total N
+`;
+  for (const accMode of ["demand", "eager"] as const) {
+    const t0 = performance.now();
+    const on = runFixpoint(ok(src), 2000, 100000, { accMode, profile: true });
+    const wall = performance.now() - t0;
+    const off = runFixpoint(ok(src), 2000, 100000, { accMode });
+    assert.deepEqual(tuples(on.store).sort(), tuples(off.store).sort(), `${accMode}: same tuples`);
+    assert.equal(off.store.stats.cost, undefined, `${accMode}: no profile when off`);
+    const cost = on.store.stats.cost!;
+    assert.equal(cost.cur, undefined, `${accMode}: every frame exited`);
+    const e = (key: string) => cost.entries.get(key);
+    assert.equal(e("rule:3")?.added, 1, `${accMode}: line 3 adds its row`);
+    assert.equal(e("rule:4")?.added, 1, `${accMode}: line 4 adds its row`);
+    assert(e("acc:6")!.completions >= 2, `${accMode}: the acc rule fires once per item`);
+    assert(e("rule:7")!.completions >= 1, `${accMode}: the total rule fires`);
+    assert(e("engine:acc fold {n}") !== undefined, `${accMode}: acc fold frame`);
+    assert.equal(e("engine:engine (rest)")?.calls, 1, `${accMode}: one outer frame`);
+    const self = [...cost.entries.values()].reduce((a, x) => a + x.selfMs, 0);
+    assert(self <= wall + 1e-6, `${accMode}: self times sum within the run`);
+    assert.deepEqual(withHead(on.store, "total"), ["total 2"], `${accMode}: total`);
+  }
+  console.log("PASS: cost profile attributes time to source rules");
 }
 
 console.log("ALL v2 acc tests passed");

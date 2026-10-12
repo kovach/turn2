@@ -12,6 +12,7 @@ import { attachSourceLink } from "./v2/source-link.js";
 import type { Atom, Term } from "./v2/term.js";
 import { tokenOf, type Store } from "./v2/store.js";
 import type { ComponentOptions, Rule } from "./v2/types.js";
+import type { AccRow } from "./v2/eval.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
@@ -603,8 +604,13 @@ timelineInlineEl.addEventListener("contextmenu", (e: MouseEvent) => {
 // (shown iff an ordinary rule reads them). `inspectKey` is the moment the
 // inspector is open on, by structural fingerprint (momentKey) for the same
 // reason collapse keys are. Both are in-memory only, like `collapsedKeys`.
+// `inspectAll`: the user asked the inspector to compute every relation at
+// its moment (demand mode computes only what something read); reset when
+// the inspector moves. `lastAccAt` is the last run's `accAt` (fixpoint.ts).
 const accOverrides = new Map<string, boolean>();
 let inspectKey: string | null = null;
+let inspectAll = false;
+let lastAccAt: ((tok: number) => Map<string, AccRow[]> | undefined) | undefined;
 
 function rerenderTimeline(): void {
   if (lastStore === null) return;
@@ -617,6 +623,12 @@ timelineInlineEl.addEventListener("click", (e: MouseEvent) => {
   if (target === null || lastStore === null) return;
   if (target.closest("[data-acc-inspector-close]") !== null) {
     inspectKey = null;
+    inspectAll = false;
+    rerenderTimeline();
+    return;
+  }
+  if (target.closest("[data-acc-inspect-all]") !== null) {
+    inspectAll = true;
     rerenderTimeline();
     return;
   }
@@ -625,6 +637,7 @@ timelineInlineEl.addEventListener("click", (e: MouseEvent) => {
   const key = momentKey(lastStore, Number(dot.getAttribute("data-tl-moment")));
   // Clicking the selected moment again closes the inspector.
   inspectKey = key === inspectKey ? null : key;
+  inspectAll = false;
   rerenderTimeline();
 });
 
@@ -643,6 +656,8 @@ function renderDbPane(store: Store): void {
       accOverrides,
       accControls: true,
       inspectKey,
+      accAt: lastAccAt,
+      inspectAll,
     });
   } else {
     renderTuples(dbEl, store, {
@@ -729,11 +744,12 @@ async function run(): Promise<void> {
     // `?lattice` in the page URL: moment-lattice max/min (v2/store.ts).
     const params = new URLSearchParams(location.search);
     const lattice = params.has("lattice");
-    // `#acc` rows at every settled moment: the timeline's acc bars and the
-    // moment inspector draw each moment's stored rows, and the engine's
-    // default (demand) writes rows only where something reads them.
-    // `?acc=demand` runs the faster demand mode (bars only at read moments).
-    const accMode = params.get("acc") === "demand" ? "demand" : "eager";
+    // `#acc` rows: demand mode (the default) computes a relation only where
+    // something reads it, so the timeline's acc bars appear only there; the
+    // moment inspector can compute the rest on request (`accAt`).
+    // `?acc=eager` computes every relation at every settled moment (bars
+    // everywhere; slower).
+    const accMode = params.get("acc") === "eager" ? "eager" : "demand";
     result = runFixpoint(parsed, gas, tupleGas, { lattice, accMode });
   } catch (e) {
     // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
@@ -746,6 +762,7 @@ async function run(): Promise<void> {
   const { store, status, iterations } = result;
   lastStore = store;
   lastRules = result.rules ?? [];
+  lastAccAt = result.accAt;
 
   // Persist rng rolls (plans/v2-choice-actors.md): every `rng` choice the
   // scheduler committed this run is appended as `^ is` rows — same shape as
