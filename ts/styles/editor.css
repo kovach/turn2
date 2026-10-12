@@ -144,3 +144,31 @@
 .editor-menu-input:focus { border-color: var(--syn-pred, #007a5a); }
 .editor-menu-error { padding: 0 10px 2px; color: var(--err, #d33); white-space: pre-wrap; max-width: 360px; }
 .editor-menu-error:empty { display: none; }
+
+/* Syntax-highlight layer (Editor syntaxHighlight; v2/highlight.ts): a <pre>
+ * laid exactly over the textarea, which sits above it with transparent text
+ * and background so only its caret and selection show. Token colours are the
+ * --t-* palette in theme.css. */
+.editor-hl {
+  position: absolute;
+  margin: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre;
+  color: var(--fg, #1a1a1a);
+}
+.editor-hl code { display: block; font: inherit; }
+.editor-wrap .editor-textarea.editor-hl-on {
+  position: relative;
+  z-index: 1;
+  color: transparent;
+  background: transparent;
+  caret-color: var(--fg, #1a1a1a);
+}
+.editor-hl .hl-mark {
+  background: var(--editor-mark-bg, rgba(250, 204, 21, 0.45));
+  border-radius: 2px;
+}
+.editor-hl code > div { height: var(--hl-row-h, auto); }
+.editor-hl code > div:empty::before { content: " "; }

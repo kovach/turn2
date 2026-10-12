@@ -155,6 +155,8 @@ export type RuleAtom =
   | {
       tag: "Exception";
       left: Atom;
+      // The LHS atom's own span; `span` is the whole `{…}` block.
+      leftSpan?: Span;
       right: RuleAtom[];
       span: Span;
     }
@@ -315,6 +317,8 @@ export interface AccRule {
   explicitName?: string;
   body: RuleAtom[];
   head: Atom;
+  // The head atom's own span (with columns); `span` is the whole rule.
+  headSpan?: Span;
   span: Span;
 }
 

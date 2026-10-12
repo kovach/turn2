@@ -1,5 +1,6 @@
 import { partialTokenAt, suggestionsFor } from "./autocomplete.js";
 import { applyRename, renameError, renameOccurrences, renameTargetAt, type RenameTarget } from "./rename.js";
+import { highlightLine as hlLine, type HlToken } from "./highlight.js";
 
 export type SaveBackend = "none" | "server" | "url-param";
 
@@ -18,6 +19,19 @@ export interface EditorOptions {
   // Default off; index-v2 opts in. Shift+right-click still gets the
   // browser's own menu.
   enableContextMenu?: boolean;
+  // Syntax highlighting (highlight.ts): a `<pre>` layer under a textarea
+  // whose own text is transparent. Default off.
+  syntaxHighlight?: boolean;
+  // Number shown in the gutter for the first line (default 1): a rule-browser
+  // card shows the file's line numbers for its slice.
+  firstLine?: number;
+}
+
+// A column range of one line to mark in the highlight layer (setMarks).
+export interface EditorMark {
+  line: number;     // 1-indexed, in this editor's own text
+  startCol: number;
+  endCol: number;
 }
 
 const SAVE_DEBOUNCE_MS = 400;
@@ -43,7 +57,21 @@ export class Editor {
   private readonly keyUpHandler: (ev: KeyboardEvent) => void;
   private readonly blurHandler: () => void;
   private lastLineCount = 0;
+  private firstLine: number;
   private _frozen = false;
+
+  // Syntax-highlight layer: one block row per line inside `hlCode`, which is
+  // translated by the textarea's scroll offsets. Block rows, like the
+  // gutter's: their pitch matches the textarea's own lines, where line boxes
+  // of one inline run drift by a fraction of a pixel per line.
+  // Rows are rewritten only when their text, incoming `#js` state or marks
+  // change.
+  private hlEl: HTMLPreElement | null = null;
+  private hlCode: HTMLElement | null = null;
+  private hlRows: HTMLDivElement[] = [];
+  private hlKeys: string[] = [];
+  private hlMarks = new Map<number, { startCol: number; endCol: number }[]>();
+  private hlResize: ResizeObserver | null = null;
 
   // Line/range-highlight overlay (source ↔ output linking). Lazily created
   // inside `wrap` so it positions against the same origin as the gutter rows —
@@ -116,6 +144,7 @@ export class Editor {
       this.adopted = false;
     }
 
+    this.firstLine = opts.firstLine ?? 1;
     this.acEnabled = opts.enableAutocomplete ?? false;
     this.menuEnabled = opts.enableContextMenu ?? false;
     this.contextMenuHandler = (ev) => this.onContextMenu(ev);
@@ -130,6 +159,7 @@ export class Editor {
     this.gutterSyncHandler = () => this.syncGutterScroll();
     this.scrollHandler = () => {
       this.syncGutterScroll();
+      this.syncHlScroll();
       this.repositionHighlight();
       this.repositionNotes();
       if (this.acEnabled) this.hideAutocomplete();
@@ -166,6 +196,7 @@ export class Editor {
     }
 
     this.rebuildGutter();
+    if (opts.syntaxHighlight) this.initHighlight();
 
     if (opts.autoGrow) {
       this.ta.style.overflowY = "hidden";
@@ -180,6 +211,103 @@ export class Editor {
     this.rebuildGutter();
     if (this.opts.autoGrow) this.fitHeight();
     this.syncGutterScroll();
+    this.renderHighlight();
+  }
+
+  // Re-measure after the editor was attached or resized from outside: an
+  // auto-grown height (0 while detached) and the highlight layer's box.
+  refresh(): void {
+    if (this.opts.autoGrow) this.fitHeight();
+    else this.layoutHighlight();
+  }
+
+  // Renumber the gutter so its first row reads `n`.
+  setFirstLine(n: number): void {
+    if (n === this.firstLine) return;
+    this.firstLine = n;
+    this.gutterEl.textContent = "";
+    this.lastLineCount = 0;
+    this.rebuildGutter();
+  }
+
+  // Marks drawn behind the text in the highlight layer (no-op without
+  // `syntaxHighlight`). Replaces any previous marks.
+  setMarks(marks: EditorMark[]): void {
+    this.hlMarks.clear();
+    for (const m of marks) {
+      let ms = this.hlMarks.get(m.line);
+      if (ms === undefined) this.hlMarks.set(m.line, (ms = []));
+      ms.push({ startCol: m.startCol, endCol: m.endCol });
+    }
+    this.hlKeys = [];
+    this.renderHighlight();
+  }
+
+  private initHighlight(): void {
+    this.hlEl = document.createElement("pre");
+    this.hlEl.className = "editor-hl";
+    this.hlEl.setAttribute("aria-hidden", "true");
+    this.hlCode = document.createElement("code");
+    this.hlEl.appendChild(this.hlCode);
+    this.wrap.insertBefore(this.hlEl, this.ta);
+    this.ta.classList.add("editor-hl-on");
+    this.hlResize = new ResizeObserver(() => this.layoutHighlight());
+    this.hlResize.observe(this.ta);
+    this.renderHighlight();
+    queueMicrotask(() => this.layoutHighlight());
+  }
+
+  // Lay the layer exactly over the textarea's box, with its font metrics.
+  private layoutHighlight(): void {
+    if (this.hlEl === null) return;
+    const cs = getComputedStyle(this.ta);
+    const st = this.hlEl.style;
+    st.left = `${this.ta.offsetLeft}px`;
+    st.top = `${this.ta.offsetTop}px`;
+    st.width = `${this.ta.offsetWidth}px`;
+    st.height = `${this.ta.offsetHeight}px`;
+    st.padding = cs.padding;
+    st.borderStyle = "solid";
+    st.borderColor = "transparent";
+    st.borderWidth = cs.borderWidth;
+    st.font = cs.font;
+    st.letterSpacing = cs.letterSpacing;
+    st.tabSize = cs.tabSize;
+    // Rows take the gutter rows' laid-out height, which matches the
+    // textarea's line pitch; a row's own line box can come out a fraction of
+    // a pixel taller (mixed bold/italic runs), which adds up over a long file.
+    const gr = this.gutterEl.firstElementChild?.getBoundingClientRect().height;
+    if (gr !== undefined && gr > 0) this.hlCode!.style.setProperty("--hl-row-h", `${gr}px`);
+    this.syncHlScroll();
+  }
+
+  private syncHlScroll(): void {
+    if (this.hlCode === null) return;
+    this.hlCode.style.transform = `translate(${-this.ta.scrollLeft}px, ${-this.ta.scrollTop}px)`;
+  }
+
+  private renderHighlight(): void {
+    if (this.hlCode === null) return;
+    const lines = this.ta.value.split("\n");
+    if (lines.length !== this.hlRows.length) {
+      this.hlCode.textContent = "";
+      this.hlRows = [];
+      this.hlKeys = [];
+      for (let i = 0; i < lines.length; i++) {
+        const row = document.createElement("div");
+        this.hlRows.push(row);
+        this.hlCode.appendChild(row);
+      }
+    }
+    const state = { js: 0 };
+    lines.forEach((text, i) => {
+      const marks = this.hlMarks.get(i + 1);
+      const key = `${state.js}\u0000${text}`;
+      const toks = hlLine(text, state);
+      if (this.hlKeys[i] === key) return;
+      this.hlKeys[i] = key;
+      renderHlRow(this.hlRows[i]!, text, toks, marks);
+    });
   }
 
   private syncGutterScroll(): void {
@@ -425,12 +553,15 @@ export class Editor {
     this.acMirror?.remove();
     this.highlightEl?.remove();
     this.notesEl?.remove();
+    this.hlResize?.disconnect();
+    this.hlEl?.remove();
     this.chProbe?.remove();
     if (!this.adopted) this.wrap.remove();
   }
 
   private onInput(): void {
     this.rebuildGutter();
+    this.renderHighlight();
     // Line numbers go stale as soon as the text changes.
     this.clearLineNotes();
     if (this.opts.autoGrow) this.fitHeight();
@@ -442,6 +573,7 @@ export class Editor {
     this.ta.style.height = "auto";
     this.ta.style.height = this.ta.scrollHeight + "px";
     this.gutterEl.style.height = this.ta.style.height;
+    this.layoutHighlight();
   }
 
   private rebuildGutter(): void {
@@ -452,7 +584,7 @@ export class Editor {
     if (n > this.lastLineCount) {
       for (let i = this.lastLineCount; i < n; i++) {
         const row = document.createElement("div");
-        row.textContent = String(i + 1);
+        row.textContent = String(i + this.firstLine);
         this.gutterEl.appendChild(row);
       }
     } else {
@@ -1019,6 +1151,35 @@ function visibleClipRect(el: HTMLElement): { top: number; bottom: number } {
 // Bare modifier keys: their keyup must neither refresh nor dismiss the box, so
 // the Shift-up ending an uppercase keystroke doesn't close what the letter
 // opened.
+// One highlighted line: text cut at every token and mark boundary, each
+// piece a span with its token class (`t-<cls>`) and `hl-mark` when marked.
+function renderHlRow(
+  row: HTMLDivElement,
+  text: string,
+  toks: HlToken[],
+  marks: { startCol: number; endCol: number }[] | undefined,
+): void {
+  row.textContent = "";
+  const cuts = new Set<number>([0, text.length]);
+  for (const t of toks) { cuts.add(t.start); cuts.add(t.end); }
+  for (const m of marks ?? []) { cuts.add(Math.min(m.startCol, text.length)); cuts.add(Math.min(m.endCol, text.length)); }
+  const xs = [...cuts].sort((a, b) => a - b);
+  let ti = 0;
+  for (let k = 0; k + 1 < xs.length; k++) {
+    const a = xs[k]!, b = xs[k + 1]!;
+    while (ti < toks.length && toks[ti]!.end <= a) ti++;
+    const tok = ti < toks.length && toks[ti]!.start <= a ? toks[ti] : undefined;
+    const marked = (marks ?? []).some((m) => m.startCol <= a && b <= m.endCol);
+    const piece = text.slice(a, b);
+    if (tok === undefined && !marked) { row.appendChild(document.createTextNode(piece)); continue; }
+    const span = document.createElement("span");
+    if (tok !== undefined) span.className = `t-${tok.cls}`;
+    if (marked) span.classList.add("hl-mark");
+    span.textContent = piece;
+    row.appendChild(span);
+  }
+}
+
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph"]);
 
 function lineNumberAt(value: string, pos: number): number {

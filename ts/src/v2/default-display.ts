@@ -39,6 +39,9 @@ interface DisplayApi {
   tokensEq: (a: Term, b: Term, store: Store) => boolean;
   commit: (intent: ClickIntent) => void;
   setPending: (term: Term | null) => void;
+  // Tooltips and context menus for entities (display-kit.ts); display
+  // modules use it, the default display doesn't yet.
+  kit?: import("./display-kit.js").DisplayKit;
 }
 
 interface DisplayCallContext {

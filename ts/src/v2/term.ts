@@ -23,6 +23,10 @@ export interface Span {
   line: number;      // 1-indexed line in original input
   startCol?: number; // 0-indexed, inclusive; line.slice(startCol, endCol)
   endCol?: number;   // is the atom's source text (marker char included)
+  // Set on top-level items (rules, acc rules, `#acc` / `#js` / `#js-def`
+  // declarations): the last source line the item's tokens come from, so
+  // `line..endLine` is its text (comment-only lines inside included).
+  endLine?: number;
 }
 
 // DOM attribute value for per-atom source ↔ output linking

@@ -15,6 +15,10 @@ html.mode-dark {
   --syn-pred: #4ec9b0; --syn-var: #dcdcaa;
   --syn-interval: #666; --syn-group: #888;
   --err: #f87171; --link: #4fc1ff;
+  /* Turn syntax (v2/highlight.ts), the Spirit Island report's palette */
+  --t-c: #7f8b85; --t-d: #d59ad8; --t-sl: #63c3a2; --t-sa: #f0915a; --t-sq: #82aee6;
+  --t-ex: #ec8a80; --t-op: #94a19a; --t-ag: #d59ad8; --t-n: #e0b04f; --t-v: #8cc3e6;
+  --t-b: #b9a3ea; --t-r: #f1f5f0; --t-s: #c3cdc6; --t-js: #8f9792;
 }
 html.mode-light {
   --bg: #fdfdfd; --bg-2: #f5f5f0; --bg-3: #ebebe5;
@@ -24,7 +28,26 @@ html.mode-light {
   --syn-pred: #007a5a; --syn-var: #885a00;
   --syn-interval: #999; --syn-group: #777;
   --err: #c0392b; --link: #0a64a4;
+  --t-c: #7b8681; --t-d: #8a3c8e; --t-sl: #1e6a55; --t-sa: #b0501b; --t-sq: #2d5d9b;
+  --t-ex: #a63a31; --t-op: #6a766f; --t-ag: #8a3c8e; --t-n: #9a6a0c; --t-v: #235879;
+  --t-b: #6a4e9f; --t-r: #14201a; --t-s: #3c4a42; --t-js: #737a76;
 }
+
+/* --- Turn syntax classes (v2/highlight.ts; same as si/report/style.css) --- */
+.t-c { color: var(--t-c); font-style: italic; }
+.t-d, .t-ag { color: var(--t-d); }
+.t-sl { color: var(--t-sl); font-weight: 700; }
+.t-sa { color: var(--t-sa); font-weight: 700; }
+.t-sq { color: var(--t-sq); font-weight: 700; }
+.t-ex { color: var(--t-ex); font-weight: 700; }
+.t-op { color: var(--t-op); font-weight: 700; }
+.t-p { color: var(--t-op); }
+.t-n { color: var(--t-n); }
+.t-v { color: var(--t-v); }
+.t-b { color: var(--t-b); }
+.t-r { color: var(--t-r); font-weight: 600; }
+.t-s { color: var(--t-s); }
+.t-js { color: var(--t-js); }
 
 /* --- Source ↔ output linking (v2/source-link.ts) --- */
 /* Only linked elements carry data-source-span; the background rules cover

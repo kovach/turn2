@@ -36,7 +36,8 @@ type Token =
   | { tag: "aggcomp"; text: string; line: number; endLine: number }
   | { tag: "macroDef"; headText: string; line: number }
   | { tag: "equal"; text: string; line: number; startCol: number; endCol: number }
-  | { tag: "command"; name: string; argText: string; body?: string; line: number }
+  // `endLine` is set for a multi-line `#js` / `#js-def` body (the `}` line).
+  | { tag: "command"; name: string; argText: string; body?: string; line: number; endLine?: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number }
   | { tag: "semi"; line: number }
@@ -322,7 +323,7 @@ export function tokenize(input: string): Token[] | ParseError {
           } else {
             return { line: lineno, message: `'#${name}' body must close with '}' on the same line, or put '{' last and indent the body below` };
           }
-          tokens.push({ tag: "command", name, argText: sig, body, line: lineno });
+          tokens.push({ tag: "command", name, argText: sig, body, line: lineno, endLine: endLi + 1 });
           li = endLi;       // multi-line: past the `}` line; one-liner: unchanged
           pos = raw.length; // exit the inner while for the signature line
           atomStart = true;
@@ -424,7 +425,7 @@ type BodyItem =
   // Exception block. `right` is still BodyItems so `desugarBody` can
   // resolve the fragment's dots with the containing rule's shared
   // fresh-name minting (no `_dotN` capture between rule and fragment).
-  | { kind: "exception"; left: Atom; right: BodyItem[]; span: Span };
+  | { kind: "exception"; left: Atom; leftSpan: Span; right: BodyItem[]; span: Span };
 
 type AtomItem = Extract<RuleAtom, { tag: "Atom" }>;
 
@@ -540,6 +541,21 @@ function parseJsRelCommand(sig: string, body: string, line: number): Command | P
   return { kind: "js-rel", def: { name, params, body, span: { line } }, line };
 }
 
+
+// Last source line of the tokens `from..to` (exclusive) of one top-level
+// item. A `ruleEnd` belongs to the line that starts the *next* item, so it
+// is skipped.
+function lastLineOf(tokens: Token[], from: number, to: number): number {
+  let last = 0;
+  for (let k = from; k < to; k++) {
+    const t = tokens[k]!;
+    if (t.tag === "ruleEnd") continue;
+    const end = t.tag === "aggcomp" ? t.endLine : t.tag === "command" ? (t.endLine ?? t.line) : t.line;
+    if (end > last) last = end;
+  }
+  return last;
+}
+
 function parseProgram(tokens: Token[]): Program | ParseError {
   const rules: Rule[] = [];
   const jsDefs = new Map<string, JsDef>();
@@ -559,6 +575,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
     }
     let explicitName: string | undefined;
     let startLine = t.line;
+    const iStart = i;
     if (t.tag === "command") {
       const cmd = parseCommand(t);
       if ("message" in cmd) return cmd;
@@ -567,6 +584,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (accDecls.has(cmd.decl.relation)) {
           return { line: t.line, message: `duplicate '#acc' declaration for '${cmd.decl.relation}'` };
         }
+        cmd.decl.span.endLine = lastLineOf(tokens, iStart, i);
         accDecls.set(cmd.decl.relation, cmd.decl);
         continue;
       }
@@ -584,11 +602,15 @@ function parseProgram(tokens: Token[]): Program | ParseError {
         if (jsRels.has(cmd.name)) {
           return { line: cmd.line, message: `'#js' name '${cmd.name}' is already a '#js-def' relation` };
         }
-        jsDefs.set(cmd.name, { name: cmd.name, params: cmd.params, body: cmd.body, span: { line: cmd.line } });
+        jsDefs.set(cmd.name, {
+          name: cmd.name, params: cmd.params, body: cmd.body,
+          span: { line: cmd.line, endLine: lastLineOf(tokens, iStart, i) },
+        });
         continue;
       }
       if (cmd.kind === "js-rel") {
         const def = cmd.def;
+        def.span.endLine = lastLineOf(tokens, iStart, i);
         if (isBuiltinRel(def.name)) {
           return { line: cmd.line, message: `'${def.name}' is a built-in relation and cannot be redefined` };
         }
@@ -646,6 +668,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       }
       const acc = buildAccRule(body, headRes, startLine, slashLine);
       if ("message" in acc) return acc;
+      acc.span.endLine = lastLineOf(tokens, iStart, i);
       if (explicitName !== undefined) acc.explicitName = explicitName;
       accRules.push(acc);
       allRules.push(acc);
@@ -658,7 +681,7 @@ function parseProgram(tokens: Token[]): Program | ParseError {
       const desugared = desugarBody(body, usedNames, counter, undefined);
       if (!Array.isArray(desugared)) return desugared;
       saturateArity(desugared);
-      const rule: Rule = { name: "", body: desugared, span: { line: startLine } };
+      const rule: Rule = { name: "", body: desugared, span: { line: startLine, endLine: lastLineOf(tokens, iStart, i) } };
       if (explicitName !== undefined) rule.explicitName = explicitName;
       rules.push(rule);
       allRules.push(rule);
@@ -732,7 +755,7 @@ function buildAccRule(
   if (headSym === undefined || headSym.tag !== "Symbol") {
     return { line: h.span.line, message: "an acc rule head must start with a relation name" };
   }
-  return { name: "", body, head: h.atom, span: { line: startLine } };
+  return { name: "", body, head: h.atom, headSpan: h.span, span: { line: startLine } };
 }
 
 function markerChar(m: Marker): string {
@@ -983,7 +1006,8 @@ function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyIte
     const rhsLead = rhsRaw.length - rhsRaw.trimStart().length;
     remapItemLines(right, line, tok.textStartCol + arrow + 2 + rhsLead);
   }
-  return { kind: "exception", left: { terms }, right, span: { line, startCol: tok.startCol, endCol: tok.endCol } };
+  const leftSpan = { line, startCol: tok.textStartCol, endCol: tok.textStartCol + lhsText.length };
+  return { kind: "exception", left: { terms }, leftSpan, right, span: { line, startCol: tok.startCol, endCol: tok.endCol } };
 }
 
 // Re-base every span in a fragment parsed from single-line text: stamp
@@ -998,7 +1022,7 @@ function remapItemLines(items: BodyItem[], line: number, colOffset: number): voi
   for (const it of items) {
     if (it.kind === "dot") { it.line = line; continue; }
     if (it.kind === "sub") { remapSpan(it.span); remapItemLines(it.inner, line, colOffset); continue; }
-    if (it.kind === "exception") { remapSpan(it.span); remapItemLines(it.right, line, colOffset); continue; }
+    if (it.kind === "exception") { remapSpan(it.span); remapSpan(it.leftSpan); remapItemLines(it.right, line, colOffset); continue; }
     remapSpan(it.atom.span);
   }
 }
@@ -1167,7 +1191,7 @@ function desugarBody(
       }
       const inner = desugarBody(it.right, usedNames, counter, undefined);
       if (!Array.isArray(inner)) return inner;
-      out.push({ tag: "Exception", left: it.left, right: inner, span: it.span });
+      out.push({ tag: "Exception", left: it.left, leftSpan: it.leftSpan, right: inner, span: it.span });
       afterException = true;
       continue;
     }

@@ -4,6 +4,10 @@
 // ClickIntent carries the active term and the chosen option tuple. The
 // host (web-v2.ts) compresses the intent into source-form `= V… (…)` +
 // `^ is L R` lines and inserts at the textarea cursor.
+//
+// Every cell is a display-kit entity (plans/v2-display-kit.md): hovering it
+// shows its `cell` / `filled` rows, right-clicking leads to the rules
+// behind them.
 
 const CSS = `
 .ttt-board { display: flex; flex-direction: column; align-items: center; gap: 12px; }
@@ -20,7 +24,7 @@ html.mode-dark  .ttt-mark-o { color: #f87171; }
 `;
 
 export function create(api) {
-  const { peek, addStyles, tokensEq } = api;
+  const { peek, addStyles, kit } = api;
   addStyles(CSS);
 
   function termsOf(term, store) {
@@ -54,7 +58,7 @@ export function create(api) {
       if (cells.has(key)) continue;
       // The cell-term is the hashconsed `(cell R C)` atom; build it from the
       // tuple's atom Ref. We pass the whole Atom term as the cell id.
-      cells.set(key, { row: r, col: c, mark: null, atomTerms: ts });
+      cells.set(key, { row: r, col: c, mark: null, atomTerms: ts, rows: [idx] });
     }
 
     const filledRows = store.byHead.get("filled") ?? [];
@@ -75,6 +79,7 @@ export function create(api) {
       if (!cell) continue;
       const mark = ts[2];
       if (mark?.tag === "Symbol") cell.mark = mark.name;
+      cell.rows.push(idx);
     }
 
     return [...cells.values()];
@@ -133,6 +138,7 @@ export function create(api) {
           cellEl.className = "ttt-cell";
 
           if (cell) {
+            let choice;
             if (cell.mark) {
               cellEl.textContent = cell.mark;
               cellEl.classList.add(`ttt-mark-${cell.mark}`);
@@ -140,9 +146,15 @@ export function create(api) {
               const opt = cellComp.options.find((tup) => optionMatchesCell(tup[0], cell, store));
               if (opt) {
                 cellEl.classList.add("ttt-empty");
-                clicks.set(cellEl, { activeTerms: cellComp.activeTerms, optionTuple: opt });
+                choice = { activeTerms: cellComp.activeTerms, optionTuple: opt };
+                clicks.set(cellEl, choice);
               }
             }
+            kit?.entity(cellEl, {
+              label: `Cell ${r},${c}` + (cell.mark ? `: ${cell.mark}` : choice ? " (free)" : ""),
+              rows: cell.rows,
+              choice,
+            });
           }
           grid.appendChild(cellEl);
         }

@@ -356,6 +356,8 @@ A self-contained code-editor wrapper around a `<textarea>` that adds a line-numb
 - `enableContextMenu` — opt-in flag (on for index-v2, off for pres) for the right-click code-action menu (`.editor-menu`); Shift+right-click falls through to the browser menu. Its one action today is rename (logic in `rename.ts`): it acts on the caret, which the browser has already moved to the click point on the right-button mousedown; the menu swaps to a name input showing the occurrence count and `renameError`, and Enter applies every occurrence as one `execCommand` edit spanning first..last, so a single undo reverts it
 - `scheduleSave` — debounced (400ms) autosave to a URL param or server endpoint
 - `highlightLine` / `highlightRange` / `clearHighlight` / `focusLine` / `caretLine` / `caretPos` — highlight overlay (full line, or a column range mapped col → px off a hidden monospace probe) and caret helpers used by `source-link.ts`
+- `syntaxHighlight` / `setMarks` / `EditorMark` — opt-in syntax highlighting (highlight.ts): a `<pre class="editor-hl">` laid exactly over the textarea, which sits above it with transparent text so only its caret and selection show; one block row per line (rows take the gutter rows' measured height — a row's own line box can be a fraction of a pixel taller, which drifts over a long file), rewritten only when its text, incoming `#js` state or marks change; `setMarks` paints column ranges behind the text (the rule browser's use marks)
+- `firstLine` / `setFirstLine` / `refresh` — gutter numbering offset (a rule-browser card shows the file's line numbers for its slice); `refresh` re-measures an auto-grown editor after it was attached (its height is 0 while detached)
 - `setLineNotes` / `clearLineNotes` / `LineNote` — live-value notes (plans/v2-live-values-in-editor.md): faint `X *17` name/value pairs drawn just right of each annotated line's text in an `.editor-notes` overlay (per-row `.editor-note`, positioned off the gutter row and the tab-expanded line length × char width; clipped to the text viewport; re-laid on scroll; cleared on input since line numbers go stale)
 
 # source-link.ts
@@ -391,6 +393,43 @@ The DOM-free core of the editor's rename code action. Works lexically on the sou
 - `renameOccurrences` — a Symbol: every whole-token use in the file (matches, emits under any marker, `!(...)`, dot chains, exceptions, and `#acc`/`#js-def`/`#js` names); in `#js`/`#js-def` blocks only the function/relation name. A Variable: its own definition (the rule's scope)
 - `renameError` — refuses an empty name, one the lexer would split, one of the other kind, or one already used in the target's scope (would merge relations / capture a variable)
 - `applyRename` — splice the new name into sorted, disjoint ranges
+
+# highlight.ts
+
+Lexical syntax highlighting for Turn source, DOM-free: a port of the Spirit Island report's `si/report/turnhl.py`, with the same token classes, so the same `--t-<cls>` palette (styles/theme.css, light and dark) styles both. Lexical so it works while the program doesn't parse; a relation head is told apart from a value only by position (after a marker, `,`, `(`, `{`, `=>`, `/`, `.`, `;` or at line start).
+
+**Key terms:**
+- `highlightLine` / `highlightLines` — one line (with an `HlState` carrying `#js` brace depth across lines) or a whole text → `HlToken`s (`cls`, `start`, `end` columns; whitespace is uncovered)
+- `HlClass` — `c` comment, `d` directive, `sl` `~ ~> >`, `sa` `+ ^`, `sq` `? ?[rng] !`, `ex` `{ } =>`, `op` `/ ; .`, `p` other punctuation, `ag` `@op`, `n` number, `v` variable, `b` builtin (`lt gt le ge is`), `r` relation head, `s` other symbol, `js` a `#js` / `#js-def` body
+
+# rule-index.ts
+
+DOM-free core of the rule browser (plans/v2-rule-browser.md): splits the source into segments, one per top-level item of the parse, as character ranges, and indexes every use of every predicate by segment and role. Segment boundaries come from the parser (`Span.line..endLine`, recorded on rules, acc rules and `#acc` / `#js` / `#js-def` declarations), so they agree with the offside rule; lexically, indented comment-only lines right after an item belong to it, and the column-0 comment lines directly above it (no blank line between) are its doc comment.
+
+**Key terms:**
+- `buildRuleIndex` — source text + `Program` → `RuleIndex` (`segs`, `uses: pred → Use[]` in source order, `segOfLine`)
+- `Segment` — `kind` (`rule` / `acc-rule` / `acc-decl` / `js` / `js-def`), `name`, `line..endLine`, `code` and optional `doc` ranges; `segmentRange` is what a card shows and edits (doc + code)
+- `Role` — `assert` (`~ + ^ ~>`), `match` (plain, `>p`, acc-rule bodies), `not`, `constrain` (`!(...)` sub-atoms), `intercept` (exception LHS, `Exception.leftSpan`), `acc-head` (`AccRule.headSpan`), `declare`; every use carries a column span. A relation name used as a value is not a use
+- `Query` / `parseQuery` / `runQuery` / `QueryResult` — the query bar's text → a query (for now a bare predicate: `uses`) → titled groups of segments, each with the spans to mark (`Asserted by`, `Matched by`, `Intercepted by`, `Declared by`); the view renders groups only, so new query kinds need no view change
+
+# rule-browser.ts
+
+The left pane's Rules view (`RuleBrowser`, plans/v2-rule-browser.md): a query bar (with completion from the indexed predicates and back/forward history) over one column of result groups, each segment shown once, immediately, as an editable `Editor` card (syntax-highlighted, file line numbers, uses marked). Editing a card splices its text into the source textarea, the single source of truth (plain `value` assignment + an `input` event, so the source's native undo history does not cover card edits; each card has its own). Each card tracks its source range: a card's own edit shifts the cards after it; an edit in the source is diffed against the last text seen (common prefix/suffix) and shifts every range. After each parse (web-v2.ts parses on edit, without running) cards re-resolve to the segment at their start.
+
+**Key terms:**
+- `update` / `markStale` — after a good parse (rebuild index, re-render) / a failed one (keep cards, dim results); `update` leaves the cards alone while one has focus, and blur re-renders
+- pinning — a pinned card stays visible whatever the query: in its result group while the query picks it, else in a `Pinned` group on top. Neither focusing nor pinning moves a card: a render whose layout (group titles, segments) is unchanged updates cards in place, so a focused card is never detached
+- `relationAt` — the relation/symbol under an offset (highlighter classes `r`/`s`); Ctrl/Cmd-click in a card or in the source queries it
+- `openInSource` — the card header's line link: back to the Source view with the caret there
+
+# display-kit.ts
+
+Tooltips and right-click menus for the entities of a game GUI (plans/v2-display-kit.md), handed to `-- display:` modules as `api.kit`. A display declares each visible entity with the store rows it was drawn from; the kit builds, on demand, a tooltip (label, notes, each row rendered with the line of the rule that emitted it, `store.tupleSource`; `#acc` rows have none) and a menu into the code: the emitting rule of each row (the Rules view on its relation with that card pinned), "Rules using p" per relation, "Show in timeline" (the rows' `data-tl-tuple` elements highlighted), and "Choose this" for an entity that stands for a choice. Shift+right-click keeps the browser menu. The kit only reads the store; actions go through `KitHost`, which web-v2.ts implements.
+
+**Key terms:**
+- `createDisplayKit` / `KitHost` — the page's hooks: `store`, `sourceLine`, `showRules(query, pinLine?)`, `showTuples`, `commit`
+- `entity(el, spec)` / `EntitySpec` — `label`, `rows` (tuple indices or `KitRow`s), optional `choice` (a `ClickIntent`) and `notes`; a spec may be a function, evaluated on hover. Native SVG `<title>` children are dropped (ours replaces them); the innermost entity owns the menu
+- `rows(store, head, M?)` / `KitRow` — a display's row reader that keeps provenance: `{ idx, head, terms (no head, no id slot), l, r }`, only rows alive at `M` when given
 
 # default-display.ts
 

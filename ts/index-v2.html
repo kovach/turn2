@@ -15,6 +15,7 @@
     #file-name { font-size: 13px; color: var(--fg-mute); }
     #status-line { font-size: 12px; color: var(--fg-mute2); margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #status-line.error { color: var(--err); }
+    #status-line.dirty { color: var(--t-sa); }
     .gas-ctl { font-size: 11px; color: var(--fg-mute2); display: inline-flex; align-items: center; gap: 4px; }
     .gas-ctl input { width: 62px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 2px 4px; font-family: monospace; font-size: 11px; }
     #theme-toggle { background: transparent; color: var(--fg-mute2); border: 1px solid var(--border); padding: 3px 10px; font-family: monospace; font-size: 11px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase; }
@@ -112,6 +113,31 @@
     /* Source ↔ output linking: shared rules in /styles/theme.css; the
      * source-side line overlay is .editor-line-highlight in editor.css. */
     .editors .pane { background: var(--bg); }
+    .editors .pane-label .label-left { display: flex; align-items: center; gap: 6px; }
+    /* Source | Rules (v2/rule-browser.ts) */
+    .editors.rules-mode > .pane > .editor-wrap { display: none; }
+    #rules-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #rules-view.hidden { display: none; }
+    .rb-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-2); background: var(--bg-2); flex-shrink: 0; }
+    .rb-nav { background: transparent; border: 1px solid var(--border); color: var(--fg-mute); font-size: 13px; line-height: 1; padding: 2px 7px; cursor: pointer; }
+    .rb-nav:disabled { opacity: 0.35; cursor: default; }
+    .rb-query { font-family: monospace; font-size: 13px; padding: 3px 6px; width: 16em; background: var(--bg); color: var(--fg); border: 1px solid var(--border); }
+    .rb-count { font-size: 11px; color: var(--fg-faint); }
+    .rb-results { flex: 1; overflow: auto; padding: 8px 10px; }
+    .rb-stale .rb-results { opacity: 0.6; }
+    .rb-group { margin-bottom: 12px; }
+    .rb-group-title { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--fg-faint); margin: 2px 0 6px; }
+    .rb-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; background: var(--bg); overflow: hidden; }
+    .rb-card.rb-pinned { border-color: var(--fg-faint); box-shadow: inset 3px 0 0 var(--t-sa); }
+    .rb-card-head { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 11px; color: var(--fg-mute2); background: var(--bg-2); border-bottom: 1px solid var(--border-2); }
+    .rb-card-name { font-family: monospace; }
+    .rb-card-loc, .rb-pin { background: none; border: none; padding: 0; font-size: 11px; color: var(--fg-faint); cursor: pointer; }
+    .rb-card-loc:hover, .rb-pin:hover { color: var(--fg); text-decoration: underline; }
+    .rb-pin { margin-left: auto; }
+    .rb-pinned .rb-pin { color: var(--t-sa); }
+    .rb-card.rb-flash { outline: 2px solid var(--t-sa); outline-offset: 1px; }
+    .rb-card .editor-wrap { --editor-font-size: 12.5px; --editor-line-height: 1.5; --editor-gutter-pad: 4px 6px 4px 6px; }
+    .rb-card .editor-wrap .editor-textarea { padding-top: 4px; padding-bottom: 4px; overflow-x: auto; }
     #db .row { display: inline-block; line-height: inherit; }
   </style>
   <script>
@@ -142,8 +168,15 @@
   <div class="workspace">
     <div class="editors">
       <div class="pane">
-        <div class="pane-label"><span></span><span id="source-cursor-line" style="font-size: 11px; color: #888;"></span></div>
+        <div class="pane-label">
+          <span class="label-left">
+            <button type="button" class="db-view-btn active" id="left-view-source" title="The whole program">Source</button>
+            <button type="button" class="db-view-btn" id="left-view-rules" title="Rules picked by a query, each editable (ctrl-click a relation name to query it)">Rules</button>
+          </span>
+          <span id="source-cursor-line" style="font-size: 11px; color: #888;"></span>
+        </div>
         <textarea id="source" spellcheck="false"></textarea>
+        <div id="rules-view" class="hidden"></div>
       </div>
     </div>
     <div id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>

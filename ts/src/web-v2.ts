@@ -9,6 +9,8 @@ import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/prin
 import { renderTuples, renderTimelineH, timelineCollapseKey, momentKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import { attachSourceLink } from "./v2/source-link.js";
+import { RuleBrowser, relationAt } from "./v2/rule-browser.js";
+import { createDisplayKit, type DisplayKit } from "./v2/display-kit.js";
 import type { Atom, Term } from "./v2/term.js";
 import { tokenOf, type Store } from "./v2/store.js";
 import type { ComponentOptions, Rule } from "./v2/types.js";
@@ -46,6 +48,9 @@ interface DisplayApi {
   // Park `term` (or clear it) as the pending value: the strip highlights the
   // selected component's slots it fits, and clicking one commits it there.
   setPending: (term: Term | null) => void;
+  // Tooltips + right-click menus for entities (v2/display-kit.ts):
+  // `kit.entity(el, { label, rows, choice? })`, `kit.rows(store, head, M?)`.
+  kit: DisplayKit;
 }
 
 interface DisplayModule {
@@ -248,7 +253,36 @@ function peek(term: Term, store: Store): Atom | null {
   return null;
 }
 
+// Tooltips + right-click menus for display entities (plans/v2-display-kit.md).
+// The hooks reach `rules` / `setLeftView`, defined further down; they only
+// run on user interaction, after the page has loaded.
+const displayKit = createDisplayKit({
+  store: () => lastStore,
+  sourceLine: (line) => sourceEl.value.split("\n")[line - 1],
+  showRules: (query, pinLine) => {
+    setLeftView("rules");
+    rules.setQuery(query);
+    if (pinLine !== undefined) rules.pinLine(pinLine);
+  },
+  showTuples: (idx) => showTuples(idx),
+  commit: (intent) => handleClick(intent),
+});
+
+// Highlight these tuples' db rows / timeline bars and scroll to the first.
+function showTuples(idx: number[]): void {
+  document.querySelectorAll(".kit-shown").forEach((e) => e.classList.remove("kit-shown", "source-highlight"));
+  let first: Element | null = null;
+  for (const i of idx) {
+    for (const e of Array.from(document.querySelectorAll(`[data-tl-tuple="${i}"]`))) {
+      e.classList.add("kit-shown", "source-highlight");
+      if (first === null && (e as HTMLElement | SVGElement).getClientRects().length > 0) first = e;
+    }
+  }
+  first?.scrollIntoView({ block: "center", inline: "center" });
+}
+
 const displayApi: DisplayApi = {
+  kit: displayKit,
   addStyles, peek, renderTerm, tokensEq, commit: handleClick,
   setPending(term) {
     choiceState.pending = term;
@@ -307,10 +341,20 @@ async function loadDisplay(name: string | null): Promise<DisplayModule | null> {
 }
 
 function setStatus(text: string, isError: boolean): void {
+  statusText = text;
   statusEl.textContent = text;
   // The line truncates long errors; the full text is on hover.
   statusEl.title = text;
   statusEl.classList.toggle("error", isError);
+  statusEl.classList.remove("dirty");
+}
+
+// Edits don't re-run the program; Ctrl+Enter does (runNow). Until then the
+// status line says the result is for an older text.
+let statusText = "";
+function markDirty(): void {
+  statusEl.textContent = `${statusText} · edited, Ctrl+Enter to run`;
+  statusEl.classList.add("dirty");
 }
 
 function saveMarker(): string {
@@ -685,6 +729,10 @@ dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
 // shared-binding lines plus one `^ is <term> <value>` row each, appended at
 // the end of the textarea. Shared by user clicks (handleClick) and rng-roll
 // persistence (plans/v2-choice-actors.md).
+// Set while the page edits the source itself (appendIsRows): that edit
+// re-runs at once, unlike the user's own.
+let programmaticEdit = false;
+
 function appendIsRows(activeTerms: Term[], values: Term[]): void {
   if (lastStore === null) return;
   const N = activeTerms.length;
@@ -702,6 +750,7 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
   sourceEl.focus();
   sourceEl.setSelectionRange(sourceEl.value.length, sourceEl.value.length);
   const before = sourceEl.value;
+  programmaticEdit = true;
   document.execCommand("insertText", false, text);
   // execCommand needs an editable, focused textarea; when the editor pane is
   // collapsed (or the page lacks focus) it does nothing, so append directly
@@ -710,6 +759,7 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
     sourceEl.value = before + text;
     sourceEl.dispatchEvent(new Event("input"));
   }
+  programmaticEdit = false;
   // Restore the caret to where it was; the insert was at the end, so the
   // original offsets are unaffected.
   sourceEl.setSelectionRange(prevStart, prevEnd);
@@ -732,8 +782,11 @@ async function run(): Promise<void> {
     setStatus(msg, true);
     showRunError(msg);
     link.update([]);
+    rules.markStale();
     return;
   }
+  rules.update(userSource, parsed);
+  if (rulesTimer !== null) { clearTimeout(rulesTimer); rulesTimer = null; }
 
   const limits = gasLimits();
   const directive = parseGasDirective(userSource);
@@ -824,7 +877,8 @@ async function run(): Promise<void> {
   renderView();
 }
 
-// Debounced input handler.
+// Debounced run, for edits the page makes itself (appended `is` rows from a
+// choice click or an rng roll), which re-run like before.
 let runTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleRun(): void {
   if (runTimer !== null) clearTimeout(runTimer);
@@ -834,8 +888,35 @@ function scheduleRun(): void {
   }, 150);
 }
 
+function runNow(): void {
+  if (runTimer !== null) { clearTimeout(runTimer); runTimer = null; }
+  void run();
+}
+
+// The rules view follows edits by parsing only (cheap), not running.
+let rulesTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRulesRefresh(): void {
+  if (rulesTimer !== null) clearTimeout(rulesTimer);
+  rulesTimer = setTimeout(() => {
+    rulesTimer = null;
+    const text = sourceEl.value;
+    const parsed = parse(text);
+    if ("message" in parsed) rules.markStale();
+    else rules.update(text, parsed);
+  }, 150);
+}
+
+// Ctrl/Cmd+Enter anywhere (the source, a rule card, the query bar) runs.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" || !(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
+  ev.preventDefault();
+  runNow();
+}, true);
+
 sourceEl.addEventListener("input", () => {
-  scheduleRun();
+  if (programmaticEdit) scheduleRun();
+  else markDirty();
+  scheduleRulesRefresh();
   if (playgroundMode) updatePlaygroundUrl();
   else schedulePut();
   updateCursorLine();
@@ -865,7 +946,45 @@ document.addEventListener("selectionchange", () => {
 // Editor: Tab/Shift-Tab indent, Enter auto-indent, smart Home, smart Delete,
 // line-highlight overlay. saveBackend "none" — this file owns the run/save
 // lifecycle via its own input listener.
-const editor = new Editor({ existing: sourceEl, saveBackend: "none", enableAutocomplete: true, enableContextMenu: true });
+const editor = new Editor({
+  existing: sourceEl, saveBackend: "none", enableAutocomplete: true, enableContextMenu: true, syntaxHighlight: true,
+});
+
+// Source | Rules (plans/v2-rule-browser.md): the Rules view shows the rules a
+// query picks as editable cards that write through to the source.
+const editorsEl = document.querySelector(".editors") as HTMLElement;
+const rulesViewEl = document.getElementById("rules-view") as HTMLElement;
+const leftViewSourceEl = document.getElementById("left-view-source") as HTMLButtonElement;
+const leftViewRulesEl = document.getElementById("left-view-rules") as HTMLButtonElement;
+const LEFT_VIEW_KEY = "v2-left-view";
+const rules = new RuleBrowser({
+  host: rulesViewEl,
+  source: sourceEl,
+  openInSource: (offset) => {
+    setLeftView("source");
+    const before = sourceEl.value.slice(0, offset);
+    const line = before.split("\n").length;
+    editor.focusLine(line, offset - (before.lastIndexOf("\n") + 1));
+  },
+});
+function setLeftView(v: "source" | "rules"): void {
+  editorsEl.classList.toggle("rules-mode", v === "rules");
+  rulesViewEl.classList.toggle("hidden", v !== "rules");
+  leftViewSourceEl.classList.toggle("active", v === "source");
+  leftViewRulesEl.classList.toggle("active", v === "rules");
+  try { localStorage.setItem(LEFT_VIEW_KEY, v); } catch { /* ignore */ }
+}
+leftViewSourceEl.addEventListener("click", () => setLeftView("source"));
+leftViewRulesEl.addEventListener("click", () => setLeftView("rules"));
+try { if (localStorage.getItem(LEFT_VIEW_KEY) === "rules") setLeftView("rules"); } catch { /* ignore */ }
+// Ctrl/Cmd-click a relation name in the source: show the rules that use it.
+sourceEl.addEventListener("click", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey)) return;
+  const name = relationAt(sourceEl.value, sourceEl.selectionStart);
+  if (name === null) return;
+  setLeftView("rules");
+  rules.setQuery(name);
+});
 const link = attachSourceLink(editor, [dbEl, timelineInlineEl], {
   getRun: () => (lastStore === null ? null : { store: lastStore, rules: lastRules }),
 });
