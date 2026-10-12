@@ -46,7 +46,7 @@
 import type { Atom, Term } from "./term.js";
 import { hashconsTerm } from "./hashcons.js";
 import type { AccDecl, Program, Rule, RuleAtom } from "./types.js";
-import { addTuple, candidatesByHead, demandAcc, leastUpperBound, tokenOf, type Store } from "./store.js";
+import { addTuple, candidatesByHead, demandAcc, leastUpperBound, momentCone, tokenOf, type Store } from "./store.js";
 import { ACC_MOMENT_VAR, evaluateRule, type AccEvalCtx, type AccRow, type CompiledJs } from "./eval.js";
 import { resolveJsModes, type CompiledJsRel } from "./js-rel.js";
 import { decomposeAccRule, SYM_ACC_AT } from "./expand.js";
@@ -183,6 +183,7 @@ export function computeAccAt(
     rhs: m,
     span: { line: 0 },
   };
+  const cone = momentCone(store, m);
   for (const stratum of compiled.strata) {
     // Contributions accumulate across rounds, keyed by
     // (key tokens, value token, moment token, firing identity).
@@ -211,6 +212,7 @@ export function computeAccAt(
         },
       };
       if (bound !== undefined) ctx.tupleBound = bound;
+      if (cone !== undefined) ctx.cone = cone;
       for (const rule of stratum.rules) {
         evaluateRule({ ...rule, body: [pin, ...rule.body] }, store, jsFuncs, jsRels, -1, ctx);
       }

@@ -22,6 +22,7 @@ import {
   candidatesByHead,
   candidatesByHeadAt,
   comparable,
+  coneLe,
   demandAcc,
   internAtom,
   leastUpperBound,
@@ -30,6 +31,7 @@ import {
   latticeMax,
   latticeMin,
   tokenOf,
+  type MomentCone,
   type Store,
 } from "./store.js";
 import { getOrCreateHead } from "./stats.js";
@@ -72,6 +74,9 @@ export interface AccEvalCtx {
   // Snapshot bound (store.ts `accWatermark`): stored-tuple matches see only
   // tuples with index below it. Absent = the whole store.
   tupleBound?: number;
+  // The computation's moment cone (store.ts `momentCone`): answers the
+  // `Le` checks against the acc moment without per-tuple closure walks.
+  cone?: MomentCone;
 }
 
 interface Ctx {
@@ -441,6 +446,14 @@ function evalLe(
 ): void {
   const aT = substTerm(a.a, ctx.trail);
   const bT = substTerm(a.b, ctx.trail);
+  const cone = ctx.acc?.cone;
+  if (cone !== undefined) {
+    const le = coneLe(ctx.store, cone, tokenOf(ctx.store, aT), tokenOf(ctx.store, bT));
+    if (le !== undefined) {
+      if (le) next();
+      return;
+    }
+  }
   if (!comparable(ctx.store, aT, bT)) return;
   if (lessEq(ctx.store, aT, bT)) next();
 }

@@ -3,12 +3,16 @@ import {
   addOrder,
   addTuple,
   comparable,
+  coneLe,
   createStore,
   intervalContains,
   intervalsOverlap,
   intern,
   leastUpperBound,
+  lessEq,
   lessThan,
+  momentCone,
+  tokenOf,
 } from "../v2/store.js";
 import type { Term } from "../v2/term.js";
 
@@ -210,6 +214,26 @@ function sym(name: string): Term { return { tag: "Symbol", name }; }
   assert.equal(leastUpperBound(s, [a, s.top]), s.top);
   assert.equal(leastUpperBound(s, [s.bot, s.bot]), s.bot);
   console.log("PASS: lub handles bot/top as identity/absorber");
+}
+
+// momentCone / coneLe answer `a ≤ b` with the cone's moment on one side
+// exactly as `lessEq` does, for every pair over a diamond with a side
+// branch and an unrelated moment, with bot/top, and with the cone at bot
+// and top.
+{
+  const s = createStore();
+  const [a, b, c, d, e, x] = ["a", "b", "c", "d", "e", "x"].map((n) => intern(s, sym(n)));
+  addOrder(s, a!, b!); addOrder(s, a!, c!); addOrder(s, b!, d!); addOrder(s, c!, d!); addOrder(s, b!, e!);
+  const all = [s.bot, s.top, a!, b!, c!, d!, e!, x!];
+  for (const m of all) {
+    const cone = momentCone(s, m)!;
+    for (const y of all) {
+      const yT = tokenOf(s, y), mT = tokenOf(s, m);
+      assert.equal(coneLe(s, cone, yT, mT), lessEq(s, y, m), "y <= m");
+      assert.equal(coneLe(s, cone, mT, yT), lessEq(s, m, y), "m <= y");
+    }
+  }
+  console.log("PASS: momentCone / coneLe agree with lessEq");
 }
 
 console.log("ALL v2 store tests passed");

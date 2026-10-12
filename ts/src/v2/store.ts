@@ -385,6 +385,56 @@ function collectAncestors(store: Store, start: number): number[] {
   return out;
 }
 
+// The moments at or below / at or above `m` over the current asserted edges
+// (bot/top implicit, as in `lessThanTok`). An acc computation at `m` asks
+// `l ≤ m` and `m ≤ r` once per stored tuple; answering those from two
+// walks per computation replaces a closure walk per tuple's endpoint, which
+// `lessThanTok` redoes whenever newer moments exist than its cached closure.
+// The order graph does not change while acc rows are computed. Not built in
+// lattice mode (`latticeLe` is not plain reachability) or under the eager
+// strategy.
+export interface MomentCone {
+  tok: number;
+  down: Set<number>;
+  up: Set<number>;
+}
+
+export function momentCone(store: Store, m: Term): MomentCone | undefined {
+  if (store.lattice || ORDER_STRATEGY !== "old") return undefined;
+  const tok = tokenOf(store, m);
+  const walk = (adj: Map<number, Set<number>>): Set<number> => {
+    const seen = new Set<number>([tok]);
+    const stack = [tok];
+    while (stack.length > 0) {
+      const next = adj.get(stack.pop()!);
+      if (next === undefined) continue;
+      for (const x of next) {
+        if (!seen.has(x)) { seen.add(x); stack.push(x); }
+      }
+    }
+    return seen;
+  };
+  return { tok, down: walk(store.orderBwd), up: walk(store.orderFwd) };
+}
+
+// `a ≤ b` when one side is the cone's moment (same answer as `lessEq`);
+// undefined otherwise.
+export function coneLe(store: Store, cone: MomentCone, aTok: number, bTok: number): boolean | undefined {
+  if (aTok === bTok) return true;
+  const m = cone.tok;
+  if (bTok === m) {
+    if (aTok === store.topTok || m === store.botTok) return false;
+    if (aTok === store.botTok || m === store.topTok) return true;
+    return cone.down.has(aTok);
+  }
+  if (aTok === m) {
+    if (m === store.topTok || bTok === store.botTok) return false;
+    if (m === store.botTok || bTok === store.topTok) return true;
+    return cone.up.has(bTok);
+  }
+  return undefined;
+}
+
 // Strict less-than over the moment-order relation, with bot/top sentinels
 // universally below/above every other moment.
 export function lessThan(store: Store, a: Term, b: Term): boolean {
