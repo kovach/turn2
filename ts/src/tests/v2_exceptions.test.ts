@@ -819,4 +819,31 @@ ctx, ~mid
   console.log("PASS: flag scheduling (no premature default; exclusion holds)");
 }
 
+// applyExceptions must not mutate its input: running one parsed program
+// twice gives the same tuples, and the program is unchanged by a run. (It
+// used to rename the caller's emits to `p'` in place, so a second run lost
+// the interception.)
+{
+  const program = ok(`
+~phase1; ~phase2
+
+phase1, ^p a
+
+phase2, ^p b
+
+#def r
+  phase1
+  {p X => ^e X}
+`);
+  const before = JSON.stringify(program);
+  const first = listTuples(runFixpoint(program).store);
+  assert.equal(JSON.stringify(program), before, "runFixpoint left the program unchanged");
+  applyExceptions(program);
+  assert.equal(JSON.stringify(program), before, "applyExceptions left the program unchanged");
+  const second = listTuples(runFixpoint(program).store);
+  assert.deepEqual(second, first, "second run on the same program");
+  assert(first.includes("e a") && first.includes("p b") && !first.includes("p a"), "interception happened");
+  console.log("PASS: passes do not mutate the program");
+}
+
 console.log("v2_exceptions: all tests passed");

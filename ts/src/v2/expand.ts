@@ -97,9 +97,13 @@ type ExceptionRA = Extract<RuleAtom, { tag: "Exception" }>;
 
 export function applyExceptions(program: Program): Program {
   const hasExc = (r: Rule): boolean => findFirstException(r.body) !== null;
-  const pending = program.rules.filter(hasExc);
-  if (pending.length === 0) return program;
-  const S: Rule[] = program.rules.filter((r) => !hasExc(r));
+  if (!program.rules.some(hasExc)) return program;
+  // The rewrite below edits rule bodies in place (the Exception splice,
+  // `rewriteEmitHeads`), so it works on a private copy: the caller's
+  // program must stay runnable again.
+  const rules = structuredClone(program.rules);
+  const pending = rules.filter(hasExc);
+  const S: Rule[] = rules.filter((r) => !hasExc(r));
   const usedSyms = collectProgramSymbols(program);
   const usedRuleNames = new Set([...program.rules, ...program.accRules].map((r) => r.name));
   // Generated default rules, kept for provenance-link derivation below.
