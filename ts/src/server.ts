@@ -8,12 +8,20 @@ const ROOT = path.join(__dirname, "..");
 
 const args = process.argv.slice(2);
 let dataDir = path.join(ROOT, "data");
+// v2 source/display files: data/v2, then each `--v2-data <dir>` in order.
+const v2Dirs = [path.join(ROOT, "data", "v2")];
 let port = 3000;
 let readOnly = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--data" && args[i + 1]) dataDir = path.resolve(args[++i]!);
+  if (args[i] === "--v2-data" && args[i + 1]) v2Dirs.push(path.resolve(args[++i]!));
   if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i]!, 10);
   if (args[i] === "--read-only") readOnly = true;
+}
+
+// The first v2 directory holding `name`, or undefined.
+function findV2(name: string): string | undefined {
+  return v2Dirs.map(d => path.join(d, name)).find(f => fs.existsSync(f));
 }
 
 function slFiles(): string[] {
@@ -122,9 +130,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // v2 source/display files. `/data/v2/*.t` is text; `/data/v2/*.js` is a
-  // display module loaded via dynamic import. Plus a tiny GET API for the
-  // editor to fetch `data/v2/*.t` source files.
+  // v2 source/display files, looked up in data/v2 and then each --v2-data
+  // directory. `/data/v2/*.t` is text; `/data/v2/*.js` is a display module
+  // loaded via dynamic import. Plus a tiny GET/PUT API for the editor's
+  // `*.t` source files.
   if (pathname.startsWith("/data/v2/")) {
     const file = pathname.slice("/data/v2/".length);
     if (file.includes("..") || file.includes("/")) {
@@ -132,8 +141,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     try {
-      const v2Dir = path.join(ROOT, "data", "v2");
-      const content = fs.readFileSync(path.join(v2Dir, file));
+      const content = fs.readFileSync(findV2(file) ?? path.join(v2Dirs[0]!, file));
       const ct = file.endsWith(".js")
         ? "application/javascript"
         : "text/plain; charset=utf-8";
@@ -150,7 +158,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 400, { error: "invalid filename" });
       return;
     }
-    const filePath = path.join(ROOT, "data", "v2", name);
+    // a new file goes to data/v2; an existing one is written where it was found
+    const filePath = findV2(name) ?? path.join(v2Dirs[0]!, name);
     if (method === "GET") {
       try {
         const content = fs.readFileSync(filePath, "utf8");
@@ -213,5 +222,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`Slide  http://localhost:${port}`);
   console.log(`Data   ${dataDir}`);
+  console.log(`v2     ${v2Dirs.join(", ")}`);
   if (readOnly) console.log(`Mode   read-only (file writes disabled)`);
 });

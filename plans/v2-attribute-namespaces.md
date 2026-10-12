@@ -74,19 +74,18 @@ Declaring a name twice is harmless; a type need not name any relation.
 ### Where a variable's types come from
 
 All evidence is collected per rule over the desugared, arity-saturated body,
-descending into `Sub` bodies, `Exception` right-hand sides, `AggComp` bodies
-and `!(...)` sub-atoms. Emits count as much as matches: `+card C` types `C`
+descending into `Sub` bodies, `Exception` right-hand sides and `!(...)`
+sub-atoms. Emits count as much as matches: `+card C` types `C`
 as surely as `card C` does. Order within the rule does not matter. A symbol
 of evidence that is not a declared type is dropped.
 
 1. **Positional.** Split the head on `:` into segments `s0:s1:…:sn`. Its
    lexical arity is `n + 1` (this is what `saturateArity` already computes).
-   A `-> W` weight counts as the last argument, as it does in
-   `saturateHead`. For an atom *at* its lexical arity, each non-empty
+   For an atom *at* its lexical arity, each non-empty
    segment `si` types argument `i`. So `foo X` gives `X : foo` (the
    existence marker of the entity–attribute idiom), `inventory:gold In G`
    gives `In : inventory` and `G : gold`, `foo:hand F H` gives `H : hand`,
-   `card:cost C -> N` gives `N : cost`, and `a:b:c X Y Z` gives all three.
+   and `a:b:c X Y Z` gives all three.
    An empty segment types nothing; it is what is being resolved.
    The last-slot case is what makes `foo.:hand.:card` work: the fresh var
    after `:hand` is a `hand`, provided `hand` is declared. It is a naming
@@ -94,9 +93,11 @@ of evidence that is not a declared type is dropped.
    with strict types it only applies where the attribute is named after a
    declared type.
    An atom *not* at its lexical arity types nothing positionally: `move It To`
-   says nothing about `It`, `downs Q -> 0` (an `#agg` read) says nothing
-   about `Q`, and `#acc` relations with extra columns are covered by their
-   declaration.
+   says nothing about `It`, and `#acc` relations with extra columns are
+   covered by their declaration.
+   A `not` atom reads an `#acc` relation, so it types only through rule 2.
+   That is sound: `not fallen Q` with `#acc fallen / pin` says `Q` is a pin
+   that has not fallen, not that it is no pin.
 2. **Declarations.** `#acc at / e (@last location)` types the arguments
    of every `at It To` atom by column: a key column types its argument, a
    parenthesized `(@op T)` column types its argument `T`, and a bare `@op`
@@ -161,8 +162,8 @@ argument count equals the column count (it does not change `saturateArity`,
 which still pads to the lexical arity). Rules:
 
 - A relation is declared at most once, by `#type` or `#acc`, not both
-  (`#acc` already carries column types). `#agg`/`#reactive`/`#js-def`
-  relations may carry a `#type`.
+  (`#acc` already carries column types). `#js-def` relations may carry a
+  `#type`.
 - The head must be a full name, no empty segments.
 - Declaration order is free: `#type` may follow its users, as `#acc` may.
 
@@ -210,6 +211,45 @@ unification of compound terms. It is deliberately not a checker — a
 variable of type `{card, item}` is fine until a fragment needs to know
 which.
 
+## Acc-rule separator: `->`
+
+With `/` now separating a declaration's name from its columns, acc rules
+stop using it. (User decision.) `body / head` becomes `body -> head`:
+
+```
+#acc spirit:land / spirit land
+spirit:presence S P, at P L
+  -> spirit:land S L
+
+#acc distance / location location @min
+edge A B -> distance A B 1
+```
+
+- **Standalone only**, by the rule `isStandaloneSlash` applies today
+  (`parse.ts:396`): whitespace or a line boundary on both sides. `-` is a
+  marker character, so this keeps the tokenizer's decision local: a
+  standalone `->` becomes the separator token (today's `slash` token,
+  renamed `arrow`), checked before marker parsing; anything glued stays
+  atom text.
+- **`->` is free.** It was the `-> weight` syntax, removed in 51ab3b1; the
+  only uses left are the `findTopArrow` checks (`parse.ts:953, 1379, 1417,
+  1484, 1528`) that reject it inside atom text. They stay, for a `->`
+  inside parentheses, a `!(...)` or an exception, with a new message:
+  `'->' separates an acc rule's body from its head; it is not allowed
+  here`. `REMOVED_AGG` (`parse.ts:433`) still spells the old syntax
+  (`#acc rel : col… @op`, `body / rel …`); update it to `/` and `->`.
+- **The old `/` errors.** A standalone `/` in rule position is still
+  tokenized, only to report `acc rules now separate body and head with
+  '->'`. The existing errors (`an acc rule has exactly one '/'`, `'/' is
+  not allowed in an exception block`, `… inside a sub-rule`, `… exactly
+  one atom after '/'`) are reworded for `->`. `slashLine` becomes
+  `arrowLine`.
+- **No clash with `=>`** (exception blocks) or `>p` (continue after): the
+  acc head is exactly one plain atom, so `-> >p` is already rejected as a
+  marked head.
+- `renderAccRule` (`print-ir.ts:161`) prints `  -> head`. `rename.ts`
+  already skips `->` as a non-identifier.
+
 ## `#set-option`
 
 A general switchboard, with one switch for now:
@@ -232,7 +272,7 @@ Scope and ordering follow every other declaration-like command:
 
 - **File-scoped and position-free.** The option applies to the whole file
   regardless of where the line sits; a `#set-option` after the rules it
-  affects is fine, as `#acc` and `#agg` may follow their users. There is no
+  affects is fine, as `#acc` may follow its users. There is no
   lexical scoping and no `set-option … in` form — a rule cannot be half-way
   through a switch.
 - **At most once per option.** A second `#set-option` for the same name is
@@ -305,12 +345,17 @@ as one token today and stays unused.
 8. **`is P X` unions types like `=`.** (User decision.) Otherwise the
    standard choice-unwrapping idiom leaves the value untyped.
 
+9. **Acc rules use `->`, declarations use `/`.** (User decision.) `/`
+   reads as Prolog's `name/arity` in a declaration; an acc rule is a
+   derivation, and `->` is the arrow for it. Both are standalone tokens, so
+   `do/rest` and glued `->` keep their meaning as atom text.
+
 ## Steps
 
 1. **Collector** — new `ts/src/v2/attr-types.ts` (DOM-free, parser-side):
    `collectTypes(body: RuleAtom[], decls): Map<string, Set<string>>`
    implementing rules 1–3 and the `#is-type` filter, walking every nesting
-   that `saturateArity` walks (`parse.ts:1581`). `decls` bundles
+   that `saturateArity` walks (`parse.ts:1281`). `decls` bundles
    `accDecls`, `typeDecls` and the declared type set. Keep the undeclared
    evidence per variable too, for the error hint. Export
    `headSegments(name): string[]` (split on `:`; empty strings are gaps)
@@ -320,16 +365,15 @@ as one token today and stays unused.
    Acc rules (`AccRule.body` / `head`) are included.
 3. **Wire it in** — run the two passes over `Program.rules` and `accRules`
    after the parse loop, since `#acc`, `#type` and `#is-type` may follow
-   their users. They must run *before* `validateBoolWeights` and
-   `walkBoolValidate` (`parse.ts:704–709`), which look up head names in
-   `schema`, and so before the `#acc` checks and `validateAccRule`.
+   their users. They must run before the `#acc` checks and
+   `validateAccRule` (`parse.ts:673–685`), which look up head names.
    `resolveRuleNames` does not read heads and may stay where it is.
 3a. **`#is-type` command** — `parseCommand` gains `is-type`: whitespace-
    separated symbols, block form as in 3b. Each must pass `isSymToken` and
    contain no `:`; otherwise `'#is-type' names must be symbols without ':'
    (got 'card:owner')`. Collect into a parser-local `Set<string>`; repeats
    are fine. An `#is-type` with no names is an error.
-3b. **`#type` command** — `parseCommand` (`parse.ts:445`) gains `type`,
+3b. **`#type` command** — `parseCommand` (`parse.ts:437`) gains `type`,
    reusing `parseAccDeclText`'s column reader with `@` rejected and `_`
    allowed; result `TypeDecl {relation, columns: (string | null)[], span}`
    in a parser-local `typeDecls: Map<string, TypeDecl>`. Errors: duplicate
@@ -337,9 +381,10 @@ as one token today and stays unused.
    Column symbols are not checked against `#is-type`.
    Whether to expose `typeDecls` and the type set on `Program` is left to
    the implementer; nothing needs them yet.
-   *Block form.* The generic command branch (`parse.ts:340`) consumes one
+   *Block form.* The generic command branch (`parse.ts:331`) consumes one
    line. Give `#type`, `#acc` and `#is-type` the continuation rule `#js`
-   already has (`parse.ts:308`): after the command line, collect
+   already has for its indented body (`parse.ts:277`), minus the closing
+   `}`: after the command line, collect
    comment-stripped lines that are indented or blank until the first
    column-0 line; no closing brace. The command token grows a
    `decls: {text, line}[]` (the command line's own text first, if
@@ -348,7 +393,7 @@ as one token today and stays unused.
    `#acc at : e` today, followed by an indented `foo X`, yields a rule), so
    claiming those lines loses nothing; a rule indented under a command was
    never intended.
-   *`/` separator.* `parseAccDeclText` (`parse.ts:1668`) requires a
+   *`/` separator.* `parseAccDeclText` (`parse.ts:1322`) requires a
    standalone `/` where it now requires `:` (`tokens[1] === "/"`), with the
    two errors above for `:` and for a relation token containing `/` followed
    by no separator. The `#type` reader shares it. `renderProgram`
@@ -364,7 +409,7 @@ as one token today and stays unused.
    `ts/data/pres/*.pres` for `#acc` and report rather than edit.
 3c. **`#set-option` command** — `parseCommand` gains `set-option`: split
    `argText` on whitespace into exactly `name value` (the generic branch at
-   `parse.ts:340` keeps the rest of the line as raw text, so the dot in
+   `parse.ts:331` keeps the rest of the line as raw text, so the dot in
    `elaborator.fragment-expand` never meets the tokenizer). A table
    `OPTIONS: Record<string, { kind: "bool"; key: keyof ProgramOptions }>`
    maps the name; the loop records into a parser-local `options` with a
@@ -377,6 +422,22 @@ as one token today and stays unused.
    relation names (today its regex scan would offer to rename an
    `elaborator` relation there). `#is-type` names *are* offered for rename
    as symbols, so renaming `turn` also renames its `#is-type` entry.
+3d. **`->` for acc rules** — in the tokenizer (`parse.ts:132`) a
+   standalone `->` yields the separator token in place of the standalone
+   `/`, which now yields the migration error; rename `slash` → `arrow`
+   through `parseProgram` and `buildAccRule`, reword the errors listed in
+   *Acc-rule separator*, update `findTopArrow`'s callers' messages and
+   `REMOVED_AGG`, and `renderAccRule`. Migrate every acc rule: the corpus
+   (`ts/data/v2/*.t`, si-game.t holding most), the tests (`v2_acc` most),
+   the tutorial ("Aggregates and negation", "Acc relations") and
+   `ts/src/v2/overview.md`. Do it with a throwaway script rather than sed:
+   `#js` bodies and comments contain `/`. The script rewrites a standalone
+   `/` only outside comments and `#js`/`#js-def` bodies, then checks each
+   `.t` file by parsing it before (old parser, at HEAD) and after (new
+   parser) and comparing `renderProgram` output, which is identical once
+   the separator is normalized. Test strings are migrated by hand and
+   checked by the suite. Report `ts/data/pres/*.pres` acc rules rather
+   than edit.
 4. **Arity** — `saturateArity` pads `:attr X` to `:attr X _` before
    resolution; filling a segment never changes the colon count, so nothing
    needs re-saturating. A gap filled from a padded wildcard is an error
@@ -419,7 +480,7 @@ as one token today and stays unused.
 head text:
 
 - each evidence rule alone: unary match, unary emit, colon-head first slot,
-  colon-head last slot, a weighted atom's weight in the last slot, a
+  colon-head last slot, a `not` atom typing only by its `#acc` columns, a
   three-segment head typing all three arguments, `#acc` key column,
   `(@last T)` column, bare `@sum` column typing nothing, `=` between
   variables, `is P X`, an `=` chain `X = Y, Y = Z`; an over-arity atom
@@ -446,8 +507,8 @@ head text:
   both types, and still errors when `card:cost` is used by another rule (no
   dependence on other rules);
 - non-variable first slot errors; untyped variable errors; line numbers;
-- an acc rule body using `.:attr`; a fragment on a `-> bool` `#agg`
-  relation passes `validateBoolWeights` under its resolved name;
+- an acc rule body using `.:attr`; an acc rule whose head is a fragment
+  passes `validateAccRule` under its resolved name;
 - `#type` block form: three declarations under one `#type`, with a comment
   and a blank line inside the block; an error on the third line reports the
   third line; the same block form for `#acc`; in either command a
@@ -459,6 +520,11 @@ head text:
   that argument count, and switches rule 1 off at the lexical arity too;
   `#type` after its users in the file; duplicate `#type`, `#type` on an
   `#acc` relation, and a fragment head all error;
+- acc-rule `->`: one-line and continuation-line (`  -> head`) forms parse
+  to the same `AccRule`; a standalone `/` in a rule errors with the
+  migration hint; two `->` error; `->` inside a sub-rule, an exception
+  block and `( … )` error; `do/rest` and `a->b` stay atom text (the
+  latter hits the `findTopArrow` error); `renderAccRule` round-trips;
 - arity: `:attr X` → `t:attr X _`.
 - `#set-option elaborator.fragment-expand false`: `turn T, :actor T P` keeps
   the head `:actor` and `turn.:actor P` desugars to `turn T, :actor T P`;
@@ -498,15 +564,14 @@ left side — verify).
 - **Saved `^ is` rows** are unaffected: choice term identities embed rule
   names, lexical positions and endpoint chains, not relation names.
   Regenerate anyway if a migrated program's rules were reordered.
-- **Weighted fragments** `foo: X -> W` need the gap filled from `W`, which
-  is usually a value and untyped, so they error. Spell the head.
 - **Implementation caveat.** Only `atom.terms[0]` is a head. The `:P`-style
   symbols that `variableToSymbol` puts inside id templates (read by
-  `comp-aggregate.ts:196` and `web-v2.ts:378`), and any colon-bearing user
+  `web-v2.ts:391`), and any colon-bearing user
   data, are terms and are never touched; `*`-heads are skipped.
 - **Performance** is a non-issue: one pass over each rule body plus a
   union-find over its variables.
 
 Claude Fable 5.1 (claude-fable-5-1); revised after review (strict
-`#is-type`, `is` unions, pass ordering, `#acc` columns, demo.t) by Claude
+`#is-type`, `is` unions, pass ordering, `#acc` columns, demo.t, `/` and
+`->` separators, removal of the stale weight/`#agg` references) by Claude
 Opus 5.5 (claude-opus-5-5).

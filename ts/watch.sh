@@ -3,8 +3,9 @@
 # under its own supervisor so a crash in one (e.g. tsc dying on an inotify
 # ENOSPC limit) is logged and auto-restarted instead of silently leaving the
 # other half running with no rebuilds. Ctrl-C tears the whole group down.
-# Usage: ./watch.sh <port> [rw]
+# Usage: ./watch.sh <port> [rw] [server args...]
 # The server runs with --read-only by default; pass `rw` to allow writes.
+# Anything after that goes to the server, e.g. `--v2-data ../si/game`.
 # Trap INT/TERM explicitly: background jobs start with SIGINT ignored in a
 # non-interactive shell, so the supervisors outlive a Ctrl-C unless we SIGTERM
 # the whole process group ourselves (and an untrapped SIGINT may skip EXIT).
@@ -21,9 +22,11 @@ esac
 
 trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
 
+shift
 server_flags="--read-only"
-if [ "$2" = "rw" ]; then
+if [ "$1" = "rw" ]; then
   server_flags=""
+  shift
 fi
 
 # Restart $@ forever, logging each exit. A short backoff keeps a command that
@@ -40,6 +43,6 @@ supervise() {
 }
 
 supervise tsc node_modules/.bin/tsc -p tsconfig.browser.json --watch --preserveWatchOutput &
-supervise server node_modules/.bin/tsx watch src/server.ts --port "$port" $server_flags &
+supervise server node_modules/.bin/tsx watch src/server.ts --port "$port" $server_flags "$@" &
 
 wait

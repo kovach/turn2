@@ -34,6 +34,7 @@ plan: plans/v2-attribute-namespaces.md
 - dot-fresh variables are typed like any other variable (positionally), so chains through fresh vars work with one rule
 - `#type card:owner / card player` declares a relation's column types explicitly (the `#acc` column syntax without `@`), replacing the positional convention for that relation; the escape hatch when an attribute's name is not its value's type. several declarations can be indented under a bare `#type`
 - the name/columns separator becomes a standalone `/`, after Prolog's `name/arity` (`#acc at / e @last`, `#type card:owner / card player`); `:` there is an error. corpus and tests migrate
+- acc rules then separate body and head with a standalone `->` instead of `/` (`edge A B -> distance A B 1`); `->` has been free since weights were removed. a standalone `/` in a rule is an error with a migration hint
 - the corpus's existing `:actor`/`:it`-style relations are unimportant and get migrated
 - new `#set-option name value` command, file-scoped and position-free like `#acc`/`#agg`; the only option for now is `elaborator.fragment-expand true/false` (default true), which turns the whole feature off for a file. setting an option twice is an error
 
@@ -224,7 +225,7 @@ plan: plans/v2-live-values-in-editor.md
 
 # 26/08/19
 # aggregates, concluded
-plan: plans/v2-aggregates-concluded.md
+plan: dead-plans/v2-aggregates-concluded.md
 status: not adequate?
 
 - this change will supercede #agg, #reactive, and the bracket notation

@@ -29,13 +29,13 @@ is a single scheduler. Fold semantics of `#agg` and `[...]` are untouched.
 **Relation to the in-progress proposals.** This plan is meant to be the
 aggregation approach, superseding the others once its details settle:
 
-- plans/v2-aggregates-concluded.md ("stuck moments", status "not
+- dead-plans/v2-aggregates-concluded.md ("stuck moments", status "not
   adequate?"): its one good idea — a single kind of obstruction, resolved
   earliest-first — *is* the moment walk; its per-`do-agg` breakpoint
   bookkeeping and `_agg-done` pairs are not needed when moments themselves
   carry the resolved mark. Mark it superseded.
-- plans/v2-timestamped-reactive-aggregates.md and
-  plans/v2-two-level-timestamps.md (bump the int component of a result's
+- dead-plans/v2-timestamped-reactive-aggregates.md and
+  dead-plans/v2-two-level-timestamps.md (bump the int component of a result's
   left endpoint): unimplemented; not needed. Same-moment ordering is
   handled by the handler protocol (§2) plus the existing strata (§3.1),
   and a reactive read now samples at a point, so nothing has to be placed
