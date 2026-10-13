@@ -35,6 +35,13 @@ export interface Store {
   // every edge insert.
   lePos: Map<number, Set<number>>;
   leNeg: Map<number, Set<number>>;
+  // `ltClosedAt` for `reachTok` (lattice mode only): the `momentSeq` size
+  // when `lePos[a]` last held a's complete reachability set, which answers
+  // "no" for every moment older than that without a walk. Cleared when a
+  // lattice node is created: its wiring adds edges between existing moments
+  // one at a time, querying in between, so a set taken meanwhile can miss
+  // some.
+  leClosedAt: Map<number, number>;
   tuples: Tuple[];
   // Parallel to `tuples`: span of the source RuleAtom that emitted each
   // tuple. `undefined` for tuples whose origin has no span (e.g. test
@@ -216,6 +223,7 @@ export function createStore(opts: StoreOptions = {}): Store {
     latticeNodes: new Map(),
     lePos: new Map(),
     leNeg: new Map(),
+    leClosedAt: new Map(),
     tuples: [],
     tupleSource: [],
     byHead: new Map(),
@@ -421,21 +429,34 @@ function collectAncestors(store: Store, start: number): number[] {
 // `l ≤ m` and `m ≤ r` once per stored tuple; answering those from two
 // walks per computation replaces a closure walk per tuple's endpoint, which
 // `lessThanTok` redoes whenever newer moments exist than its cached closure.
-// The order graph does not change while acc rows are computed. Not built in
-// lattice mode (`latticeLe` is not plain reachability) or under the eager
-// strategy.
+// The order graph does not change while acc rows are computed. Not built
+// under the eager strategy.
+//
+// In lattice mode `≤` is `latticeLe`, which is reachability except at
+// lattice nodes: a join is below `b` iff all its elements are, and `a` is
+// below a meet iff it is below all its elements, whether or not an edge
+// path exists (a moment created after a join, above all its elements, has
+// no edge from the join). So the cone starts from reachability (for a join
+// `m`, the intersection of its elements' up-walks; for a meet `m`, of its
+// elements' down-walks) and then decides each join (down) / meet (up) by its
+// elements alone. One pass suffices: a join's elements are never joins and
+// a meet's never meets, so their membership is already exact. Creating a
+// lattice node adds edges between existing moments, so a lattice cone is
+// valid only while the node count is unchanged (`nodes`; `coneLe` declines
+// otherwise).
 export interface MomentCone {
   tok: number;
   down: Set<number>;
   up: Set<number>;
+  nodes?: number;
 }
 
 export function momentCone(store: Store, m: Term): MomentCone | undefined {
-  if (store.lattice || ORDER_STRATEGY !== "old") return undefined;
+  if (ORDER_STRATEGY !== "old") return undefined;
   const tok = tokenOf(store, m);
-  const walk = (adj: Map<number, Set<number>>): Set<number> => {
-    const seen = new Set<number>([tok]);
-    const stack = [tok];
+  const walk = (adj: Map<number, Set<number>>, from: number): Set<number> => {
+    const seen = new Set<number>([from]);
+    const stack = [from];
     while (stack.length > 0) {
       const next = adj.get(stack.pop()!);
       if (next === undefined) continue;
@@ -445,23 +466,45 @@ export function momentCone(store: Store, m: Term): MomentCone | undefined {
     }
     return seen;
   };
-  return { tok, down: walk(store.orderBwd), up: walk(store.orderFwd) };
+  if (!store.lattice) return { tok, down: walk(store.orderBwd, tok), up: walk(store.orderFwd, tok) };
+  const node = store.latticeNodes.get(tok);
+  // Reachability from `tok`, or for a node on the structural side, from all
+  // of its elements.
+  const base = (adj: Map<number, Set<number>>, structural: LatticeNode["kind"]): Set<number> => {
+    if (node?.kind !== structural) return walk(adj, tok);
+    const [first, ...rest] = node.elems.map((e) => walk(adj, e));
+    for (const r of rest) for (const x of first!) if (!r.has(x)) first!.delete(x);
+    first!.add(tok);
+    return first!;
+  };
+  const down = base(store.orderBwd, "min");
+  const up = base(store.orderFwd, "max");
+  for (const [n, nn] of store.latticeNodes) {
+    if (n === tok) continue;
+    const set = nn.kind === "max" ? down : up;
+    if (nn.elems.every((e) => set.has(e))) set.add(n);
+    else set.delete(n);
+  }
+  return { tok, down, up, nodes: store.latticeNodes.size };
 }
 
 // `a ≤ b` when one side is the cone's moment (same answer as `lessEq`);
-// undefined otherwise.
+// undefined otherwise. Distinct moments are below each other only strictly,
+// so in lattice mode (where `latticeLe` can hold both ways) `a ≤ m` also
+// needs `m ≰ a`, as `lessThanTok` does; this also answers `a < b`.
 export function coneLe(store: Store, cone: MomentCone, aTok: number, bTok: number): boolean | undefined {
   if (aTok === bTok) return true;
+  if (cone.nodes !== undefined && cone.nodes !== store.latticeNodes.size) return undefined;
   const m = cone.tok;
   if (bTok === m) {
     if (aTok === store.topTok || m === store.botTok) return false;
     if (aTok === store.botTok || m === store.topTok) return true;
-    return cone.down.has(aTok);
+    return cone.down.has(aTok) && !(store.lattice && cone.up.has(aTok));
   }
   if (aTok === m) {
     if (m === store.topTok || bTok === store.botTok) return false;
     if (m === store.botTok || bTok === store.topTok) return true;
-    return cone.up.has(bTok);
+    return cone.up.has(bTok) && !(store.lattice && cone.down.has(bTok));
   }
   return undefined;
 }
@@ -789,7 +832,7 @@ function latticeOp(store: Store, kind: LatticeNode["kind"], a: Term, b: Term): T
   const toks = new Set<number>();
   for (const t of [a, b]) {
     const tok = tokenOf(store, t);
-    if (!store.momentTerms.has(tok)) store.momentTerms.set(tok, t);
+    if (!store.momentTerms.has(tok)) { store.momentTerms.set(tok, t); store.momentSeq.set(tok, store.momentSeq.size); }
     const node = store.latticeNodes.get(tok);
     if (node !== undefined && node.kind === kind) for (const e of node.elems) toks.add(e);
     else toks.add(tok);
@@ -810,8 +853,10 @@ function latticeOp(store: Store, kind: LatticeNode["kind"], a: Term, b: Term): T
   const tok = tokenOf(store, term);
   if (!store.latticeNodes.has(tok)) {
     store.momentTerms.set(tok, term);
+    store.momentSeq.set(tok, store.momentSeq.size);
     store.latticeNodes.set(tok, { kind, elems });
     wireLatticeNode(store, tok, kind, elems);
+    store.leClosedAt.clear();
   }
   return term;
 }
@@ -886,7 +931,13 @@ function latticeLe(store: Store, a: number, b: number): boolean {
   const nb = store.latticeNodes.get(b);
   if (na?.kind === "max") res = na.elems.every((s) => latticeLe(store, s, b));
   else if (nb?.kind === "min") res = nb.elems.every((t) => latticeLe(store, a, t));
-  else res = reachTok(store, a, b);
+  else {
+    // `b` existed when a's complete reachability set was taken and is not
+    // in it (else the `lePos` check above answered): no walk needed.
+    const closedAt = store.leClosedAt.get(a);
+    const bSeq = store.momentSeq.get(b);
+    res = closedAt !== undefined && bSeq !== undefined && bSeq < closedAt ? false : reachTok(store, a, b);
+  }
   const memo = res ? store.lePos : store.leNeg;
   let set = memo.get(a);
   if (set === undefined) { set = new Set(); memo.set(a, set); }
@@ -895,6 +946,9 @@ function latticeLe(store: Store, a: number, b: number): boolean {
 }
 
 // Reachability over asserted edges, caching every visited node as `a ≤ x`.
+// Exhaustive (no early exit), like `lessThanTok`'s walk: the visited set is
+// a's complete reachability set, recorded in `leClosedAt` so later "no"
+// answers about older moments need no walk.
 function reachTok(store: Store, a: number, b: number): boolean {
   let pos = store.lePos.get(a);
   if (pos === undefined) { pos = new Set(); store.lePos.set(a, pos); }
@@ -908,9 +962,9 @@ function reachTok(store: Store, a: number, b: number): boolean {
       if (seen.has(s)) continue;
       seen.add(s);
       pos.add(s);
-      if (s === b) return true;
       stack.push(s);
     }
   }
-  return false;
+  store.leClosedAt.set(a, store.momentSeq.size);
+  return pos.has(b);
 }

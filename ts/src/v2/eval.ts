@@ -586,7 +586,9 @@ function evalLe(
   // Strict: a match whose window would shrink to a single point fails.
   if (a.strict === true && aTok === bTok) return;
   const cone = ctx.acc?.cone;
-  if (cone !== undefined && !(a.strict === true && ctx.store.lattice)) {
+  // Strict needs only `a ≠ b` on top of `≤`, checked above: `coneLe`
+  // answers `<` for distinct moments in both modes.
+  if (cone !== undefined) {
     const le = coneLe(ctx.store, cone, aTok, bTok);
     if (le !== undefined) {
       if (le) next();

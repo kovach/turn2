@@ -8,6 +8,8 @@ import {
   intervalContains,
   intervalsOverlap,
   intern,
+  latticeMax,
+  latticeMin,
   leastUpperBound,
   lessEq,
   lessThan,
@@ -234,6 +236,121 @@ function sym(name: string): Term { return { tag: "Symbol", name }; }
     }
   }
   console.log("PASS: momentCone / coneLe agree with lessEq");
+}
+
+// Lattice mode: momentCone / coneLe agree with lessEq (latticeLe, both
+// ways) for every pair against every moment, over graphs grown as the engine
+// grows them (a new moment is ordered only against older ones, all on one
+// side, so existing comparabilities never change) with joins and meets of
+// random pairs, including moments created after a node above / below all of
+// its elements (related to it by the element rule, not by an edge). A cone
+// declines once a new node has rewired the graph.
+{
+  let seed = 1;
+  const rand = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  let nodes = 0;
+  for (let trial = 0; trial < 40; trial++) {
+    seed = trial + 1;
+    const s = createStore({ lattice: true });
+    const ms: Term[] = [];
+    let fresh = 0;
+    for (let step = 0; step < 14; step++) {
+      const k = rand(5);
+      if (ms.length >= 2 && k <= 1) {
+        const a = ms[rand(ms.length)]!, b = ms[rand(ms.length)]!;
+        ms.push(k === 0 ? latticeMax(s, a, b) : latticeMin(s, a, b));
+      } else {
+        const t = intern(s, sym(`m${fresh++}`));
+        const pick = ms.filter(() => rand(3) === 0);
+        for (const o of pick) k === 4 ? addOrder(s, t, o) : addOrder(s, o, t);
+        ms.push(t);
+      }
+    }
+    const all = [s.bot, s.top, ...new Map(ms.map((t) => [tokenOf(s, t), t])).values()];
+    for (const m of all) {
+      const cone = momentCone(s, m)!;
+      const mT = tokenOf(s, m);
+      for (const y of all) {
+        const yT = tokenOf(s, y);
+        assert.equal(coneLe(s, cone, yT, mT), lessEq(s, y, m), `trial ${trial}: y <= m`);
+        assert.equal(coneLe(s, cone, mT, yT), lessEq(s, m, y), `trial ${trial}: m <= y`);
+      }
+    }
+    nodes += s.latticeNodes.size;
+  }
+  assert.ok(nodes >= 40, `the trials build lattice nodes (${nodes})`);
+  const s = createStore({ lattice: true });
+  const [x, y, b] = ["x", "y", "b"].map((n) => intern(s, sym(n)));
+  const j = latticeMax(s, x!, y!);
+  addOrder(s, x!, b!); addOrder(s, y!, b!);
+  const cone = momentCone(s, b!)!;
+  assert.equal(coneLe(s, cone, tokenOf(s, j), tokenOf(s, b!)), true, "a join is below a later moment above its elements");
+  latticeMin(s, x!, y!);
+  assert.equal(coneLe(s, cone, tokenOf(s, j), tokenOf(s, b!)), undefined, "a new node invalidates the cone");
+  console.log("PASS: lattice-mode momentCone / coneLe agree with lessEq");
+}
+
+// Lattice mode: answers from the caches (`lePos`/`leNeg`, and `leClosedAt`
+// deciding "no" for older moments without a walk) match a store grown by
+// the same steps but queried only at the end. One store is queried between
+// every step, so its caches fill while the graph grows (new moments placed
+// after / before older ones, including nodes, as emits do; joins and meets
+// of random pairs); the other's are filled by the final sweep alone.
+{
+  type Step = { op: "moment"; name: string; rel: number[]; below: boolean } | { op: "max" | "min"; i: number; j: number };
+  let seed = 7;
+  const rand = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const grow = (steps: Step[], query: boolean): { s: ReturnType<typeof createStore>; ms: Term[] } => {
+    const s = createStore({ lattice: true });
+    const ms: Term[] = [];
+    for (const st of steps) {
+      if (st.op === "moment") {
+        const t = intern(s, sym(st.name));
+        for (const i of st.rel) st.below ? addOrder(s, t, ms[i]!) : addOrder(s, ms[i]!, t);
+        ms.push(t);
+      } else {
+        ms.push(st.op === "max" ? latticeMax(s, ms[st.i]!, ms[st.j]!) : latticeMin(s, ms[st.i]!, ms[st.j]!));
+      }
+      if (query) for (let q = 0; q < 12 && ms.length > 1; q++) lessEq(s, ms[rand(ms.length)]!, ms[rand(ms.length)]!);
+    }
+    return { s, ms };
+  };
+  let decided = 0;
+  for (let trial = 0; trial < 60; trial++) {
+    seed = 1000 + trial;
+    const steps: Step[] = [];
+    for (let k = 0, n = 0; k < 18; k++) {
+      const r = rand(6);
+      if (n >= 2 && r <= 1) steps.push({ op: r === 0 ? "max" : "min", i: rand(n), j: rand(n) });
+      else steps.push({ op: "moment", name: `m${k}`, rel: [...Array(n).keys()].filter(() => rand(3) === 0), below: r === 5 });
+      n++;
+    }
+    const a = grow(steps, true), b = grow(steps, false);
+    const before = a.s.leClosedAt.size;
+    for (let i = 0; i < a.ms.length; i++) {
+      for (let j = 0; j < a.ms.length; j++) {
+        assert.equal(lessEq(a.s, a.ms[i]!, a.ms[j]!), lessEq(b.s, b.ms[i]!, b.ms[j]!), `trial ${trial}: ms[${i}] <= ms[${j}]`);
+      }
+    }
+    decided += before;
+  }
+  assert.ok(decided > 0, "the interleaved queries took complete reachability sets");
+  // A reachability set taken while a node is being wired goes stale when the
+  // wiring adds a later edge: the meet n is walked (to find it below the
+  // older meet y) before its edge n → y exists, and c is reached only
+  // through y.
+  {
+    const s = createStore({ lattice: true });
+    const [p, q] = ["p", "q"].map((n) => intern(s, sym(n)));
+    const y = latticeMin(s, p!, q!);
+    const c = intern(s, sym("c")); addOrder(s, y, c);
+    const u = intern(s, sym("u")); addOrder(s, u, p!);
+    const v = intern(s, sym("v")); addOrder(s, v, q!);
+    const n = latticeMin(s, u, v);
+    assert.ok(lessEq(s, n, y));
+    assert.ok(lessEq(s, n, c), "n ≤ y < c, though n was walked before its edge to y");
+  }
+  console.log("PASS: lattice-mode cached answers match a store queried only at the end");
 }
 
 console.log("ALL v2 store tests passed");
