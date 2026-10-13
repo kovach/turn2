@@ -74,13 +74,14 @@ export function isAccRow(store: Store, i: number): boolean {
 interface Covers {
   succ: Map<number, number[]>;
   pred: Map<number, number[]>;
-  // A linear extension of the order, `bot` first; `top` is not a member.
+  // A linear extension of the order, `bot` first, `top` last.
   topo: number[];
   topoIndex: Map<number, number>;
 }
 
 // Hasse covers of the asserted moment order, `bot` included (it covers into
-// every moment without an asserted predecessor) and `top` excluded. Asserted
+// every moment without an asserted predecessor) and `top` too (every moment
+// without an asserted successor covers into it). Asserted
 // edges are not transitively reduced, so an edge `u → v` is dropped when
 // another asserted successor of `u` lies strictly below `v`. The asserted
 // order can contain cycles (moment-walk.ts `frontier`); mutually reachable
@@ -90,6 +91,7 @@ function momentCovers(store: Store): Covers {
   const toks: number[] = [];
   for (const tok of store.momentTerms.keys()) if (tok !== store.topTok) toks.push(tok);
   toks.sort((a, b) => a - b);
+  toks.push(store.topTok);
   const term = (tok: number): Term => store.momentTerms.get(tok)!;
   const succ = new Map<number, number[]>();
   const pred = new Map<number, number[]>();
@@ -113,6 +115,7 @@ function momentCovers(store: Store): Covers {
       if (!redundant) link(u, v);
     }
   }
+  for (const u of toks) if (u !== store.topTok && succ.get(u)!.length === 0) link(u, store.topTok);
   const indeg = new Map<number, number>();
   for (const tok of toks) indeg.set(tok, pred.get(tok)!.length);
   const topo: number[] = [];
@@ -200,7 +203,8 @@ export function accRuns(store: Store): AccRun[] {
       const ended = next.find((n) => store.settled.has(n));
       let rTok: number;
       let open = false;
-      if (merge !== undefined) rTok = merge;
+      if (tail === store.topTok) rTok = tail; // held to the end of the run
+      else if (merge !== undefined) rTok = merge;
       else if (ended !== undefined) rTok = ended;
       else { rTok = next[0] ?? store.topTok; open = true; }
       runs.push({

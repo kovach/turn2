@@ -212,7 +212,9 @@ n V
 n V
   + q @js(lbl V)
 `));
-  assert(listTuples(store).includes("q <a> }}}"), `expected template result: ${listTuples(store)}`);
+  // A returned string that isn't a bare symbol token comes back as a string
+  // literal (js-values.ts), so it renders as source that parses back.
+  assert(listTuples(store).includes('q "<a> }}}"'), `expected template result: ${listTuples(store)}`);
   console.log("PASS: braces in string/template/nested body");
 }
 
@@ -238,7 +240,7 @@ n V
 n V
   + q @js(rb V)
 `));
-  assert(listTuples(store).includes("q }"), `expected 'q }' (string brace one-liner): ${listTuples(store)}`);
+  assert(listTuples(store).includes('q "}"'), `expected 'q "}"' (string brace one-liner): ${listTuples(store)}`);
   console.log("PASS: one-liner form");
 }
 

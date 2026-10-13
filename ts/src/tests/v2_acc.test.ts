@@ -540,8 +540,9 @@ hit X A / damage X (@sum A)
     .filter((t) => rt(s, t.atom.terms[0]!) === "damage")
     .map((t) => `${ra(s, t.atom)} @${rt(s, t.l)}`)
     .sort();
-  assert.deepEqual(dmg, ["damage me 3 @m1", "damage me 4 @m2", "damage me 7 @j"]);
-  console.log("PASS: store-level handler writes rows at each input moment and their join");
+  // `top` settles last, like any moment: the state the facts reach.
+  assert.deepEqual(dmg, ["damage me 3 @m1", "damage me 4 @m2", "damage me 7 @j", "damage me 7 @top"]);
+  console.log("PASS: store-level handler writes rows at each input moment, their join, and top");
 }
 
 // ===== 14) Acc relations inside `!(...)` =====================================
@@ -665,8 +666,9 @@ after, n N, +later N
   assert.deepEqual(step(), ["bot"]);
   assert.deepEqual(step(), ["a", "b"]);
   assert.deepEqual(step(), ["j"]);
+  assert.deepEqual(step(), ["top"]);
   assert.deepEqual(step(), []);
-  console.log("PASS: frontier walks a diamond bot → {a, b} → j");
+  console.log("PASS: frontier walks a diamond bot → {a, b} → j → top");
 }
 {
   // `x < y < x`: the edge test excludes both forever; the strict-order
@@ -970,7 +972,10 @@ c, big B, ^bigs B
       .map((t) => t.atom.terms.slice(1, -1).map((x) => rt(eag.store, x)).join(" ")).sort();
     assert.deepEqual(mine, theirs, `accAt ${rel}`);
   }
-  assert.equal(dem.accAt!(dem.store.topTok), undefined, "top never settles");
+  // `top` never settles; accAt reads it as the end of the run, over the
+  // whole store.
+  assert.notEqual(dem.accAt!(dem.store.topTok), undefined, "top: the end of the run");
+  assert.equal(dem.store.tuples.length, size, "accAt at top writes nothing");
   assert.ok(dem.store.accComputed.size < dem.store.settled.size, "unread moments are not computed");
   // Eager: rows at every settled moment, as before.
   assert.equal(eag.store.accComputed.size, eag.store.settled.size);
@@ -1123,6 +1128,38 @@ go2, n N, +total N
     assert.deepEqual(withHead(on.store, "total"), ["total 2"], `${accMode}: total`);
   }
   console.log("PASS: cost profile attributes time to source rules");
+}
+
+// ===== accAt for displays: a relation nothing reads, at a choice and at top
+{
+  const rules = `
+a, +put x l1, +opt c1
+b, +put x l2
+#acc at : e (@last place)
+put X L / at X L
+#acc seen : e
+put X _ / seen X
+`;
+  const show = (s: Store, rows: { terms: Term[] }[] | undefined) =>
+    (rows ?? []).map((r) => r.terms.map((t) => rt(s, t)).join(" ")).sort();
+
+  // A pending choice: its moment has settled, but no rule reads `at`.
+  const asking = runFixpoint(ok(`~game\n  ~a;\n  ~b;\n  ~pick\npick\n  ?C\n  !(opt C)\n${rules}`));
+  assert.equal(asking.status.kind, "active-choices");
+  assert.deepEqual(withHead(asking.store, "at"), [], "the run computes no `at` rows");
+  const size = asking.store.tuples.length;
+  const m = tokenOf(asking.store, (asking.status as { components: { moment: Term }[] }).components[0]!.moment);
+  const atM = asking.accAt!(m, ["at"])!;
+  assert.deepEqual(show(asking.store, atM.get("at")), ["x l2"], "the latest put at the choice");
+  assert.equal(atM.has("seen"), false, "only the asked relations (and what they read) are computed");
+  assert.equal(asking.store.tuples.length, size, "nothing is written");
+  assert.equal(asking.accAt!(m, ["at"]), atM, "memoized per moment and relations");
+
+  // A finished run: `top` stands for the end, computed over the whole store.
+  const done = runFixpoint(ok(`~game\n  ~a;\n  ~b\n${rules}`));
+  assert.equal(done.status.kind, "done");
+  assert.deepEqual(show(done.store, done.accAt!(done.store.topTok, ["at"])?.get("at")), ["x l2"], "the latest put at top");
+  console.log("PASS: accAt computes the asked relations at a choice moment and at top");
 }
 
 console.log("ALL v2 acc tests passed");

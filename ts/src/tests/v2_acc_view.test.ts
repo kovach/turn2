@@ -72,9 +72,11 @@ c, crowded L, ^crowded-c L
   assert.equal(there.length, 1);
   assert.equal(here[0]!.open, false, "a superseded value ends with a closed edge");
   assert.equal(here[0]!.rTok, there[0]!.lTok, "the old value's bar ends where the new one starts");
-  // A value that holds to the end runs, open, to `top`.
+  // A value that holds to the end runs to `top`, closed: `top` settles last
+  // and has rows like any moment.
   assert.equal(there[0]!.rTok, store.topTok);
-  assert.equal(there[0]!.open, true);
+  assert.equal(there[0]!.open, false);
+  assert.equal(there[0]!.moments.at(-1), store.topTok);
   assert.equal(of("at you here").length, 1);
   // `crowded here` holds between the second arrival and the departure.
   const crowded = of("crowded here");
@@ -144,7 +146,8 @@ c, crowded L, ^crowded-c L
   const atC = accSnapshot(store, cStart);
   assert.ok(atC.relations.every((r) => r.consulted), "every relation is read at c's start");
   assert.ok(atC.relations.every((r) => r.rows.every((x) => x.status === "same") && r.gone.length === 0));
-  assert.equal(accSnapshot(store, store.topTok).resolved, false);
+  // `top` settles and resolves last, once the run is done.
+  assert.equal(accSnapshot(store, store.topTok).resolved, true);
   // A moment's key survives re-evaluation with an unrelated edit.
   const store2 = run(OCC + "\n^unrelated x\n");
   const key = momentKey(store, moved);
@@ -184,8 +187,7 @@ many K, ^plenty K
 }
 
 // ===== 7) Open end behind a pending choice ===================================
-{
-  const store = run(`
+const BLOCKED = `
 #acc n : @count
 
 opt _ / n ()
@@ -197,7 +199,9 @@ opt _ / n ()
 pick, ^opt x, ^opt y, ? C, !opt C, ~choice C
 
 after, n N, +seen N
-`);
+`;
+{
+  const store = run(BLOCKED);
   const after = startOf(store, "after");
   assert.ok(!store.resolved.has(after));
   const runs = accRuns(store);
@@ -286,8 +290,13 @@ after, n N, +seen N
     const accBars = svg.children.filter((c) => c.classes.has("tl-bar-acc"));
     assert.equal(accBars.length, accRuns(store).length);
     assert.ok(accBars.every((c) => c.attrs.get("rx") === "0"));
-    const open = accBars.filter((c) => c.classes.has("tl-bar-acc-open"));
-    assert.ok(open.length > 0 && open.length < accBars.length);
+    // A finished run: every bar is closed, those reaching `top` included.
+    assert.ok(accBars.every((c) => !c.classes.has("tl-bar-acc-open")));
+    // Behind a pending choice, the bars held when the walk stopped are open.
+    const blocked = renderTimeline(run(BLOCKED), { momentStyle: "edges" }).main as unknown as Node_;
+    const blockedBars = blocked.children.filter((c) => c.classes.has("tl-bar-acc"));
+    const open = blockedBars.filter((c) => c.classes.has("tl-bar-acc-open"));
+    assert.ok(open.length > 0);
     for (const c of open) {
       const dash = c.attrs.get("stroke-dasharray")!.split(",").map(Number);
       assert.equal(dash[0], Number(c.attrs.get("width")), "the top edge is solid");

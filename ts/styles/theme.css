@@ -43,6 +43,7 @@ html.mode-light {
 .t-op { color: var(--t-op); font-weight: 700; }
 .t-p { color: var(--t-op); }
 .t-n { color: var(--t-n); }
+.t-str { color: var(--t-n); }
 .t-v { color: var(--t-v); }
 .t-b { color: var(--t-b); }
 .t-r { color: var(--t-r); font-weight: 600; }

@@ -1,8 +1,11 @@
 // v2 parser. Flat-syntax language per notes/turn-program-1.t.
 //
-// Two passes: tokenize (line-by-line, comment-aware) then parseProgram (turn
-// the token stream into rules + acc declarations). Hashconsing is *not* applied here —
-// callers run terms through hashcons after parsing.
+// Three stages: `lex` (characters into positioned tokens: words, string
+// literals, punctuation; comments dropped), `tokenize` (the structural pass:
+// atoms, sub-rules, commands, exception blocks, rule boundaries) and
+// parseProgram (the token stream into rules + acc declarations). Only `lex`
+// reads source text. Hashconsing is *not* applied here — callers run terms
+// through hashcons after parsing.
 
 import type { Atom, Term, Span } from "./term.js";
 import type { AccColumn, AccDecl, AccRule, Actor, JsDef, JsRelDef, Marker, Program, Rule, RuleAtom, SubConstrain } from "./types.js";
@@ -15,35 +18,265 @@ export interface ParseError {
   message: string;
 }
 
+// --- Lexing ------------------------------------------------------------------
+//
+// `lex` reads the source once, character by character, into positioned
+// tokens: a word (a maximal run of characters that are not whitespace,
+// punctuation or a quote), a string literal (its source text, quotes and
+// escapes included — a string is the Symbol of that name, term.ts), or one
+// punctuation character. A `--` outside a string ends the line. Nothing
+// after this reads source text again: the structural pass (`tokenize`) and
+// the term parser work on these tokens, so punctuation or `--` inside a
+// string means nothing to them. Only a `#js` / `#js-def` directive is read
+// raw — its body is JavaScript.
+//
+// Whitespace survives as adjacency: two tokens are glued when one ends
+// where the next starts (`adjacent`). The term syntax splits only on
+// whitespace and parens, so `termWords` re-glues runs like `a.b` or `x,`
+// inside a compound, and markers, `=`, `/`, `>` and `);` are recognized by
+// what they touch.
+
+// `col` / `end` are 0-based source columns on `line` (`end` exclusive).
+export interface Lex {
+  kind: "word" | "str" | "punct";
+  text: string;
+  line: number;
+  col: number;
+  end: number;
+}
+
+// One non-blank source line's tokens, or a `#js` / `#js-def` directive
+// (its body possibly spanning lines up to a column-0 `}`).
+type LexLine =
+  | { kind: "toks"; line: number; indent: number; toks: Lex[] }
+  | { kind: "js"; line: number; indent: number; name: string; sig: string; body: string; endLine: number };
+
+const PUNCT = new Set(["(", ")", ",", ";", ".", "{", "}", "[", "]"]);
+
+function isSpace(c: string): boolean {
+  const code = c.charCodeAt(0);
+  return code <= 32 ? code === 32 || (code >= 9 && code <= 13) : code >= 128 && /\s/.test(c);
+}
+
+function lexLine(src: string, line: number): Lex[] | ParseError {
+  const out: Lex[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i]!;
+    if (c === "-" && src[i + 1] === "-") break;
+    if (isSpace(c)) { i++; continue; }
+    if (PUNCT.has(c)) {
+      out.push({ kind: "punct", text: c, line, col: i, end: i + 1 });
+      i++;
+      continue;
+    }
+    if (c === "\"") {
+      let j = i + 1;
+      for (; j < src.length && src[j] !== "\""; j++) {
+        if (src[j] !== "\\") continue;
+        const e = src[j + 1];
+        if (e !== "\"" && e !== "\\") {
+          return { line, message: `bad escape '\\${e ?? ""}' in a string (only \\" and \\\\)` };
+        }
+        j++;
+      }
+      if (j >= src.length) return { line, message: "unterminated string" };
+      out.push({ kind: "str", text: src.slice(i, j + 1), line, col: i, end: j + 1 });
+      i = j + 1;
+      continue;
+    }
+    let j = i + 1;
+    while (j < src.length) {
+      const d = src[j]!;
+      if (isSpace(d) || PUNCT.has(d) || d === "\"" || (d === "-" && src[j + 1] === "-")) break;
+      j++;
+    }
+    out.push({ kind: "word", text: src.slice(i, j), line, col: i, end: j });
+    i = j;
+  }
+  return out;
+}
+
+const JS_LINE = /^(\s*)#(js|js-def)(\s|$)/;
+
+// The non-blank lines in order, lexed as they are reached, so the first
+// error in the file (lexical or structural) is the one reported. Ends after
+// yielding an error.
+function* lex(input: string): Generator<LexLine | ParseError> {
+  const lines = input.split("\n");
+  for (let li = 0; li < lines.length; li++) {
+    const line = li + 1;
+    const src = lines[li]!;
+    const js = JS_LINE.exec(src);
+    if (js !== null) {
+      const d = lexJs(lines, li, js[1]!.length, js[2]!);
+      yield d;
+      if ("message" in d) return;
+      li = d.endLine - 1;
+      continue;
+    }
+    const toks = lexLine(src, line);
+    if (!Array.isArray(toks)) { yield toks; return; }
+    if (toks.length === 0) continue;
+    yield { kind: "toks", line, indent: toks[0]!.col, toks };
+  }
+}
+
+// `#js` (term function) and `#js-def` (relation clause,
+// plans/v2-js-relations.md) share the body-collection rules. Two forms,
+// neither of which counts braces (so the body may contain arbitrary JS —
+// strings, templates, nested braces):
+//   - one-liner: `#js (sig) { body }` — `}` is the last char, body is
+//     between the first `{` and the last `}` on the line.
+//   - multi-line: `#js (sig) {` then *indented* body lines, closed by a `}`
+//     at column 0 (the first unindented line after the `{`).
+// Read raw (no comment stripping) so the body survives verbatim.
+function lexJs(lines: string[], li: number, indent: number, name: string): Extract<LexLine, { kind: "js" }> | ParseError {
+  const line = li + 1;
+  const rawLine = lines[li]!;
+  const sigPart = rawLine.slice(indent + 1 + name.length);
+  const bracePos = sigPart.indexOf("{");
+  if (bracePos < 0) {
+    return { line, message: `'#${name}' signature must be followed by '{'` };
+  }
+  const sig = sigPart.slice(0, bracePos).trim();
+  const afterBrace = sigPart.slice(bracePos + 1);
+  const afterTrim = afterBrace.trim();
+  let body: string;
+  let endLi = li;
+  if (afterTrim === "") {
+    const bodyLines: string[] = [];
+    for (;;) {
+      endLi++;
+      if (endLi >= lines.length) {
+        return { line, message: `'#${name}' body is missing a closing '}' at column 0` };
+      }
+      const bl = lines[endLi]!;
+      const blank = bl.trim() === "";
+      const indented = bl.length > 0 && /\s/.test(bl[0]!);
+      if (!blank && !indented) {
+        if (bl[0] !== "}") {
+          return { line: endLi + 1, message: `'#${name}' body must be indented; expected '}' at column 0` };
+        }
+        break;
+      }
+      bodyLines.push(bl);
+    }
+    body = bodyLines.join("\n");
+  } else if (afterTrim.endsWith("}")) {
+    body = afterBrace.slice(0, afterBrace.lastIndexOf("}"));
+  } else {
+    return { line, message: `'#${name}' body must close with '}' on the same line, or put '{' last and indent the body below` };
+  }
+  return { kind: "js", line, indent, name, sig, body, endLine: endLi + 1 };
+}
+
+// `a` ends exactly where `b` starts: no whitespace between them.
+function adjacent(a: Lex | undefined, b: Lex | undefined): boolean {
+  return a !== undefined && b !== undefined && a.line === b.line && a.end === b.col;
+}
+
+function isPunct(t: Lex | undefined, text: string): boolean {
+  return t !== undefined && t.kind === "punct" && t.text === text;
+}
+
+// `toks` without the first `n` characters of its first token (a marker or
+// `>` glued to what follows), the token dropped when nothing is left.
+function dropChars(toks: Lex[], n: number): Lex[] {
+  const first = toks[0];
+  if (first === undefined) return toks;
+  if (first.text.length <= n) return toks.slice(1);
+  return [{ ...first, text: first.text.slice(n), col: first.col + n }, ...toks.slice(1)];
+}
+
+// Term-level words of a token run, for `parseTerms`: each paren alone, and
+// every maximal run of adjacent other tokens glued into one (the term
+// syntax splits only on whitespace and parens). A string literal must
+// stand alone.
+function termWords(toks: Lex[]): string[] | ParseError {
+  const out: string[] = [];
+  let run: Lex[] = [];
+  const flush = (): ParseError | null => {
+    if (run.length === 0) return null;
+    if (run.length > 1 && run.some((t) => t.kind === "str")) {
+      return { line: run[0]!.line, message: "a string literal must be a term of its own (separate it with a space)" };
+    }
+    out.push(run.map((t) => t.text).join(""));
+    run = [];
+    return null;
+  };
+  for (const t of toks) {
+    const paren = isPunct(t, "(") || isPunct(t, ")");
+    if (paren || !adjacent(run[run.length - 1], t)) {
+      const e = flush();
+      if (e !== null) return e;
+    }
+    if (paren) out.push(t.text);
+    else run.push(t);
+  }
+  const e = flush();
+  return e ?? out;
+}
+
+// Index of the first token at paren depth 0 satisfying `hit`, or -1.
+function findTop(toks: Lex[], hit: (t: Lex) => boolean, open = ["("], close = [")"]): number {
+  let depth = 0;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t.kind === "punct" && open.includes(t.text)) depth++;
+    else if (t.kind === "punct" && close.includes(t.text)) depth--;
+    else if (depth === 0 && hit(t)) return i;
+  }
+  return -1;
+}
+
+// A top-level `-> weight` (fed the removed `#agg` / `#reactive`).
+function hasTopArrow(toks: Lex[]): boolean {
+  return findTop(toks, (t) => t.kind === "word" && t.text.includes("->")) >= 0;
+}
+
+// Split at top-level `,` tokens.
+function splitTopCommas(toks: Lex[]): Lex[][] {
+  const out: Lex[][] = [];
+  let depth = 0;
+  let cur: Lex[] = [];
+  for (const t of toks) {
+    if (isPunct(t, "(")) depth++;
+    else if (isPunct(t, ")")) depth--;
+    else if (depth === 0 && isPunct(t, ",")) { out.push(cur); cur = []; continue; }
+    cur.push(t);
+  }
+  out.push(cur);
+  return out;
+}
+
 // `startCol`/`endCol` on atom / equal / exception tokens are 0-indexed
-// columns into the original source line (comment stripping only slices the
-// tail, so indices into the stripped line are original columns). They cover
-// the token's full trimmed extent including the marker / `=` / braces
-// (plans/v2-atom-span-provenance.md). Tokens produced by re-tokenizing a
-// text *fragment* (exception RHS) carry fragment-relative columns; the
-// caller re-bases them via `remapItemLines`.
+// source columns covering the token's full extent including the marker /
+// `=` / braces (plans/v2-atom-span-provenance.md). Payloads are the lexed
+// tokens themselves, so a fragment (an exception's right-hand side) is
+// parsed in place, with its true columns.
 type Token =
   | { tag: "open"; line: number }
   | { tag: "close"; sequence: boolean; line: number }
-  | { tag: "atom"; marker: Marker; after: boolean; text: string; line: number; startCol: number; endCol: number }
-  // Exception block `{...}` (plans/v2-exceptions.md). `text` is the inner
-  // text, braces stripped and trimmed; `textStartCol` is the column of
-  // `text`'s first char in the source line, so fragment-relative columns in
-  // the parsed RHS can be re-based onto the line.
-  | { tag: "exception"; text: string; line: number; startCol: number; endCol: number; textStartCol: number }
+  | { tag: "atom"; marker: Marker; after: boolean; toks: Lex[]; line: number; startCol: number; endCol: number }
+  // Exception block `{...}` (plans/v2-exceptions.md); `toks` is the inside.
+  | { tag: "exception"; toks: Lex[]; line: number; startCol: number; endCol: number }
   // Bracket aggregation `[ … ]` and `#macro … :=` are still tokenized, only
   // so the parser can report that they were removed (in favour of `#acc`).
-  | { tag: "aggcomp"; text: string; line: number; endLine: number }
-  | { tag: "macroDef"; headText: string; line: number }
-  | { tag: "equal"; text: string; line: number; startCol: number; endCol: number }
-  // `endLine` is set for a multi-line `#js` / `#js-def` body (the `}` line).
-  | { tag: "command"; name: string; argText: string; body?: string; line: number; endLine?: number }
+  | { tag: "aggcomp"; line: number; endLine: number }
+  | { tag: "macroDef"; line: number }
+  | { tag: "equal"; toks: Lex[]; line: number; startCol: number; endCol: number }
+  // `#js` / `#js-def` carry their raw `sig` and `body` (`endLine`: the `}`
+  // line of a multi-line body); other commands their argument tokens.
+  | { tag: "command"; name: string; argToks: Lex[]; sig?: string; body?: string; line: number; endLine?: number }
   | { tag: "ruleEnd"; line: number }
   | { tag: "dot"; line: number }
   | { tag: "semi"; line: number }
   // Standalone `/` (whitespace on both sides) separating an acc rule's body
   // from its head (plans/v2-acc-relations.md §1.2). `do/rest` stays a Symbol.
   | { tag: "slash"; line: number };
+
+export type { Token };
 
 // Parsed `#<name> ...` line. Consumed in parseProgram and not exposed.
 type Command =
@@ -57,11 +290,6 @@ export function parse(input: string): Program | ParseError {
   const toks = tokenize(input);
   if (!Array.isArray(toks)) return toks;
   return parseProgram(toks);
-}
-
-function stripComment(line: string): string {
-  const i = line.indexOf("--");
-  return i >= 0 ? line.slice(0, i) : line;
 }
 
 function isMarkerChar(ch: string): boolean {
@@ -80,338 +308,224 @@ function markerOf(ch: string): Marker {
   }
 }
 
+// The structural pass: lexed lines into the token stream `parseProgram`
+// reads. Offside rule: a line whose first token is at column 0 starts a new
+// definition; indented lines continue the enclosing one. Blank lines carry
+// no meaning (parseBodyItems additionally ignores ruleEnd inside an open
+// `(`-group, so a multi-line sub may return to column 0).
 export function tokenize(input: string): Token[] | ParseError {
-  // Offside rule: a line whose first character is at column 0 starts a new
-  // definition; indented lines continue the enclosing one. Blank lines carry
-  // no meaning (parseBodyItems additionally ignores ruleEnd inside an open
-  // `(`-group, so a multi-line sub may return to column 0).
+  const lines = lex(input);
   const tokens: Token[] = [];
-  const lines = input.split("\n");
-  for (let li = 0; li < lines.length; li++) {
-    let lineno = li + 1;
-    let raw = stripComment(lines[li]!);
-    if (raw.trim() === "") {
+  // A `[` still open at the end of a line takes the next lines' tokens.
+  const more = (): Lex[] | ParseError | null => {
+    const next = lines.next();
+    if (next.done === true) return null;
+    const l = next.value;
+    if ("message" in l) return l;
+    return l.kind === "toks" ? l.toks : null;
+  };
+  for (const l of lines) {
+    if ("message" in l) return l;
+    if (l.indent === 0 && tokens.length > 0) tokens.push({ tag: "ruleEnd", line: l.line });
+    if (l.kind === "js") {
+      tokens.push({ tag: "command", name: l.name, argToks: [], sig: l.sig, body: l.body, line: l.line, endLine: l.endLine });
       continue;
     }
-    const leading = raw.length - raw.trimStart().length;
-    if (leading === 0 && tokens.length > 0) {
-      tokens.push({ tag: "ruleEnd", line: lineno });
-    }
-    let pos = 0;
-    let atomStart = true;
-    while (pos < raw.length) {
-      while (pos < raw.length && /\s/.test(raw[pos]!)) pos++;
-      if (pos >= raw.length) break;
-      const ch = raw[pos]!;
-      if (atomStart && ch === "(") {
-        tokens.push({ tag: "open", line: lineno });
-        pos++;
-        atomStart = true;
-        continue;
-      }
-      if (ch === ")") {
-        const sequence = raw[pos + 1] === ";";
-        tokens.push({ tag: "close", sequence, line: lineno });
-        pos += sequence ? 2 : 1;
-        atomStart = true;
-        continue;
-      }
-      if (ch === ",") {
-        pos++;
-        atomStart = true;
-        continue;
-      }
-      if (ch === ";") {
-        // Bare `;` (not `);` — that case is folded into the `close`
-        // token above). Emits a `semi` for parseProgram to wrap the
-        // current line's accumulated items into a sequence sub.
-        tokens.push({ tag: "semi", line: lineno });
-        pos++;
-        atomStart = true;
-        continue;
-      }
-      if (ch === "/" && isStandaloneSlash(raw, pos)) {
-        // Acc rule separator `body / head` (plans/v2-acc-relations.md).
-        // Only a whitespace-delimited `/`: symbols like `do/rest` keep it.
-        tokens.push({ tag: "slash", line: lineno });
-        pos++;
-        atomStart = true;
-        continue;
-      }
-      if (ch === ".") {
-        // `.` is always a top-level separator: handles spaced `a . b`,
-        // leading-dot `.bar` / `.(sub)`, and produces the dot side of
-        // glued `foo.bar` (the atom-body scanner below breaks on `.`).
-        tokens.push({ tag: "dot", line: lineno });
-        pos++;
-        atomStart = true;
-        continue;
-      }
-      if (ch === "{") {
-        // Exception block `{p t1..tn => e}` (plans/v2-exceptions.md).
-        // Scan to the matching `}` on this line, tracking brace depth.
-        let braceDepth = 0;
-        let end = -1;
-        for (let j = pos; j < raw.length; j++) {
-          const c = raw[j]!;
-          if (c === "{") braceDepth++;
-          else if (c === "}") {
-            braceDepth--;
-            if (braceDepth === 0) { end = j; break; }
-          }
-        }
-        if (end < 0) {
-          return { line: lineno, message: "unterminated '{' (exception block must close on the same line)" };
-        }
-        const inner = raw.slice(pos + 1, end);
-        tokens.push({
-          tag: "exception",
-          text: inner.trim(),
-          line: lineno,
-          startCol: pos,
-          endCol: end + 1,
-          textStartCol: pos + 1 + (inner.length - inner.trimStart().length),
-        });
-        pos = end + 1;
-        atomStart = true;
-        continue;
-      }
-      if (ch === "}") {
-        return { line: lineno, message: "stray '}'" };
-      }
-      if (ch === "[") {
-        // Bracket aggregation `[ Q | op V ]` (plans/v2-bracket-aggregation.md).
-        // Scan to the matching `]`, tracking bracket depth, continuing across
-        // line breaks (comments stripped per line; pieces joined with a
-        // space — line breaks inside the block carry no meaning). Blank
-        // lines inside an open bracket are part of the block, never a
-        // ruleEnd.
-        if (!atomStart) {
-          return { line: lineno, message: "'[' must start a query item (separate it with ',')" };
-        }
-        const openLine = lineno;
-        const pieces: string[] = [];
-        let bdepth = 0;
-        let scanStart = pos;
-        let end = -1;
-        for (;;) {
-          for (let j = scanStart; j < raw.length; j++) {
-            const c = raw[j]!;
-            if (c === "[") bdepth++;
-            else if (c === "]") {
-              bdepth--;
-              if (bdepth === 0) { end = j; break; }
-            }
-          }
-          if (end >= 0) break;
-          // Bracket still open: consume the next line into the block.
-          pieces.push(raw.slice(scanStart));
-          li++;
-          if (li >= lines.length) {
-            return { line: openLine, message: "unterminated '['" };
-          }
-          lineno = li + 1;
-          raw = stripComment(lines[li]!);
-          scanStart = 0;
-          pos = 0;
-        }
-        pieces.push(raw.slice(scanStart, end + 1));
-        const whole = pieces.join(" ");
-        tokens.push({
-          tag: "aggcomp",
-          text: whole.slice(1, -1).trim(),
-          line: openLine,
-          endLine: lineno,
-        });
-        pos = end + 1;
-        atomStart = true;
-        continue;
-      }
-      if (ch === "]") {
-        return { line: lineno, message: "stray ']'" };
-      }
-      if (atomStart && ch === "#") {
-        const rest = raw.slice(pos + 1);
-        const trimmed = rest.trimStart();
-        const ws = trimmed.search(/\s/);
-        const name = ws < 0 ? trimmed : trimmed.slice(0, ws);
-        if (name.length === 0) {
-          return { line: lineno, message: "'#' must be followed by a command name" };
-        }
-        if (name === "macro") {
-          // `#macro head P1..Pn := [ ... ]`
-          // (plans/v2-aggregation-synonyms.md). Only the header through the
-          // `:=` is consumed here; the RHS tokenizes with the existing
-          // machinery, so the multi-line `[` handling is reused unchanged.
-          const lead = rest.length - trimmed.length; // ws between '#' and name
-          const afterName = pos + 1 + lead + name.length;
-          const walrus = findTopWalrus(raw, afterName);
-          if (walrus < 0) {
-            return { line: lineno, message: "'#macro' definition requires ':=' on the same line" };
-          }
-          tokens.push({
-            tag: "macroDef",
-            headText: raw.slice(afterName, walrus).trim(),
-            line: lineno,
-          });
-          pos = walrus + 2;
-          atomStart = true;
-          continue;
-        }
-        if (name === "def") {
-          // `#def <name>` consumes only the name; the rest of the line
-          // continues tokenizing so the rule body can follow on the same line.
-          const afterName = ws < 0 ? "" : trimmed.slice(ws);
-          const afterTrimmed = afterName.trimStart();
-          const ws2 = afterTrimmed.search(/\s/);
-          const defName = ws2 < 0 ? afterTrimmed : afterTrimmed.slice(0, ws2);
-          tokens.push({ tag: "command", name, argText: defName, line: lineno });
-          // Advance pos to just after the name token (or to end of line if none).
-          const consumed = defName.length === 0
-            ? raw.length
-            : (raw.length - afterTrimmed.length) + defName.length;
-          pos = consumed;
-          atomStart = true;
-          continue;
-        }
-        if (name === "js" || name === "js-def") {
-          // `#js` (term function) and `#js-def` (relation clause,
-          // plans/v2-js-relations.md) share the body-collection rules. Two
-          // forms, neither of which counts braces (so the body may contain
-          // arbitrary JS — strings, templates, nested braces):
-          //   - one-liner: `#js (sig) { body }` — `}` is the last char, body is
-          //     between the first `{` and the last `}` on the line.
-          //   - multi-line: `#js (sig) {` then *indented* body lines, closed by
-          //     a `}` at column 0 (the first unindented line after the `{`).
-          // Read raw (un-stripped) lines so the body survives verbatim.
-          const rawLine = lines[li]!;
-          const lead = rest.length - trimmed.length; // ws between '#' and name
-          const afterJs = pos + 1 + lead + name.length;
-          const sigPart = rawLine.slice(afterJs);
-          const bracePos = sigPart.indexOf("{");
-          if (bracePos < 0) {
-            return { line: lineno, message: `'#${name}' signature must be followed by '{'` };
-          }
-          const sig = sigPart.slice(0, bracePos).trim();
-          const afterBrace = sigPart.slice(bracePos + 1);
-          const afterTrim = afterBrace.trim();
-          let body: string;
-          let endLi = li;
-          if (afterTrim === "") {
-            // Multi-line: collect indented lines until a column-0 `}`.
-            const bodyLines: string[] = [];
-            for (;;) {
-              endLi++;
-              if (endLi >= lines.length) {
-                return { line: lineno, message: `'#${name}' body is missing a closing '}' at column 0` };
-              }
-              const bl = lines[endLi]!;
-              const blank = bl.trim() === "";
-              const indented = bl.length > 0 && /\s/.test(bl[0]!);
-              if (!blank && !indented) {
-                if (bl[0] !== "}") {
-                  return { line: endLi + 1, message: `'#${name}' body must be indented; expected '}' at column 0` };
-                }
-                break;
-              }
-              bodyLines.push(bl);
-            }
-            body = bodyLines.join("\n");
-          } else if (afterTrim.endsWith("}")) {
-            // One-liner: body is between `{` and the last `}` on the line.
-            body = afterBrace.slice(0, afterBrace.lastIndexOf("}"));
-          } else {
-            return { line: lineno, message: `'#${name}' body must close with '}' on the same line, or put '{' last and indent the body below` };
-          }
-          tokens.push({ tag: "command", name, argText: sig, body, line: lineno, endLine: endLi + 1 });
-          li = endLi;       // multi-line: past the `}` line; one-liner: unchanged
-          pos = raw.length; // exit the inner while for the signature line
-          atomStart = true;
-          continue;
-        }
-        const argText = ws < 0 ? "" : trimmed.slice(ws).trim();
-        tokens.push({ tag: "command", name, argText, line: lineno });
-        pos = raw.length;
-        atomStart = true;
-        continue;
-      }
-      // Read atom content: balanced parens, ends at top-level `,` or `)`.
-      const start = pos;
-      let depth = 0;
-      while (pos < raw.length) {
-        const c = raw[pos]!;
-        // Choice-actor group `?[actor]` (plans/v2-choice-actors.md): a `[`
-        // immediately following a leading `?` marker is part of the atom
-        // text, not a bracket aggregation. Consume through the `]`.
-        if (depth === 0 && c === "[" && pos === start + 1 && raw[start] === "?") {
-          const close = raw.indexOf("]", pos + 1);
-          if (close < 0) {
-            return { line: lineno, message: "unterminated '[' after '?' (actor group must close on the same line)" };
-          }
-          pos = close + 1;
-          continue;
-        }
-        if (depth === 0 && (c === "," || c === ")" || c === "." || c === ";" || c === "{" || c === "}" || c === "[" || c === "]")) break;
-        if (depth === 0 && c === "/" && isStandaloneSlash(raw, pos)) break;
-        if (c === "(") depth++;
-        else if (c === ")") depth--;
-        pos++;
-      }
-      const text = raw.slice(start, pos).trim();
-      if (text.length > 0) {
-        // `start` sits on a non-whitespace char (leading ws was skipped
-        // above), so the trim only dropped trailing ws and the token's
-        // source extent is start..start+text.length — marker included.
-        const startCol = start;
-        const endCol = start + text.length;
-        const m = text[0]!;
-        // `=` is the equality marker only when followed by whitespace (or
-        // bare). `=foo` stays a Symbol-headed match atom.
-        if (m === "=" && (text.length === 1 || /\s/.test(text[1]!))) {
-          tokens.push({ tag: "equal", text: text.slice(1).trim(), line: lineno, startCol, endCol });
-        } else {
-          let marker: Marker;
-          let body: string;
-          if (isMarkerChar(m)) {
-            marker = markerOf(m);
-            body = text.slice(1).trim();
-          } else {
-            marker = "match";
-            body = text;
-          }
-          // `>p` / `~>p`: continue after `p` (see `after` in types.ts).
-          const after = body.startsWith(">");
-          if (after) body = body.slice(1).trim();
-          tokens.push({ tag: "atom", marker, after, text: body, line: lineno, startCol, endCol });
-        }
-      }
-      atomStart = false;
-    }
+    const err = scanTokens(l.toks, tokens, more);
+    if (err !== null) return err;
   }
   return tokens;
 }
 
-// A `/` at `pos` is the acc-rule separator iff it is whitespace-delimited:
-// preceded by whitespace (or line start) and followed by whitespace (or line
-// end). Mirrors the `=` rule; `do/rest` and `a/b` stay inside Symbol tokens.
-function isStandaloneSlash(raw: string, pos: number): boolean {
-  if (raw[pos] !== "/") return false;
-  const before = pos === 0 || /\s/.test(raw[pos - 1]!);
-  const after = pos + 1 >= raw.length || /\s/.test(raw[pos + 1]!);
-  return before && after;
-}
-
-// Index of a top-level `:=` in `raw` at or after `from` (depth counted over
-// `(...)` and `[...]`), or -1.
-function findTopWalrus(raw: string, from: number): number {
-  let depth = 0;
-  for (let i = from; i < raw.length; i++) {
-    const c = raw[i]!;
-    if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (c === ":" && depth === 0 && raw[i + 1] === "=") return i;
+// One line's tokens into structural tokens, appended to `out`. `more`
+// supplies the following lines' tokens while a `[` is open (null: none).
+function scanTokens(toks: Lex[], out: Token[], more: () => Lex[] | ParseError | null): ParseError | null {
+  let k = 0;
+  let atomStart = true;
+  // Standalone `/`: the acc-rule separator iff whitespace-delimited (`do/rest`
+  // and `a/b` stay inside Symbol tokens).
+  const slashAt = (i: number): boolean => {
+    const t = toks[i];
+    return t !== undefined && t.kind === "word" && t.text === "/" && !adjacent(toks[i - 1], t) && !adjacent(t, toks[i + 1]);
+  };
+  while (k < toks.length) {
+    const t = toks[k]!;
+    const line = t.line;
+    if (t.kind === "punct") {
+      if (t.text === "(" && atomStart) {
+        out.push({ tag: "open", line });
+        k++;
+        continue;
+      }
+      if (t.text === ")") {
+        const sequence = isPunct(toks[k + 1], ";") && adjacent(t, toks[k + 1]);
+        out.push({ tag: "close", sequence, line });
+        k += sequence ? 2 : 1;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === ",") {
+        k++;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === ";") {
+        // Bare `;` (not `);` — folded into the `close` token above): a
+        // `semi` for parseBodyItems to wrap the line's items into a
+        // sequence sub.
+        out.push({ tag: "semi", line });
+        k++;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === ".") {
+        // `.` is always a top-level separator: spaced `a . b`, leading-dot
+        // `.bar` / `.(sub)`, and the dot side of glued `foo.bar` (the atom
+        // scan below breaks on `.`).
+        out.push({ tag: "dot", line });
+        k++;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === "{") {
+        // Exception block `{p t1..tn => e}` (plans/v2-exceptions.md),
+        // closed on the same line.
+        let depth = 0;
+        let end = -1;
+        for (let j = k; j < toks.length && toks[j]!.line === line; j++) {
+          if (isPunct(toks[j], "{")) depth++;
+          else if (isPunct(toks[j], "}") && --depth === 0) { end = j; break; }
+        }
+        if (end < 0) {
+          return { line, message: "unterminated '{' (exception block must close on the same line)" };
+        }
+        out.push({ tag: "exception", toks: toks.slice(k + 1, end), line, startCol: t.col, endCol: toks[end]!.end });
+        k = end + 1;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === "}") return { line, message: "stray '}'" };
+      if (t.text === "[") {
+        // Bracket aggregation `[ Q | op V ]` (removed; reported by the
+        // parser), continuing across lines to the matching `]`.
+        if (!atomStart) {
+          return { line, message: "'[' must start a query item (separate it with ',')" };
+        }
+        let depth = 0;
+        let end = -1;
+        for (let j = k; end < 0; j++) {
+          if (j >= toks.length) {
+            const next = more();
+            if (next === null) return { line, message: "unterminated '['" };
+            if (!Array.isArray(next)) return next;
+            toks = toks.concat(next);
+          }
+          if (isPunct(toks[j], "[")) depth++;
+          else if (isPunct(toks[j], "]") && --depth === 0) end = j;
+        }
+        out.push({ tag: "aggcomp", line, endLine: toks[end]!.line });
+        k = end + 1;
+        atomStart = true;
+        continue;
+      }
+      if (t.text === "]") return { line, message: "stray ']'" };
+    }
+    if (slashAt(k)) {
+      // Acc rule separator `body / head` (plans/v2-acc-relations.md).
+      out.push({ tag: "slash", line });
+      k++;
+      atomStart = true;
+      continue;
+    }
+    if (atomStart && t.kind === "word" && t.text.startsWith("#")) {
+      const nameIdx = t.text === "#" ? k + 1 : k;
+      const nameTok = toks[nameIdx];
+      const name = nameIdx === k ? t.text.slice(1) : nameTok?.line === line ? nameTok.text : "";
+      if (name.length === 0) {
+        return { line, message: "'#' must be followed by a command name" };
+      }
+      if (name === "macro") {
+        // `#macro head P1..Pn := [ ... ]` (removed): consume the header
+        // through the `:=`; the `[ ... ]` tokenizes as usual.
+        const walrus = findTop(toks.slice(nameIdx + 1), (x) => x.kind === "word" && x.text.includes(":="), ["(", "["], [")", "]"]);
+        if (walrus < 0) {
+          return { line, message: "'#macro' definition requires ':=' on the same line" };
+        }
+        out.push({ tag: "macroDef", line });
+        k = nameIdx + 1 + walrus + 1;
+        atomStart = true;
+        continue;
+      }
+      if (name === "js" || name === "js-def") {
+        return { line, message: `'#${name}' must start its own line` };
+      }
+      if (name === "def") {
+        // `#def <name>` consumes only the name; the rule body may follow on
+        // the same line.
+        const defTok = toks[nameIdx + 1];
+        const argToks = defTok !== undefined && defTok.line === line ? [defTok] : [];
+        out.push({ tag: "command", name, argToks, line });
+        k = nameIdx + 1 + argToks.length;
+        atomStart = true;
+        continue;
+      }
+      out.push({ tag: "command", name, argToks: toks.slice(nameIdx + 1), line });
+      k = toks.length;
+      atomStart = true;
+      continue;
+    }
+    // An atom: tokens through balanced parens, ending at a top-level
+    // `, ) . ; { } [ ]` or standalone `/`.
+    const start = k;
+    let depth = 0;
+    while (k < toks.length) {
+      const c = toks[k]!;
+      // Choice-actor group `?[actor]` (plans/v2-choice-actors.md): a `[`
+      // glued to a leading `?` is part of the atom, not a bracket
+      // aggregation. Consume through the `]`.
+      if (depth === 0 && k === start + 1 && isPunct(c, "[") && toks[start]!.kind === "word" && toks[start]!.text === "?" && adjacent(toks[start], c)) {
+        let close = -1;
+        for (let j = k + 1; j < toks.length && toks[j]!.line === c.line; j++) {
+          if (isPunct(toks[j], "]")) { close = j; break; }
+        }
+        if (close < 0) {
+          return { line: c.line, message: "unterminated '[' after '?' (actor group must close on the same line)" };
+        }
+        k = close + 1;
+        continue;
+      }
+      if (c.kind === "punct") {
+        if (depth === 0 && c.text !== "(") break;
+        if (c.text === "(") depth++;
+        else if (c.text === ")") depth--;
+      } else if (depth === 0 && slashAt(k)) {
+        break;
+      }
+      k++;
+    }
+    const atom = toks.slice(start, k);
+    const first = atom[0]!;
+    const last = atom[atom.length - 1]!;
+    const span = { line: first.line, startCol: first.col, endCol: last.end };
+    // `=` is the equality marker only when standing alone (`=foo` stays a
+    // Symbol-headed match atom).
+    if (first.kind === "word" && first.text === "=" && !adjacent(first, atom[1])) {
+      out.push({ tag: "equal", toks: atom.slice(1), ...span });
+    } else {
+      let marker: Marker = "match";
+      let body = atom;
+      if (first.kind === "word" && isMarkerChar(first.text[0]!)) {
+        marker = markerOf(first.text[0]!);
+        body = dropChars(body, 1);
+      }
+      // `>p` / `~>p`: continue after `p` (see `after` in types.ts).
+      const after = body[0] !== undefined && body[0].kind === "word" && body[0].text.startsWith(">");
+      if (after) body = dropChars(body, 1);
+      out.push({ tag: "atom", marker, after, toks: body, ...span });
+    }
+    atomStart = false;
   }
-  return -1;
+  return null;
 }
 
 // Temporary per-rule body item. `sub` carries an unresolved inner body
@@ -437,11 +551,10 @@ const REMOVED_AGG = (what: string): string =>
 
 function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseError {
   if (tok.name === "def") {
-    const tokens = tokenizeTermText(tok.argText);
-    if (tokens.length === 0) {
+    const name = tok.argToks[0]?.text;
+    if (name === undefined) {
       return { line: tok.line, message: "'#def' requires a rule name" };
     }
-    const name = tokens[0]!;
     if (!isSymToken(name)) {
       return { line: tok.line, message: `'#def' name must be a lowercase symbol (got '${name}')` };
     }
@@ -454,18 +567,18 @@ function parseCommand(tok: Extract<Token, { tag: "command" }>): Command | ParseE
     return { line: tok.line, message: REMOVED_AGG(`'#${tok.name}'`) };
   }
   if (tok.name === "js") {
-    return parseJsCommand(tok.argText, tok.body ?? "", tok.line);
+    return parseJsCommand(tok.sig ?? "", tok.body ?? "", tok.line);
   }
   if (tok.name === "js-def") {
-    return parseJsRelCommand(tok.argText, tok.body ?? "", tok.line);
+    return parseJsRelCommand(tok.sig ?? "", tok.body ?? "", tok.line);
   }
   if (tok.name === "acc") {
-    const decl = parseAccDeclText(tok.argText, tok.line);
+    const decl = parseAccDecl(tok.argToks, tok.line);
     if ("message" in decl) return decl;
     return { kind: "acc", decl };
   }
   if (tok.name === "exit") {
-    if (tok.argText.trim().length > 0) {
+    if (tok.argToks.length > 0) {
       return { line: tok.line, message: "'#exit' takes no arguments" };
     }
     return { kind: "exit", line: tok.line };
@@ -917,7 +1030,7 @@ function parseBodyItems(
       return { line: tok.line, message: REMOVED_AGG("bracket aggregation '[ … ]'") };
     }
     if (tok.tag === "equal") {
-      const parsedEq = parseEqualText(tok.text, tok.line, tok.startCol, tok.endCol);
+      const parsedEq = parseEqual(tok.toks, tok.line, tok.startCol, tok.endCol);
       if ("message" in parsedEq) return parsedEq;
       top.items.push({ kind: "atom", atom: parsedEq });
       top.needsContent = false;
@@ -937,7 +1050,7 @@ function parseBodyItems(
       if (depth > 0) return { line: tok.line, message: "'/' is not allowed inside a sub-rule" };
       break;
     }
-    const parsed = parseAtomText(tok.text, tok.marker, tok.line, tok.startCol, tok.endCol);
+    const parsed = parseAtom(tok.toks, tok.marker, tok.line, tok.startCol, tok.endCol);
     if ("message" in parsed) return parsed;
     if (tok.after) {
       if (parsed.tag !== "Atom" || (parsed.marker !== "match" && parsed.marker !== "episode") || parsed.negated) {
@@ -957,26 +1070,35 @@ function parseBodyItems(
   return body;
 }
 
-// Parse the inner text of a `{p t1..tn => e}` exception block (braces
-// already stripped by the tokenizer). See plans/v2-exceptions.md.
+// Parse the inside of a `{p t1..tn => e}` exception block. See
+// plans/v2-exceptions.md.
 function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyItem | ParseError {
-  const { text, line } = tok;
-  const arrow = findTopFatArrow(text);
+  const { toks, line } = tok;
+  // The top-level `=>`, possibly glued to its neighbours (`p=>q`): split
+  // its word.
+  const arrow = findTop(toks, (t) => t.kind === "word" && t.text.includes("=>"), ["(", "{"], [")", "}"]);
   if (arrow < 0) return { line, message: "exception block requires '=>'" };
-  const lhsText = text.slice(0, arrow).trim();
-  const rhsText = text.slice(arrow + 2).trim();
-  if (lhsText.length === 0) return { line, message: "exception LHS is empty" };
-  const c0 = lhsText[0]!;
-  if (c0 === "{") {
+  const word = toks[arrow]!;
+  const at = word.text.indexOf("=>");
+  const piece = (from: number, to: number): Lex[] =>
+    from < to ? [{ ...word, text: word.text.slice(from, to), col: word.col + from, end: word.col + to }] : [];
+  const lhs = [...toks.slice(0, arrow), ...piece(0, at)];
+  const rhs = [...piece(at + 2, word.text.length), ...toks.slice(arrow + 1)];
+  if (lhs.length === 0) return { line, message: "exception LHS is empty" };
+  const first = lhs[0]!;
+  if (isPunct(first, "{")) {
     return { line, message: "exception LHS may not contain an exception" };
   }
-  if (isMarkerChar(c0) || c0 === "=" || c0 === ">") {
+  const c0 = first.text[0]!;
+  if (first.kind === "word" && (isMarkerChar(c0) || c0 === "=" || c0 === ">")) {
     return { line, message: "exception LHS cannot carry a marker" };
   }
-  if (findTopArrow(lhsText) >= 0) {
+  if (hasTopArrow(lhs)) {
     return { line, message: REMOVED_AGG("'-> weight'") };
   }
-  const terms = parseTerms(tokenizeTermText(lhsText), line);
+  const words = termWords(lhs);
+  if (!Array.isArray(words)) return words;
+  const terms = parseTerms(words, line);
   if ("message" in terms) return terms;
   if (terms.length === 0) return { line, message: "exception LHS is empty" };
   const head = terms[0]!;
@@ -986,62 +1108,24 @@ function parseExceptionBlock(tok: Extract<Token, { tag: "exception" }>): BodyIte
   if (head.name.startsWith("*")) {
     return { line, message: `head syms starting with '*' are reserved (got '${head.name}')` };
   }
-  // RHS: same machinery as a normal rule body. Errors and spans from the
-  // fragment carry sub-tokenizer line numbers (always 1 — the block is a
-  // single line) and fragment-relative columns; remap both to the block's
-  // source position. These atoms are spliced verbatim into the generated
-  // exception rule by `applyExceptions`, so an emitting RHS atom reaches an
-  // `Emit` under its own span — the columns must be true source columns.
-  // An empty RHS is allowed: `{p t1..tn =>}` suppresses `p` in this context
-  // (expand skips the exception-case rule).
+  // RHS: same machinery as a normal rule body, on the block's own tokens,
+  // so its spans are true source columns. These atoms are spliced verbatim
+  // into the generated exception rule by `applyExceptions`, so an emitting
+  // RHS atom reaches an `Emit` under its own span. An empty RHS is allowed:
+  // `{p t1..tn =>}` suppresses `p` in this context (expand skips the
+  // exception-case rule).
   let right: BodyItem[] = [];
-  if (rhsText.length > 0) {
-    const rhsToks = tokenize(rhsText);
-    if (!Array.isArray(rhsToks)) return { line, message: rhsToks.message };
-    const pos = { i: 0 };
-    const parsed = parseBodyItems(rhsToks, pos, line, true);
-    if (!Array.isArray(parsed)) return { line, message: parsed.message };
+  if (rhs.length > 0) {
+    const rhsToks: Token[] = [];
+    const err = scanTokens(rhs, rhsToks, () => null);
+    if (err !== null) return err;
+    const parsed = parseBodyItems(rhsToks, { i: 0 }, line, true);
+    if (!Array.isArray(parsed)) return parsed;
     right = parsed;
-    const rhsRaw = text.slice(arrow + 2);
-    const rhsLead = rhsRaw.length - rhsRaw.trimStart().length;
-    remapItemLines(right, line, tok.textStartCol + arrow + 2 + rhsLead);
   }
-  const leftSpan = { line, startCol: tok.textStartCol, endCol: tok.textStartCol + lhsText.length };
+  const leftSpan = { line, startCol: first.col, endCol: lhs[lhs.length - 1]!.end };
   return { kind: "exception", left: { terms }, leftSpan, right, span: { line, startCol: tok.startCol, endCol: tok.endCol } };
 }
-
-// Re-base every span in a fragment parsed from single-line text: stamp
-// `line`, and shift fragment-relative columns to source columns by
-// `colOffset`. Column-less spans (subs, aggcomps) just get the line.
-function remapItemLines(items: BodyItem[], line: number, colOffset: number): void {
-  const remapSpan = (s: Span): void => {
-    s.line = line;
-    if (s.startCol !== undefined) s.startCol += colOffset;
-    if (s.endCol !== undefined) s.endCol += colOffset;
-  };
-  for (const it of items) {
-    if (it.kind === "dot") { it.line = line; continue; }
-    if (it.kind === "sub") { remapSpan(it.span); remapItemLines(it.inner, line, colOffset); continue; }
-    if (it.kind === "exception") { remapSpan(it.span); remapSpan(it.leftSpan); remapItemLines(it.right, line, colOffset); continue; }
-    remapSpan(it.atom.span);
-  }
-}
-
-// Find the index of a top-level (paren- and brace-depth 0) `=>` in `text`,
-// or -1.
-function findTopFatArrow(text: string): number {
-  let depth = 0;
-  for (let i = 0; i < text.length - 1; i++) {
-    const c = text[i]!;
-    if (c === "(" || c === "{") depth++;
-    else if (c === ")" || c === "}") depth--;
-    else if (depth === 0 && c === "=" && text[i + 1] === ">") return i;
-  }
-  return -1;
-}
-
-
-
 
 function describeTerm(t: Term): string {
   if (t.tag === "Symbol") return t.name;
@@ -1343,8 +1427,9 @@ function colonCount(s: string): number {
 // `#acc name : col...` (plans/v2-acc-relations.md §1.1). Each column is a
 // base-type Symbol (a key column), a bare `@op`, or a group `(@op base)`;
 // at most one agg column. Ops come from the acc-ops.ts registry.
-function parseAccDeclText(text: string, line: number): AccDecl | ParseError {
-  const tokens = tokenizeTermText(text);
+function parseAccDecl(argToks: Lex[], line: number): AccDecl | ParseError {
+  const tokens = termWords(argToks);
+  if (!Array.isArray(tokens)) return tokens;
   const relation = tokens[0];
   if (relation === undefined) return { line, message: "'#acc' requires a relation name" };
   if (!isSymToken(relation) || relation.startsWith("@") || relation === ":") {
@@ -1399,12 +1484,13 @@ function parseAccDeclText(text: string, line: number): AccDecl | ParseError {
   return { relation, columns, aggIndex, span: { line } };
 }
 
-function parseEqualText(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
-  if (findTopArrow(text) >= 0) {
+function parseEqual(toks: Lex[], line: number, startCol: number, endCol: number): RuleAtom | ParseError {
+  if (hasTopArrow(toks)) {
     return { line, message: REMOVED_AGG("'-> weight'") };
   }
-  const tokens = tokenizeTermText(text);
-  const terms = parseTerms(tokens, line);
+  const words = termWords(toks);
+  if (!Array.isArray(words)) return words;
+  const terms = parseTerms(words, line);
   if ("message" in terms) return terms;
   if (terms.length !== 2) {
     return { line, message: `'=' atom must have exactly two terms, got ${terms.length}` };
@@ -1412,35 +1498,36 @@ function parseEqualText(text: string, line: number, startCol: number, endCol: nu
   return { tag: "Equal", lhs: terms[0]!, rhs: terms[1]!, span: { line, startCol, endCol } };
 }
 
-function parseAtomText(text: string, marker: Marker, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
+function parseAtom(toks: Lex[], marker: Marker, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   // `!(...)` compound constrain (with optional whitespace before `(`).
   // The body is either `(sub, sub, ...)` for a compound, or a single
   // atom shape. Single-atom `!foo` / `!foo -> Z` is canonicalized into a
   // one-element `subAtoms` list so the IR shape is uniform downstream.
   if (marker === "constrain") {
-    return parseConstrainBody(text, line, startCol, endCol);
+    return parseConstrainBody(toks, line, startCol, endCol);
   }
   // Choice-actor prefix `[actor]` on an ask atom (plans/v2-choice-actors.md):
   // `?[rng] C` — the tokenizer only glues a `[...]` group into the atom text
   // when it immediately follows the `?` marker, so a leading `[` here is
   // always the actor group.
   let actor: Actor | undefined;
-  if (marker === "ask" && text.startsWith("[")) {
-    const close = text.indexOf("]");
+  if (marker === "ask" && isPunct(toks[0], "[")) {
+    const close = toks.findIndex((t) => isPunct(t, "]"));
     if (close < 0) {
       return { line, message: "unterminated '[' after '?'" };
     }
-    const name = text.slice(1, close).trim();
+    const name = toks.slice(1, close).map((t) => t.text).join(" ");
     if (!isActor(name)) {
       return { line, message: `unknown actor '${name}' (expected you|rng)` };
     }
     actor = name;
-    text = text.slice(close + 1).trim();
+    toks = toks.slice(close + 1);
   }
   // A trailing `-> term` weight fed the removed `#agg`/`#reactive`.
-  if (findTopArrow(text) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
-  const tokens = tokenizeTermText(text);
-  const parsedTerms = parseTerms(tokens, line);
+  if (hasTopArrow(toks)) return { line, message: REMOVED_AGG("'-> weight'") };
+  const words = termWords(toks);
+  if (!Array.isArray(words)) return words;
+  const parsedTerms = parseTerms(words, line);
   if ("message" in parsedTerms) return parsedTerms;
   // `not r t̄` (plans/v2-caret-fresh-left.md §3): a negated read. `not` is
   // reserved — only valid as the prefix of an unmarked atom without a weight.
@@ -1501,26 +1588,24 @@ function splitNot(terms: Term[], line: number): { terms: Term[]; negated: boolea
 // Parse a `!` body (text already stripped of the leading `!`). May be:
 //   single atom: `foo X Y` (or `not foo X Y`)
 //   compound:    `(sub, sub, ...)` where each sub is one of the above
-function parseConstrainBody(text: string, line: number, startCol: number, endCol: number): RuleAtom | ParseError {
-  const trimmed = text.trim();
+function parseConstrainBody(toks: Lex[], line: number, startCol: number, endCol: number): RuleAtom | ParseError {
   const subs: SubConstrain[] = [];
-  if (trimmed.startsWith("(")) {
-    if (findTopArrow(trimmed) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
-    if (!trimmed.endsWith(")")) {
+  if (isPunct(toks[0], "(")) {
+    if (hasTopArrow(toks)) return { line, message: REMOVED_AGG("'-> weight'") };
+    if (!isPunct(toks[toks.length - 1], ")")) {
       return { line, message: "'!(...)' block has unbalanced parens" };
     }
-    const inner = trimmed.slice(1, -1);
-    const pieces = splitTopLevelCommas(inner);
-    if (pieces.length === 0 || pieces.every((p) => p.trim().length === 0)) {
+    const pieces = splitTopCommas(toks.slice(1, -1));
+    if (pieces.every((p) => p.length === 0)) {
       return { line, message: "'!(...)' must contain at least one sub-atom" };
     }
     for (const piece of pieces) {
-      const sub = parseConstrainSubAtom(piece.trim(), line);
+      const sub = parseConstrainSubAtom(piece, line);
       if ("message" in sub) return sub;
       subs.push(sub);
     }
   } else {
-    const sub = parseConstrainSubAtom(trimmed, line);
+    const sub = parseConstrainSubAtom(toks, line);
     if ("message" in sub) return sub;
     subs.push(sub);
   }
@@ -1539,18 +1624,21 @@ function parseConstrainBody(text: string, line: number, startCol: number, endCol
 // Parse one sub-atom inside `!(...)` (or the entire body of a
 // single-atom `!`). A plain or `not` atom; no markers, no equality, no
 // nested parens-list.
-function parseConstrainSubAtom(text: string, line: number): SubConstrain | ParseError {
-  if (text.length === 0) return { line, message: "empty sub-atom inside '!(...)'" };
+function parseConstrainSubAtom(toks: Lex[], line: number): SubConstrain | ParseError {
+  if (toks.length === 0) return { line, message: "empty sub-atom inside '!(...)'" };
   // Reject embedded markers / equalities by checking the first char.
-  const m = text[0]!;
-  if (isMarkerChar(m) || m === "=") {
+  const first = toks[0]!;
+  const m = first.text[0]!;
+  if (first.kind === "word" && (isMarkerChar(m) || m === "=")) {
     return { line, message: "sub-atom inside '!(...)' cannot carry a marker or '='" };
   }
-  if (m === "(") {
+  if (isPunct(first, "(")) {
     return { line, message: "sub-atom inside '!(...)' cannot be a parenthesised block" };
   }
-  if (findTopArrow(text) >= 0) return { line, message: REMOVED_AGG("'-> weight'") };
-  const parsedHead = parseTerms(tokenizeTermText(text), line);
+  if (hasTopArrow(toks)) return { line, message: REMOVED_AGG("'-> weight'") };
+  const words = termWords(toks);
+  if (!Array.isArray(words)) return words;
+  const parsedHead = parseTerms(words, line);
   if ("message" in parsedHead) return parsedHead;
   const neg = splitNot(parsedHead, line);
   if ("message" in neg) return neg;
@@ -1567,41 +1655,6 @@ function parseConstrainSubAtom(text: string, line: number): SubConstrain | Parse
 
 
 
-
-// Split `text` on top-level commas (paren-depth 0). Returns the pieces,
-// not stripped.
-function splitTopLevelCommas(text: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "(") depth++;
-    else if (c === ")") depth--;
-    else if (c === "," && depth === 0) {
-      out.push(text.slice(start, i));
-      start = i + 1;
-    }
-  }
-  out.push(text.slice(start));
-  return out;
-}
-
-// Find the index of a top-level (depth 0) `->` in `text`, or -1.
-function findTopArrow(text: string): number {
-  let depth = 0;
-  for (let i = 0; i < text.length - 1; i++) {
-    const c = text[i]!;
-    if (c === "(") depth++;
-    else if (c === ")") depth--;
-    else if (depth === 0 && c === "-" && text[i + 1] === ">") return i;
-  }
-  return -1;
-}
-
-export function tokenizeTermText(text: string): string[] {
-  return text.replace(/\(/g, " ( ").replace(/\)/g, " ) ").trim().split(/\s+/).filter((t) => t.length > 0);
-}
 
 // Canonical token-class predicates. A token's first character decides its
 // class: uppercase or `_`-prefixed → Variable, bare `_` → Wildcard, anything
@@ -1662,6 +1715,10 @@ function parseTerms(tokens: string[], line: number, pos: { i: number } = { i: 0 
         return { line, message: "'@js(...)' must name a function" };
       }
       terms.push({ tag: "Atom", atom: { terms: [{ tag: "Symbol", name: "*js" }, ...inner] } });
+    } else if (tok.startsWith("\"")) {
+      // A string literal (`termWords` keeps it whole): the Symbol named by
+      // its source text.
+      terms.push({ tag: "Symbol", name: tok });
     } else if (tok === "_") {
       terms.push({ tag: "Wildcard" });
     } else if (isVariableToken(tok)) {

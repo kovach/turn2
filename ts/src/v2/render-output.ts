@@ -264,7 +264,7 @@ function renderMomentInspector(
   const state = snap.resolved
     ? "resolved"
     : snap.settled ? "settled, a choice is pending here"
-    : tok === store.topTok ? "top is never resolved" : "not reached: acc relations are not computed here yet";
+    : tok === store.topTok ? "not reached: top settles once every other moment resolves" : "not reached: acc relations are not computed here yet";
   const title = document.createElement("span");
   title.textContent = `moment ${name} · ${state}`;
   const close = document.createElement("button");

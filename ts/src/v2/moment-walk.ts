@@ -64,20 +64,23 @@ export interface MomentHandler {
   settle?(store: Store, m: Term): boolean;
 }
 
-// Tokens of every moment the store has seen (`momentTerms`) except `top`
-// and the already-resolved ones. `bot` is a moment: rule-initial `^` emits
-// live at `(bot, top)` and a rule-initial read samples there.
+// Tokens of every moment the store has seen (`momentTerms`) except the
+// already-resolved ones. `bot` is a moment: rule-initial `^` emits live at
+// `(bot, top)` and a rule-initial read samples there. So is `top`, the end
+// of the run: it settles last, which fixes its acc snapshot (the state the
+// facts reach) like any other moment's.
 export function unresolvedMoments(store: Store): number[] {
   const out: number[] = [];
   for (const tok of store.momentTerms.keys()) {
-    if (tok === store.topTok) continue;
     if (store.resolved.has(tok)) continue;
     out.push(tok);
   }
   return out;
 }
 
-// Minimal elements of the unresolved set. Under the down-set invariant a
+// Minimal elements of the unresolved set. `top` is above every other
+// moment through implicit edges, so it is minimal exactly when it is the
+// only unresolved moment. Under the down-set invariant a
 // moment is minimal iff all of its immediate predecessors (asserted edges
 // in `orderBwd`, plus the implicit `bot` for every non-bot moment) are
 // resolved: if some unresolved `u < m` existed, the edge path `u → … → p →
@@ -97,6 +100,8 @@ export function unresolvedMoments(store: Store): number[] {
 // the other, so a cycle resolves as a unit. Quadratic, but only on that
 // path.
 export function frontier(store: Store, unresolved: readonly number[]): number[] {
+  if (unresolved.length === 1 && unresolved[0] === store.topTok) return [store.topTok];
+  unresolved = unresolved.filter((tok) => tok !== store.topTok);
   const out: number[] = [];
   const botResolved = store.resolved.has(store.botTok);
   for (const tok of unresolved) {

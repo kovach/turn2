@@ -76,3 +76,23 @@ export const ref = (id: number): Term => ({ tag: "Ref", id });
 export const atom = (terms: Term[]): Atom => ({ terms });
 export const idTerm = (a: Atom): Term => ({ tag: "Id", atom: a });
 export const isId = (t: Term): t is { tag: "Id"; atom: Atom } => t.tag === "Id";
+
+// String literals (plans/v2-strings-icon-css.md) are Symbols whose name is
+// the literal's source text, quotes included: `"a b"`. Escapes are `\"` and
+// `\\`, so the source spelling is canonical and the name round-trips as is.
+export function isStringName(name: string): boolean {
+  return name.length >= 2 && name[0] === "\"" && name[name.length - 1] === "\"";
+}
+
+// The value of a string literal term, or null for anything else.
+export function stringValue(t: Term): string | null {
+  if (t.tag !== "Symbol" || !isStringName(t.name)) return null;
+  return t.name.slice(1, -1).replace(/\\(["\\])/g, "$1");
+}
+
+// The literal (Symbol name) for a string value.
+export function quoteString(s: string): string {
+  return `"${s.replace(/[\\"]/g, (c) => "\\" + c)}"`;
+}
+
+export const str = (s: string): Term => ({ tag: "Symbol", name: quoteString(s) });

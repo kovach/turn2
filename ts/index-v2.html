@@ -212,13 +212,15 @@
           <p>Used unless the program starts with a <code>-- display: &lt;file&gt;</code> line. Assert these relations to draw icons.</p>
           <dl>
             <dt>icon T</dt><dd>Draw a box for the term <code>T</code>.</dd>
-            <dt>icon:name T N</dt><dd>Label icon <code>T</code> with <code>N</code> instead of <code>T</code> itself.</dd>
+            <dt>icon:name T N</dt><dd>Label icon <code>T</code> with <code>N</code> instead of <code>T</code> itself (a string shows its text). The choice strip uses the same labels.</dd>
+            <dt>icon:css T S</dt><dd>Inline CSS for icon <code>T</code>, e.g. <code>"width: 60px; color: var(--err)"</code>.</dd>
             <dt>at X L</dt><dd>Nest icon <code>X</code> inside icon <code>L</code>. Both must be icons. An icon with several <code>at</code> parents appears in each one, and a cycle of <code>at</code>s is dropped with a warning. With <code>#agg at * -&gt; last</code>, only the latest location counts.</dd>
             <dt>left:right A B</dt><dd>Put <code>A</code> in a column left of <code>B</code>. Both must share a parent (top-level icons count).</dd>
             <dt>above:below A B</dt><dd>Put <code>A</code> in a row above <code>B</code>. Both must share a parent (top-level icons count).</dd>
           </dl>
           <h3>When rows show</h3>
           <p>A row counts only if its interval contains the moment being viewed: the selected choice while one is pending, otherwise the end of the program. Use <code>^</code> or <code>~</code> for things that change over time, and <code>+</code> for things that last.</p>
+          <p>Any of these may be an <code>#acc</code> relation (e.g. <code>#acc icon:css : e (@last css)</code>); the display computes it at the moment shown. Hover an icon for its rows; right-click for the rules behind them.</p>
           <h3>Choices</h3>
           <p>While a choice is pending, the strip above the display lists each choice with its possible values; click a value to pick it. Clicking a row selects that choice, and the display is drawn at the moment it was asked. Clicking an icon whose term is a valid option for the selected choice also picks it. If it fits more than one slot, the icon turns dashed. Then click the slot you mean in the strip.</p>
           <h3>Example</h3>

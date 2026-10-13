@@ -5,9 +5,15 @@
 // Layout: one icon div per `icon T` row, nested under its parent(s) per
 // `at X -> L` rows. Both `icon` and `at` are restricted to rows whose
 // interval contains the selected component's choice-component moment M.
+// A display relation declared `#acc` is computed at M for the display
+// (`ctx.accAt`), so it shows whether or not the run itself read it there.
 // Within a container, `left:right A B` / `above:below A B` rows arrange the
 // sibling icons on a grid (see icon-layout.ts); a container with no such
 // constraints renders as a plain wrapping row, as it always has.
+// `icon:name I N` labels icon I (a string shows its value) and `icon:css I S`
+// is inline CSS for its element (plans/v2-strings-icon-css.md). Every icon is
+// a display-kit entity: hover shows its display rows, right-click leads to
+// the rules behind them.
 //
 // Interaction: the host (web-v2.ts) owns the choices strip above the
 // display and passes its state in: `ctx.selectedIdx` names the selected
@@ -24,7 +30,8 @@
 import type { Atom, Term } from "./term.js";
 import type { Store } from "./store.js";
 import type { ComponentOptions } from "./types.js";
-import { candidatesByHead, intervalContains, tokenOf } from "./store.js";
+import { tokenOf } from "./store.js";
+import { displayRows, displayText, iconNames, iconStyles, rowsAbout, type AccAt, type RowsAt } from "./display-rows.js";
 import { isTrivialLayout, layoutIcons, type LayoutEdge } from "./icon-layout.js";
 
 interface ClickIntent {
@@ -39,8 +46,7 @@ interface DisplayApi {
   tokensEq: (a: Term, b: Term, store: Store) => boolean;
   commit: (intent: ClickIntent) => void;
   setPending: (term: Term | null) => void;
-  // Tooltips and context menus for entities (display-kit.ts); display
-  // modules use it, the default display doesn't yet.
+  // Tooltips and context menus for entities (display-kit.ts).
   kit?: import("./display-kit.js").DisplayKit;
 }
 
@@ -48,6 +54,8 @@ interface DisplayCallContext {
   components: ComponentOptions[];
   selectedIdx: number;
   pending: Term | null;
+  // The run's `FixpointResult.accAt`: acc rows at a settled moment or `top`.
+  accAt?: AccAt | undefined;
 }
 
 interface DisplayModule {
@@ -76,6 +84,7 @@ interface IconNode {
   term: Term;
   termKey: number;
   label: string;
+  style: string | undefined; // `icon:css`
   parents: number[];       // termKeys of parents (or [] for top-level)
 }
 
@@ -105,6 +114,8 @@ interface LayoutWarnings {
 interface LayoutCtx {
   byContainer: Map<number, Constraints>;
   warn: LayoutWarnings;
+  // The display rows at the moment, for each icon's kit tooltip.
+  rowsAt: RowsAt;
 }
 
 export function createDefaultDisplay(api: DisplayApi): DisplayModule {
@@ -112,46 +123,30 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
   // The moment at which to interpret `icon` / `at` rows. While choices are
   // active, this is the selected component's choice-component moment.
-  // After all choices are made (no active components), pass `store.top` —
-  // it contains every interval, so the filter is effectively "everything
-  // visible at the end of the program".
+  // After all choices are made (no active components), pass `store.top`:
+  // the stored rows still alive at the end of the program, and acc rows
+  // at `top`, which settles last like any other moment.
   function renderMoment(ctx: DisplayCallContext, store: Store): Term {
     const c = ctx.components[ctx.selectedIdx];
     return c ? c.moment : store.top;
   }
 
-  // Collect `icon:name I N` rows whose interval contains M, indexed by
-  // tokenOf(I). Last writer wins on collision.
-  function collectIconNames(store: Store, M: Term): Map<number, string> {
-    const names = new Map<number, string>();
-    for (const idx of candidatesByHead(store, "icon:name")) {
-      const t = store.tuples[idx]!;
-      const ts = t.atom.terms;
-      // [head, I, N, id]
-      if (ts.length !== 4) continue;
-      if (!intervalContains(store, t.l, t.r, M, M)) continue;
-      names.set(tokenOf(store, ts[1]!), api.renderTerm(store, ts[2]!));
-    }
-    return names;
-  }
-
-  // Collect `icon T` rows whose interval contains M. Dedup by term token.
-  function collectIcons(store: Store, M: Term, names: Map<number, string>): IconNode[] {
+  // Collect `icon T` rows at M. Dedup by term token.
+  function collectIcons(store: Store, rowsAt: RowsAt): IconNode[] {
+    const names = iconNames(store, rowsAt);
+    const styles = iconStyles(store, rowsAt);
     const seen = new Map<number, IconNode>();
     const order: IconNode[] = [];
-    for (const idx of candidatesByHead(store, "icon")) {
-      const t = store.tuples[idx]!;
-      const ts = t.atom.terms;
-      // [head, T, id]
-      if (ts.length !== 3) continue;
-      if (!intervalContains(store, t.l, t.r, M, M)) continue;
-      const term = ts[1]!;
+    for (const { terms: ts } of rowsAt("icon")) {
+      if (ts.length !== 1) continue;
+      const term = ts[0]!;
       const key = tokenOf(store, term);
       if (seen.has(key)) continue;
       const node: IconNode = {
         term,
         termKey: key,
-        label: names.get(key) ?? api.renderTerm(store, term),
+        label: names.get(key) ?? displayText(store, term),
+        style: styles.get(key),
         parents: [],
       };
       seen.set(key, node);
@@ -162,7 +157,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
 
   function collectAt(
     store: Store,
-    M: Term,
+    rowsAt: RowsAt,
     iconKeys: Set<number>,
   ): { childToParents: Map<number, number[]>; orphans: Term[] } {
     const childToParents = new Map<number, number[]>();
@@ -178,38 +173,30 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       if (!arr.includes(lk)) arr.push(lk);
     }
 
-    // `at X L` rows alive at M: plain tuples, or the point rows of an
+    // `at X L` rows at M: plain tuples, or the rows of an
     // `#acc at : e (@last loc)` relation (one per temporally latest move).
-    for (const idx of candidatesByHead(store, "at")) {
-      const t = store.tuples[idx]!;
-      const ts = t.atom.terms;
-      // [head, X, L, id]
-      if (ts.length !== 4) continue;
-      if (!intervalContains(store, t.l, t.r, M, M)) continue;
-      record(ts[1]!, ts[2]!);
+    for (const { terms: ts } of rowsAt("at")) {
+      if (ts.length !== 2) continue;
+      record(ts[0]!, ts[1]!);
     }
     return { childToParents, orphans };
   }
 
-  // Collect `left:right A B` / `above:below A B` rows whose interval contains
-  // M and whose endpoints are both icons. Non-icon endpoints are dropped here;
-  // sibling scoping happens in `scopeConstraints`.
+  // Collect `left:right A B` / `above:below A B` rows at M whose endpoints
+  // are both icons. Non-icon endpoints are dropped here; sibling scoping
+  // happens in `scopeConstraints`.
   function collectConstraints(
     store: Store,
-    M: Term,
+    rowsAt: RowsAt,
     iconKeys: Set<number>,
   ): { cons: Constraints; dropped: number } {
     let dropped = 0;
     function collect(head: string): LayoutEdge[] {
       const out: LayoutEdge[] = [];
-      for (const idx of candidatesByHead(store, head)) {
-        const t = store.tuples[idx]!;
-        const ts = t.atom.terms;
-        // [head, A, B, id]
-        if (ts.length !== 4) continue;
-        if (!intervalContains(store, t.l, t.r, M, M)) continue;
-        const from = tokenOf(store, ts[1]!);
-        const to = tokenOf(store, ts[2]!);
+      for (const { terms: ts } of rowsAt(head)) {
+        if (ts.length !== 2) continue;
+        const from = tokenOf(store, ts[0]!);
+        const to = tokenOf(store, ts[1]!);
         if (!iconKeys.has(from) || !iconKeys.has(to)) { dropped++; continue; }
         out.push({ from, to });
       }
@@ -422,6 +409,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
   ): HTMLElement {
     const el = document.createElement("div");
     el.className = "dd-icon";
+    if (icon.style !== undefined) el.style.cssText += icon.style;
 
     const label = document.createElement("div");
     label.textContent = icon.label;
@@ -436,6 +424,10 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       el.classList.add("dd-icon-container");
     }
 
+    let choice: ClickIntent | undefined;
+    const notes: string[] = [];
+    const termText = api.renderTerm(store, icon.term);
+    if (termText !== icon.label) notes.push(termText);
     if (comp !== null) {
       const cands = candidatesFor(icon.term, comp, store);
       const isPending = pending !== null && api.tokensEq(pending, icon.term, store);
@@ -444,6 +436,8 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       } else if (cands.length === 1) {
         el.classList.add("clickable");
         const slot = cands[0]!;
+        choice = commitSlot(comp, slot, icon.term, store) ?? undefined;
+        notes.push("click: choose it");
         attachHotHandlers(el);
         el.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -453,6 +447,7 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
       } else {
         el.classList.add("ambiguous");
         if (isPending) el.classList.add("pending");
+        notes.push("fits several slots: click, then pick one in the strip");
         attachHotHandlers(el);
         el.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -460,6 +455,16 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
         });
       }
     }
+    // Hover: the icon's display rows; right-click: the rules behind them.
+    // Built lazily, when the tooltip or menu opens.
+    const rowsAt = lay.rowsAt;
+    api.kit?.entity(el, () => ({
+      label: icon.label,
+      rows: rowsAbout(store, rowsAt, icon.term),
+      ...(choice !== undefined ? { choice } : {}),
+      notes,
+    }));
+    if (choice !== undefined) el.classList.add("kit-choice");
     return el;
   }
 
@@ -469,20 +474,20 @@ export function createDefaultDisplay(api: DisplayApi): DisplayModule {
     ctx: DisplayCallContext,
   ): void {
     container.innerHTML = "";
-    const M = renderMoment(ctx, store);
-    const names = collectIconNames(store, M);
-    const icons = collectIcons(store, M, names);
+    const rowsAt = displayRows(store, renderMoment(ctx, store), ctx.accAt);
+    const icons = collectIcons(store, rowsAt);
     const iconKeys = new Set(icons.map((i) => i.termKey));
-    const { childToParents, orphans } = collectAt(store, M, iconKeys);
+    const { childToParents, orphans } = collectAt(store, rowsAt, iconKeys);
     const { roots, childrenOf, cycleWarning } = buildIconTree(icons, childToParents);
 
     const containers = new Map<number, IconNode[]>([[ROOT_KEY, roots]]);
     for (const [pk, kids] of childrenOf) containers.set(pk, kids);
-    const { cons, dropped } = collectConstraints(store, M, iconKeys);
+    const { cons, dropped } = collectConstraints(store, rowsAt, iconKeys);
     const scoped = scopeConstraints(containers, cons);
     const lay: LayoutCtx = {
       byContainer: scoped.byContainer,
       warn: { hCycle: false, vCycle: false },
+      rowsAt,
     };
 
     const comp = ctx.components[ctx.selectedIdx] ?? null;

@@ -14,6 +14,7 @@
 //   p   other punctuation           ,  (  )  =
 //   ag  aggregation op              @sum @last ...
 //   n   number                      3  -7
+//   str string literal              "a b"
 //   v   variable                    Cap  _
 //   b   builtin                     lt gt le ge is
 //   r   relation (head of an atom)
@@ -21,7 +22,7 @@
 //   js  javascript body of #js / #js-def
 
 export type HlClass =
-  | "c" | "d" | "sl" | "sa" | "sq" | "ex" | "op" | "p" | "ag" | "n" | "v" | "b" | "r" | "s" | "js";
+  | "c" | "d" | "sl" | "sa" | "sq" | "ex" | "op" | "p" | "ag" | "n" | "str" | "v" | "b" | "r" | "s" | "js";
 
 export interface HlToken {
   cls: HlClass;
@@ -36,6 +37,7 @@ const BUILTINS = new Set(["lt", "gt", "le", "ge", "is"]);
 const TOKEN = new RegExp(
   [
     String.raw`(?<ws>\s+)`,
+    String.raw`(?<str>"(?:[^"\\]|\\.)*"?)`,
     String.raw`(?<c>--.*$)`,
     String.raw`(?<d>#[a-z][\w-]*)`,
     String.raw`(?<ask>\?\[[a-z]+\])`,
@@ -104,7 +106,7 @@ export function highlightLine(line: string, state: HlState): HlToken[] {
         prev = text;
         continue;
       default:
-        push(kind === "d" || kind === "ag" || kind === "n" || kind === "v" ? kind : "p");
+        push(kind === "d" || kind === "ag" || kind === "n" || kind === "str" || kind === "v" ? kind : "p");
         prev = kind === "d" ? "sigil" : kind;
     }
   }

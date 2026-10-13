@@ -488,6 +488,24 @@ compare a `@count` (which is Peano), match its shape instead:
 a `#js-def`, `#js` or `#acc` of that name is rejected (and so is `not`). For
 anything beyond comparison (adding, ranges), see the next section.
 
+## Strings
+
+A string literal is a term written in double quotes, with `\"` and `\\` as
+its only escapes:
+
+```
+setup, +icon:css board "gap: 4px; border: 1px solid gray"
+setup, +greeting "say \"hi\""
+```
+
+Inside the quotes nothing is syntax: `,`, `.`, `(`, `;` and `--` are just
+characters. A string is a constant like any symbol — it matches, joins and
+binds variables by equality, and it prints back exactly as written — but
+`"a"` and `a` are different terms. A string must be a term of its own
+(`foo"bar"` is an error) and must close on its line. In `#js`, a string
+arrives as a JS string; a JS string comes back as a plain symbol when it is
+one (`"x"` → `x`), otherwise as a string literal.
+
 ## Escaping to JavaScript
 
 Two escape hatches. `#js` defines a term-level function, called with `@js(...)`

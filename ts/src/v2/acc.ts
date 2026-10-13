@@ -264,21 +264,25 @@ export function computeAccAt(
   return rows;
 }
 
-// For inspection (the web moment inspector): every relation's rows at the
-// settled moment `tok`, computed from its watermark — what eager mode would
-// have written there — without writing anything or adding demand.
-// Undefined when `tok` has not settled.
+// For inspection (the web moment inspector) and displays: the relations'
+// rows at the settled moment `tok`, computed from its watermark — what eager
+// mode would have written there — without writing anything or adding
+// demand. `only` limits the work to those relations and what they read
+// (the result may hold more); omitted, every relation. Undefined when `tok`
+// has not settled (`top` settles last, once every other moment resolved).
 export function accRowsAt(
   store: Store,
   compiled: CompiledAcc,
   jsFuncs: Map<string, CompiledJs>,
   jsRels: Map<string, CompiledJsRel[]>,
   tok: number,
+  only?: Iterable<string>,
 ): Map<string, AccRow[]> | undefined {
   const bound = store.accWatermark.get(tok);
   const m = store.momentTerms.get(tok);
   if (bound === undefined || m === undefined) return undefined;
-  return computeAccAt(store, compiled, m, jsFuncs, jsRels, bound);
+  const rels = only === undefined ? undefined : accClosure(compiled, [...only].filter((r) => compiled.decls.has(r)));
+  return computeAccAt(store, compiled, m, jsFuncs, jsRels, bound, rels);
 }
 
 // ρ(⊕ᵢ η(cᵢ)) per key group (§2.2). Generic over the op registry; no

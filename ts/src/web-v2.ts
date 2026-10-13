@@ -16,6 +16,7 @@ import { tokenOf, type Store } from "./v2/store.js";
 import type { ComponentOptions, Rule } from "./v2/types.js";
 import type { AccRow } from "./v2/eval.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
+import { displayRows, iconNames } from "./v2/display-rows.js";
 import { TestPanel } from "./v2/test-panel.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
@@ -33,6 +34,9 @@ interface DisplayCallContext {
   // parked for the user to place in a slot.
   selectedIdx: number;
   pending: Term | null;
+  // The run's acc rows at a settled moment or `top` (FixpointResult.accAt),
+  // so a display can read an `#acc` relation the run never read there.
+  accAt?: ((tok: number, relations?: readonly string[]) => Map<string, AccRow[]> | undefined) | undefined;
 }
 
 interface DisplayApi {
@@ -408,6 +412,7 @@ interface View {
   store: Store;
   components: ComponentOptions[];
   display: DisplayModule | null;
+  accAt: DisplayCallContext["accAt"];
 }
 let view: View | null = null;
 
@@ -484,6 +489,9 @@ function renderChoices(v: View | null): void {
     if (isSelected) row.classList.add("selected", isSingleton ? "singleton" : "multi");
     row.title = `asked at ${renderTermShallow(store, comp.moment)}`;
     row.appendChild(span("choice-rules", ruleNamesOf(comp, store)));
+    // Option values show their `icon:name` at the component's moment, as
+    // the default display labels them (v2/display-rows.ts).
+    const names = iconNames(store, displayRows(store, comp.moment, v.accAt));
     for (let j = 0; j < comp.activeTerms.length; j++) {
       const term = comp.activeTerms[j]!;
       const slot = span("choice-slot", "");
@@ -508,7 +516,9 @@ function renderChoices(v: View | null): void {
         });
       }
       for (const val of values) {
-        const opt = span("choice-opt", renderTerm(store, val));
+        const named = names.get(tokenOf(store, val));
+        const opt = span("choice-opt", named ?? renderTerm(store, val));
+        if (named !== undefined) opt.title = renderTerm(store, val);
         opt.addEventListener("click", (ev) => {
           ev.stopPropagation();
           handleClick({ activeTerms: [term], optionTuple: [val] });
@@ -549,6 +559,7 @@ function renderDisplay(v: View): void {
     components: v.components,
     selectedIdx: choiceState.selectedIdx,
     pending: choiceState.pending,
+    accAt: v.accAt,
   };
   try {
     const out = v.display.render(v.store, ctx);
@@ -899,6 +910,7 @@ async function run(): Promise<void> {
     store,
     components: status.kind === "active-choices" ? status.components : [],
     display,
+    accAt: result.accAt,
   };
   renderView();
 }

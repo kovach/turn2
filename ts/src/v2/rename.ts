@@ -7,7 +7,9 @@
 // (the parser rewrites dots, macros and exceptions, and bracket aggregates
 // lose their line breaks). The lexing mirrors `tokenize` (parse.ts) as far as
 // renaming needs:
-//   - `--` starts a comment to the end of the line.
+//   - `--` starts a comment to the end of the line, outside a string.
+//   - A string literal `"..."` (escapes `\"`, `\\`) is opaque: nothing in it
+//     is an identifier.
 //   - An identifier is a maximal run of non-separator chars (separators:
 //     whitespace and `( ) , . ; [ ] { } |`) with any leading marker chars
 //     (`+ ~ ^ ! ?`, and `-` unless a digit follows) stripped. Runs that are
@@ -103,8 +105,7 @@ function scanBlocks(text: string): Block[] {
     const lineStart = pos;
     const lineEnd = pos + line.length;
     pos = lineEnd + 1;
-    const c = line.indexOf("--");
-    const code = c >= 0 ? line.slice(0, c) : line;
+    const { code, strings } = lexLine(line);
     if (code.trim() === "") {
       if (cur !== null) cur.end = lineEnd;
       continue;
@@ -126,17 +127,41 @@ function scanBlocks(text: string): Block[] {
     }
     cur!.end = lineEnd;
     if (cur!.js) continue;
-    for (const ch of code) {
-      if (ch === "[") bracketDepth++;
-      else if (ch === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+    for (let i = 0; i < code.length; i++) {
+      if (strings.some(([a, b]) => i >= a && i < b)) continue;
+      if (code[i] === "[") bracketDepth++;
+      else if (code[i] === "]") bracketDepth = Math.max(0, bracketDepth - 1);
     }
     let from = lineStart;
     // `#def NAME`: the rule name is not a relation.
     const def = /^\s*#def\s+(\S+)/.exec(code);
     if (def !== null) from = lineStart + def[0].length;
+    // Identifiers in the gaps between string literals.
+    for (const [a, b] of strings) {
+      if (lineStart + a > from) scanIdents(text, from, lineStart + a, cur!.idents);
+      from = Math.max(from, lineStart + b);
+    }
     scanIdents(text, from, lineStart + code.length, cur!.idents);
   }
   return blocks;
+}
+
+// A line's code (before a `--` comment that is not inside a string) and the
+// [start, end) offsets of its string literals. An unterminated string runs
+// to the end of the line.
+function lexLine(line: string): { code: string; strings: [number, number][] } {
+  const strings: [number, number][] = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === "-" && line[i + 1] === "-") break;
+    if (line[i] !== "\"") { i++; continue; }
+    let j = i + 1;
+    while (j < line.length && line[j] !== "\"") j += line[j] === "\\" ? 2 : 1;
+    const end = Math.min(j + 1, line.length);
+    strings.push([i, end]);
+    i = end;
+  }
+  return { code: line.slice(0, i), strings };
 }
 
 // The identifier at offset `pos` (inside it, or with the caret just past its

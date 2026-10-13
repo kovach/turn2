@@ -8,7 +8,7 @@
 import type { Term } from "./term.js";
 import type { Program, Rule, RuleAtom } from "./types.js";
 import { exprTerms } from "./types.js";
-import { isSymbolToken, isVariableToken, parse, tokenize, tokenizeTermText } from "./parse.js";
+import { isSymbolToken, isVariableToken, parse, tokenize } from "./parse.js";
 
 // --- candidate ranking ------------------------------------------------------
 
@@ -77,11 +77,12 @@ export function collectProgramSymbols(text: string): Set<string> {
   const toks = tokenize(text);
   if (Array.isArray(toks)) {
     for (const t of toks) {
+      // Words only: string literals and punctuation are their own tokens.
       if (t.tag === "atom" || t.tag === "equal") {
-        for (const w of tokenizeTermText(t.text)) add(w);
+        for (const w of t.toks) if (w.kind === "word") add(w.text);
       } else if (t.tag === "command" && t.name === "acc") {
-        const head = tokenizeTermText(t.argText)[0];
-        if (head !== undefined) add(head);
+        const head = t.argToks[0];
+        if (head !== undefined && head.kind === "word") add(head.text);
       }
     }
   } else {

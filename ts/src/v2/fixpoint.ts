@@ -41,10 +41,11 @@ export interface FixpointResult {
   // (plans/v2-choice-actors.md). The harness persists these as `^ is` rows
   // so a roll happens exactly once. Empty when nothing was rolled.
   rngCommits: RngCommit[];
-  // Every acc relation's rows at a settled moment, computed on the spot for
-  // inspection (acc.ts `accRowsAt`; nothing is written). Set by
-  // `runFixpoint` when the program declares acc relations.
-  accAt?: (tok: number) => Map<string, AccRow[]> | undefined;
+  // Acc relations' rows at a settled moment (or `top`, the end of the run),
+  // computed on the spot for inspection and displays (acc.ts `accRowsAt`;
+  // nothing is written): every relation, or just `relations` and what they
+  // read. Set by `runFixpoint` when the program declares acc relations.
+  accAt?: (tok: number, relations?: readonly string[]) => Map<string, AccRow[]> | undefined;
 }
 
 export function runFixpoint(
@@ -130,11 +131,12 @@ export function runFixpoint(
   }
   expanded.rules = rules;
   const compiledAcc = compileAcc(expanded);
-  const accAtMemo = new Map<number, Map<string, AccRow[]> | undefined>();
+  const accAtMemo = new Map<string, Map<string, AccRow[]> | undefined>();
   const accAt = compiledAcc.decls.size === 0 ? {} : {
-    accAt: (tok: number): Map<string, AccRow[]> | undefined => {
-      if (!accAtMemo.has(tok)) accAtMemo.set(tok, accRowsAt(store, compiledAcc, jsFuncs, jsRelFuncs, tok));
-      return accAtMemo.get(tok);
+    accAt: (tok: number, relations?: readonly string[]): Map<string, AccRow[]> | undefined => {
+      const key = relations === undefined ? `${tok}` : `${tok}:${[...relations].sort().join(" ")}`;
+      if (!accAtMemo.has(key)) accAtMemo.set(key, accRowsAt(store, compiledAcc, jsFuncs, jsRelFuncs, tok, relations));
+      return accAtMemo.get(key);
     },
   };
   // The non-monotone part, as moment handlers (plans/v2-moment-walk.md).

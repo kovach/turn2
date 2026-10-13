@@ -20,7 +20,8 @@ export interface ClickIntent {
 }
 
 // A store row as a display reads it: `terms` without the head and the
-// trailing id slot.
+// trailing id slot. `idx` is -1 for a row computed for the display (an
+// `#acc` relation at a moment, display-rows.ts) rather than stored.
 export interface KitRow {
   idx: number;
   head: string;
@@ -209,8 +210,12 @@ export function createDisplayKit(host: KitHost): DisplayKit {
     if (heads.length > 0) {
       if (byLine.size > 0) sep();
       for (const h of heads) item(`Rules using ${h}`, () => host.showRules(h));
-      sep();
-      item("Show in timeline", () => host.showTuples(rows.map((r) => r.idx)));
+      // Rows computed for the display (`#acc`, idx -1) are in no tuple.
+      const stored = rows.map((r) => r.idx).filter((i) => i >= 0);
+      if (stored.length > 0) {
+        sep();
+        item("Show in timeline", () => host.showTuples(stored));
+      }
     }
     if (menu.lastElementChild?.className === "kit-menu-sep") menu.lastElementChild.remove();
     document.body.append(menu);
