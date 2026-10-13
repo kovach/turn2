@@ -199,6 +199,9 @@ export class Editor {
     if (opts.syntaxHighlight) this.initHighlight();
 
     if (opts.autoGrow) {
+      // A textarea's default `rows` is 2, which floors the auto height at
+      // two lines; fitHeight sizes it to the content instead.
+      this.ta.rows = 1;
       this.ta.style.overflowY = "hidden";
       this.ta.style.resize = "none";
       queueMicrotask(() => this.fitHeight());
@@ -572,6 +575,11 @@ export class Editor {
   private fitHeight(): void {
     this.ta.style.height = "auto";
     this.ta.style.height = this.ta.scrollHeight + "px";
+    // A horizontal scrollbar (a line wider than the box) takes its height
+    // out of the content area; add it back so the last line stays visible.
+    const cs = getComputedStyle(this.ta);
+    const bar = this.ta.offsetHeight - this.ta.clientHeight - parseFloat(cs.borderTopWidth) - parseFloat(cs.borderBottomWidth);
+    if (bar > 0) this.ta.style.height = this.ta.scrollHeight + bar + "px";
     this.gutterEl.style.height = this.ta.style.height;
     this.layoutHighlight();
   }

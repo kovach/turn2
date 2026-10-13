@@ -9,7 +9,7 @@ import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/prin
 import { renderTuples, renderTimelineH, timelineCollapseKey, momentKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
 import { attachSourceLink } from "./v2/source-link.js";
-import { RuleBrowser, relationAt } from "./v2/rule-browser.js";
+import { RuleBrowser, relationAt, type RuleBrowserState } from "./v2/rule-browser.js";
 import { createDisplayKit, type DisplayKit } from "./v2/display-kit.js";
 import type { Atom, Term } from "./v2/term.js";
 import { tokenOf, type Store } from "./v2/store.js";
@@ -346,15 +346,19 @@ function setStatus(text: string, isError: boolean): void {
   // The line truncates long errors; the full text is on hover.
   statusEl.title = text;
   statusEl.classList.toggle("error", isError);
-  statusEl.classList.remove("dirty");
+  updateStale();
 }
 
-// Edits don't re-run the program; Ctrl+Enter does (runNow). Until then the
-// status line says the result is for an older text.
+// Edits don't re-run the program; Ctrl+Enter does (runNow). While the text
+// differs from the one last run, `body.stale` puts color bars on the panes
+// and the status line says so; undoing back to that text clears it.
 let statusText = "";
-function markDirty(): void {
-  statusEl.textContent = `${statusText} · edited, Ctrl+Enter to run`;
-  statusEl.classList.add("dirty");
+let lastRunText: string | null = null;
+function updateStale(): void {
+  const stale = lastRunText !== null && sourceEl.value !== lastRunText;
+  document.body.classList.toggle("stale", stale);
+  statusEl.classList.toggle("dirty", stale);
+  statusEl.textContent = stale ? `${statusText} · edited, Ctrl+Enter to run` : statusText;
 }
 
 function saveMarker(): string {
@@ -729,8 +733,8 @@ dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
 // shared-binding lines plus one `^ is <term> <value>` row each, appended at
 // the end of the textarea. Shared by user clicks (handleClick) and rng-roll
 // persistence (plans/v2-choice-actors.md).
-// Set while the page edits the source itself (appendIsRows): that edit
-// re-runs at once, unlike the user's own.
+// Set while the page edits the source itself (appendIsRows), which runs the
+// program itself, unlike the user's own edits.
 let programmaticEdit = false;
 
 function appendIsRows(activeTerms: Term[], values: Term[]): void {
@@ -743,18 +747,21 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
   const lines = [...bindings, ...isLines];
   // One rule: continuation lines are indented (offside rule).
   const text = "\n\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n");
-  // Append to the textarea via execCommand so the existing "input" listener
-  // fires and triggers the debounced run + PUT.
+  // Append to the textarea via execCommand so the edit lands on its undo
+  // history and the "input" listener saves it (PUT / playground URL).
   const prevStart = sourceEl.selectionStart;
   const prevEnd = sourceEl.selectionEnd;
   sourceEl.focus();
   sourceEl.setSelectionRange(sourceEl.value.length, sourceEl.value.length);
   const before = sourceEl.value;
   programmaticEdit = true;
-  document.execCommand("insertText", false, text);
+  // Only into the source: if it couldn't take focus (the Rules view hides
+  // it), execCommand would type into whatever has focus instead.
+  if (document.activeElement === sourceEl) document.execCommand("insertText", false, text);
   // execCommand needs an editable, focused textarea; when the editor pane is
-  // collapsed (or the page lacks focus) it does nothing, so append directly
-  // and fire the same "input" listener (this path skips the undo history).
+  // collapsed or hidden (or the page lacks focus) it does nothing, so append
+  // directly and fire the same "input" listener (this path skips the undo
+  // history).
   if (sourceEl.value === before) {
     sourceEl.value = before + text;
     sourceEl.dispatchEvent(new Event("input"));
@@ -763,6 +770,10 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
   // Restore the caret to where it was; the insert was at the end, so the
   // original offsets are unaffected.
   sourceEl.setSelectionRange(prevStart, prevEnd);
+  // Run here rather than from the input listener, whose event need not
+  // arrive while `programmaticEdit` is set; every GUI's choice, the choices
+  // strip and rng rolls all come through here.
+  scheduleRun();
 }
 
 function handleClick(intent: ClickIntent): void {
@@ -776,6 +787,7 @@ function handleClick(intent: ClickIntent): void {
 
 async function run(): Promise<void> {
   const userSource = sourceEl.value;
+  lastRunText = userSource;
   const parsed = parse(userSource);
   if ("message" in parsed) {
     const msg = `parse error line ${parsed.line}: ${parsed.message}`;
@@ -914,8 +926,7 @@ document.addEventListener("keydown", (ev) => {
 }, true);
 
 sourceEl.addEventListener("input", () => {
-  if (programmaticEdit) scheduleRun();
-  else markDirty();
+  if (!programmaticEdit) updateStale();
   scheduleRulesRefresh();
   if (playgroundMode) updatePlaygroundUrl();
   else schedulePut();
@@ -957,6 +968,8 @@ const rulesViewEl = document.getElementById("rules-view") as HTMLElement;
 const leftViewSourceEl = document.getElementById("left-view-source") as HTMLButtonElement;
 const leftViewRulesEl = document.getElementById("left-view-rules") as HTMLButtonElement;
 const LEFT_VIEW_KEY = "v2-left-view";
+// The Rules view's query, history and pins, per file, survive a reload.
+const rulesStateKey = (): string => `v2-rules:${loadedFile ?? "(playground)"}`;
 const rules = new RuleBrowser({
   host: rulesViewEl,
   source: sourceEl,
@@ -966,7 +979,16 @@ const rules = new RuleBrowser({
     const line = before.split("\n").length;
     editor.focusLine(line, offset - (before.lastIndexOf("\n") + 1));
   },
+  onState: (st) => {
+    try { localStorage.setItem(rulesStateKey(), JSON.stringify(st)); } catch { /* ignore */ }
+  },
 });
+function restoreRulesState(): void {
+  try {
+    const raw = localStorage.getItem(rulesStateKey());
+    if (raw !== null) rules.restore(JSON.parse(raw) as RuleBrowserState);
+  } catch { /* ignore */ }
+}
 function setLeftView(v: "source" | "rules"): void {
   editorsEl.classList.toggle("rules-mode", v === "rules");
   rulesViewEl.classList.toggle("hidden", v !== "rules");
@@ -1041,6 +1063,7 @@ async function bootstrap(): Promise<void> {
       // No server — stay detached; edits won't save.
     }
   }
+  restoreRulesState();
   await run();
   sourceEl.focus();
   sourceEl.setSelectionRange(0, 0);

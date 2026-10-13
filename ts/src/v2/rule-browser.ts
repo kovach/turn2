@@ -42,6 +42,17 @@ export interface RuleBrowserOptions {
   source: HTMLTextAreaElement;
   // Switch to the Source view with the caret at `offset`.
   openInSource: (offset: number) => void;
+  // Called after each render with the state worth keeping across a reload.
+  onState?: (state: RuleBrowserState) => void;
+}
+
+// The query, its history, and the pinned cards, each pin by the text of its
+// segment (ranges don't survive edits made elsewhere; the text usually does).
+export interface RuleBrowserState {
+  query: string;
+  history: string[];
+  historyPos: number;
+  pins: string[];
 }
 
 export class RuleBrowser {
@@ -64,6 +75,8 @@ export class RuleBrowser {
   private layoutKey = "";
   private history: string[] = [];
   private historyPos = -1;
+  // Pins from `restore`, waiting for an index to resolve them against.
+  private pendingPins: string[] = [];
 
   constructor(opts: RuleBrowserOptions) {
     this.opts = opts;
@@ -99,6 +112,25 @@ export class RuleBrowser {
 
   get query(): string { return this.queryEl.value; }
 
+  get state(): RuleBrowserState {
+    return {
+      query: this.queryEl.value,
+      history: this.history,
+      historyPos: this.historyPos,
+      pins: [...this.cards.filter((c) => c.pinned).map((c) => this.text.slice(c.range.start, c.range.end)), ...this.pendingPins],
+    };
+  }
+
+  // Bring back a saved state; its pins resolve at the next `update`.
+  restore(st: RuleBrowserState): void {
+    this.queryEl.value = st.query;
+    this.history = st.history;
+    this.historyPos = Math.min(st.historyPos, st.history.length - 1);
+    this.pendingPins = st.pins;
+    this.refreshNav();
+    this.render();
+  }
+
   // Set the query (e.g. from a ctrl-click on a relation name) and record it.
   setQuery(q: string): void {
     this.queryEl.value = q;
@@ -133,10 +165,30 @@ export class RuleBrowser {
       o.value = p;
       this.predList.appendChild(o);
     }
+    this.resolvePins();
     // Typing in a card re-runs the program on every pause; leave the cards
     // alone until the card lets go (blur renders).
     if (this.cards.some((c) => c.focused)) return;
     this.render();
+  }
+
+  // A restored pin goes to the first segment with its text that has no card.
+  private resolvePins(): void {
+    const ix = this.index;
+    if (ix === null || this.pendingPins.length === 0) return;
+    const taken = new Set(this.cards.map((c) => c.range.start));
+    for (const text of this.pendingPins) {
+      const seg = ix.segs.find((sg) => {
+        const r = segmentRange(sg);
+        return !taken.has(r.start) && this.text.slice(r.start, r.end) === text;
+      });
+      if (seg === undefined) continue;
+      const card = this.makeCard(seg);
+      card.pinned = true;
+      taken.add(card.range.start);
+      this.cards.push(card);
+    }
+    this.pendingPins = [];
   }
 
   // The source no longer parses: keep the cards, mark the results stale.
@@ -224,6 +276,7 @@ export class RuleBrowser {
         }
       }
       this.renderCount(q === null, result.groups, ix);
+      this.opts.onState?.(this.state);
       return;
     }
     this.layoutKey = key;
@@ -251,6 +304,7 @@ export class RuleBrowser {
     this.cards = next;
 
     this.renderCount(q === null, result.groups, ix);
+    this.opts.onState?.(this.state);
   }
 
   private renderCount(empty: boolean, groups: { title: string; cards: unknown[] }[], ix: RuleIndex): void {
@@ -378,6 +432,7 @@ export class RuleBrowser {
     this.history.push(q);
     this.historyPos = this.history.length - 1;
     this.refreshNav();
+    if (this.index !== null) this.opts.onState?.(this.state);
   }
 
   private go(d: number): void {

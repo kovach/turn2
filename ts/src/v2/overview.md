@@ -421,6 +421,7 @@ The left pane's Rules view (`RuleBrowser`, plans/v2-rule-browser.md): a query ba
 - pinning — a pinned card stays visible whatever the query: in its result group while the query picks it, else in a `Pinned` group on top. Neither focusing nor pinning moves a card: a render whose layout (group titles, segments) is unchanged updates cards in place, so a focused card is never detached
 - `relationAt` — the relation/symbol under an offset (highlighter classes `r`/`s`); Ctrl/Cmd-click in a card or in the source queries it
 - `openInSource` — the card header's line link: back to the Source view with the caret there
+- `state` / `restore` / `onState` — the query, its history and the pins (each by its segment's text) survive a reload: web-v2.ts keeps them in localStorage per file (`v2-rules:<file>`); restored pins resolve against the next index
 
 # display-kit.ts
 
