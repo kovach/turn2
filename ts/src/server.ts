@@ -10,18 +10,42 @@ const args = process.argv.slice(2);
 let dataDir = path.join(ROOT, "data");
 // v2 source/display files: data/v2, then each `--v2-data <dir>` in order.
 const v2Dirs = [path.join(ROOT, "data", "v2")];
+// Scenario tests (v2/scenario.ts) for the editor's Tests view: every `.t` in
+// each `--v2-tests <dir>`. These dirs also join the end of the v2 search
+// path, so a scenario opens in the editor by name.
+// `data/v2/tests` is always one (the engine's own scenarios, e.g. for ttt.t).
+const testDirs: string[] = [path.join(ROOT, "data", "v2", "tests")];
 let port = 3000;
 let readOnly = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--data" && args[i + 1]) dataDir = path.resolve(args[++i]!);
   if (args[i] === "--v2-data" && args[i + 1]) v2Dirs.push(path.resolve(args[++i]!));
+  if (args[i] === "--v2-tests" && args[i + 1]) testDirs.push(path.resolve(args[++i]!));
   if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i]!, 10);
   if (args[i] === "--read-only") readOnly = true;
 }
 
+v2Dirs.push(...testDirs);
+
 // The first v2 directory holding `name`, or undefined.
 function findV2(name: string): string | undefined {
   return v2Dirs.map(d => path.join(d, name)).find(f => fs.existsSync(f));
+}
+
+// Every scenario file in the test dirs, read fresh so new tests show up
+// without a restart. A name in two dirs is listed once (the first wins, as
+// in findV2).
+function scenarioFiles(): { name: string; text: string }[] {
+  const out = new Map<string, string>();
+  for (const d of testDirs) {
+    let names: string[];
+    try { names = fs.readdirSync(d).filter(f => f.endsWith(".t")).sort(); }
+    catch { continue; }
+    for (const n of names) {
+      if (!out.has(n)) out.set(n, fs.readFileSync(path.join(d, n), "utf8"));
+    }
+  }
+  return [...out].map(([name, text]) => ({ name, text }));
 }
 
 function slFiles(): string[] {
@@ -61,6 +85,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   const { pathname } = url;
   const method = req.method ?? "GET";
+
+  if (pathname === "/api/v2-tests" && method === "GET") {
+    sendJson(res, 200, { tests: scenarioFiles() });
+    return;
+  }
 
   if (pathname === "/api/files" && method === "GET") {
     sendJson(res, 200, { files: slFiles() });
@@ -223,5 +252,6 @@ server.listen(port, () => {
   console.log(`Slide  http://localhost:${port}`);
   console.log(`Data   ${dataDir}`);
   console.log(`v2     ${v2Dirs.join(", ")}`);
+  if (testDirs.length > 0) console.log(`tests  ${testDirs.join(", ")}`);
   if (readOnly) console.log(`Mode   read-only (file writes disabled)`);
 });

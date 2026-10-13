@@ -114,6 +114,20 @@
     /* Timeline rendered inline inside the db pane */
     #timeline-inline { flex: 1; overflow: auto; padding: 12px; min-width: 0; }
     .timeline-svg { display: block; color: var(--fg); }
+    /* Scenario tests (v2/test-panel.ts): header chip + the db pane's Tests view */
+    #tests-chip { font-size: 12px; color: var(--fg-mute2); cursor: pointer; white-space: nowrap; }
+    #tests-chip.error { color: var(--err); }
+    #tests-view { flex: 1; overflow: auto; padding: 8px 12px; font-size: 12px; line-height: 1.6; }
+    .tests-head { color: var(--fg-faint); margin-bottom: 4px; }
+    .tests-row { display: flex; gap: 10px; align-items: baseline; }
+    .tests-row a { color: var(--link); text-decoration: none; }
+    .tests-row a:hover { text-decoration: underline; }
+    .tests-mark { width: 3em; }
+    .tests-mark.ok { color: var(--fg-mute2); }
+    .tests-mark.fail { color: var(--err); }
+    .tests-mark.running { color: var(--fg-faint); }
+    .tests-ms { color: var(--fg-faint); margin-left: auto; }
+    .tests-problem { color: var(--err); padding-left: 4.6em; white-space: pre-wrap; }
     /* Source ↔ output linking: shared rules in /styles/theme.css; the
      * source-side line overlay is .editor-line-highlight in editor.css. */
     .editors .pane { background: var(--bg); }
@@ -156,6 +170,7 @@
   <header>
     <span id="file-name" class="pane-toggle" data-collapse="editor" title="Click to collapse/show the editor"></span>
     <span id="status-line">—</span>
+    <span id="tests-chip" class="hidden"></span>
     <!-- Hidden until a run actually trips a gas limit; see web-v2.ts. -->
     <label class="gas-ctl hidden" id="gas-ctl" title="Max fixpoint iterations before giving up">gas <input type="number" id="gas" min="1" step="10" /></label>
     <label class="gas-ctl hidden" id="tuple-gas-ctl" title="Max tuples added before giving up">tuples <input type="number" id="tuple-gas" min="1" step="500" /></label>
@@ -224,12 +239,14 @@
             <span class="db-view-toggle">
               <button type="button" class="db-view-btn" id="db-view-database">Database</button>
               <button type="button" class="db-view-btn active" id="db-view-timeline">Timeline</button>
+              <button type="button" class="db-view-btn hidden" id="db-view-tests" title="Scenario tests that use this file (server --v2-tests)">Tests</button>
             </span>
           </span>
           <span><label style="font-size: 11px; color: #888;"><input type="checkbox" id="hide-internal" checked /> hide internal</label><label style="font-size: 11px; color: #888; margin-left: 8px;"><input type="checkbox" id="db-temporal" checked /> temporal</label></span>
         </div>
         <div id="db" class="hidden"></div>
         <div id="timeline-inline"></div>
+        <div id="tests-view" class="hidden"></div>
       </div>
     </div>
   </div>

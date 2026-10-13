@@ -1,0 +1,19 @@
+-- Tic-tac-toe: once all nine cells are taken with no three in a row, the
+-- game is over too: no one is asked for another move (status done).
+-- uses: ttt.t
+--
+-- Final board (rows top to bottom, o moved first):
+--   o x o
+--   o x x
+--   x o o
+-- choose: (cell z z)
+-- choose: (cell z (s z))
+-- choose: (cell z (s (s z)))
+-- choose: (cell (s z) (s z))
+-- choose: (cell (s z) z)
+-- choose: (cell (s z) (s (s z)))
+-- choose: (cell (s (s z)) (s z))
+-- choose: (cell (s (s z)) z)
+-- choose: (cell (s (s z)) (s (s z)))
+-- expect-not: has-won o
+-- expect-not: has-won x

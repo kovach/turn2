@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "./v2/parse.js";
 import { runFixpoint } from "./v2/fixpoint.js";
-import { compressRefs, renderTerm } from "./v2/print.js";
+import { choiceRows } from "./v2/scenario.js";
 
 const [file, ...values] = process.argv.slice(2);
 if (file === undefined) {
@@ -26,15 +26,8 @@ for (const want of values) {
   if ("message" in parsed) throw new Error(`parse error line ${parsed.line}: ${parsed.message}`);
   const { store, status } = runFixpoint(parsed, 5000, 400000);
   if (status.kind !== "active-choices") throw new Error(`before '${want}': status ${status.kind}, expected a pending choice`);
-  const comp = status.components.find((c) =>
-    c.activeTerms.length === 1 && c.options.some((o) => renderTerm(store, o[0]!) === want));
-  if (comp === undefined) {
-    const offered = status.components.map((c) => c.options.map((o) => o.map((t) => renderTerm(store, t)).join(",")).join(" | "));
-    throw new Error(`no pending choice offers '${want}'; offered: ${offered.join(" ;; ")}`);
-  }
-  const value = comp.options.find((o) => renderTerm(store, o[0]!) === want)![0]!;
-  const { bindings, results } = compressRefs([comp.activeTerms[0]!, value], store);
-  const lines = [...bindings, `^ is ${results[0]} ${results[1]}`];
-  source += "\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n") + "\n";
+  const rows = choiceRows(store, status.components, want);
+  if (typeof rows === "string") throw new Error(rows);
+  source += "\n" + rows.join("\n") + "\n";
 }
 process.stdout.write(source);

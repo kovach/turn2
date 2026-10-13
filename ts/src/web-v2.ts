@@ -16,6 +16,7 @@ import { tokenOf, type Store } from "./v2/store.js";
 import type { ComponentOptions, Rule } from "./v2/types.js";
 import type { AccRow } from "./v2/eval.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
+import { TestPanel } from "./v2/test-panel.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
 // `activeTerms[i]` should bind to `optionTuple[i]`. `handleClick` reifies
@@ -72,6 +73,9 @@ const dbTemporalEl = document.getElementById("db-temporal") as HTMLInputElement;
 const timelineInlineEl = document.getElementById("timeline-inline") as HTMLDivElement;
 const dbViewDatabaseEl = document.getElementById("db-view-database") as HTMLButtonElement;
 const dbViewTimelineEl = document.getElementById("db-view-timeline") as HTMLButtonElement;
+const dbViewTestsEl = document.getElementById("db-view-tests") as HTMLButtonElement;
+const testsViewEl = document.getElementById("tests-view") as HTMLDivElement;
+const testsChipEl = document.getElementById("tests-chip") as HTMLSpanElement;
 
 const gasEl = document.getElementById("gas") as HTMLInputElement;
 const tupleGasEl = document.getElementById("tuple-gas") as HTMLInputElement;
@@ -584,9 +588,12 @@ function showRunError(text: string): void {
 
 // The db pane toggles between the tuple database and an inline timeline
 // (renderTimelineH). Only the active view is rendered on each run; switching
-// re-renders the newly visible view from `lastStore`.
+// re-renders the newly visible view from `lastStore`. A third view, Tests
+// (v2/test-panel.ts), shows when the server has scenario tests; it renders
+// itself as results arrive and is not restored on reload (its button may
+// stay hidden).
 const DB_VIEW_KEY = "v2-db-view";
-let dbView: "database" | "timeline" = "timeline";
+let dbView: "database" | "timeline" | "tests" = "timeline";
 try {
   const v = sessionStorage.getItem(DB_VIEW_KEY);
   if (v === "database" || v === "timeline") dbView = v;
@@ -597,8 +604,11 @@ function refreshDbViewButtons(): void {
   dbViewTimelineEl.classList.toggle("active", dbView === "timeline");
   dbEl.classList.toggle("hidden", dbView !== "database");
   timelineInlineEl.classList.toggle("hidden", dbView !== "timeline");
+  dbViewTestsEl.classList.toggle("active", dbView === "tests");
+  testsViewEl.classList.toggle("hidden", dbView !== "tests");
 }
 refreshDbViewButtons();
+const tests = new TestPanel({ view: testsViewEl, chip: testsChipEl, button: dbViewTestsEl, fallback: dbViewTimelineEl });
 
 // Episodes the user has collapsed in the timeline, keyed by structural
 // fingerprint (see timelineCollapseKey) so a collapse sticks across the
@@ -697,6 +707,7 @@ timelineInlineEl.addEventListener("change", (e: Event) => {
 });
 
 function renderDbPane(store: Store): void {
+  if (dbView === "tests") return;
   if (dbView === "timeline") {
     renderTimelineH(timelineInlineEl, store, {
       hideInternal: hideInternalEl.checked,
@@ -715,7 +726,7 @@ function renderDbPane(store: Store): void {
   }
 }
 
-function setDbView(v: "database" | "timeline"): void {
+function setDbView(v: "database" | "timeline" | "tests"): void {
   if (dbView === v) return;
   dbView = v;
   refreshDbViewButtons();
@@ -728,6 +739,7 @@ function setDbView(v: "database" | "timeline"): void {
 }
 dbViewDatabaseEl.addEventListener("click", () => setDbView("database"));
 dbViewTimelineEl.addEventListener("click", () => setDbView("timeline"));
+dbViewTestsEl.addEventListener("click", () => setDbView("tests"));
 
 // Reify `activeTerms[i] := values[i]` bindings into source: `= V… (…)`
 // shared-binding lines plus one `^ is <term> <value>` row each, appended at
@@ -788,6 +800,8 @@ function handleClick(intent: ClickIntent): void {
 async function run(): Promise<void> {
   const userSource = sourceEl.value;
   lastRunText = userSource;
+  // Scenario tests that use this file re-run on the same text, in a worker.
+  if (loadedFile !== null) void tests.rerun(loadedFile, userSource);
   const parsed = parse(userSource);
   if ("message" in parsed) {
     const msg = `parse error line ${parsed.line}: ${parsed.message}`;

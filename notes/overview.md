@@ -1,3 +1,7 @@
+# 26/10/12
+As of a couple days ago, direct interaction with opus 5.5 through CC seems more efficient than working through this log.
+Not sure if it will continue being a useful overview of the changes.
+
 # `>p` / `~>p`: continue after something
 plan: none (designed in conversation)
 (implemented 26/10/08; `;` kept)

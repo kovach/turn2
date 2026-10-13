@@ -1,0 +1,13 @@
+-- Tic-tac-toe: once a player has three in a row, the game is over, so no
+-- one is asked for another move (the run ends with status done).
+-- uses: ttt.t
+--
+-- Cells are (cell Row Col) with Row, Col in z, (s z), (s (s z)). o moves
+-- first and fills row z; x plays twice in row (s z).
+-- choose: (cell z z)
+-- choose: (cell (s z) z)
+-- choose: (cell z (s z))
+-- choose: (cell (s z) (s z))
+-- choose: (cell z (s (s z)))
+-- expect: has-won o
+-- expect-not: has-won x

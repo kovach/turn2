@@ -6,8 +6,8 @@
 
 setup, +num (s (s (s (s z))))
   +op sheep wolf, +op wolf sheep
-^icon board
-^icon nowhere
+  +icon board
+  +icon nowhere
 
 setup, num (s N), +num N, +incr N (s N)
 

@@ -432,6 +432,22 @@ Tooltips and right-click menus for the entities of a game GUI (plans/v2-display-
 - `entity(el, spec)` / `EntitySpec` — `label`, `rows` (tuple indices or `KitRow`s), optional `choice` (a `ClickIntent`) and `notes`; a spec may be a function, evaluated on hover. Native SVG `<title>` children are dropped (ours replaces them); the innermost entity owns the menu
 - `rows(store, head, M?)` / `KitRow` — a display's row reader that keeps provenance: `{ idx, head, terms (no head, no id slot), l, r }`, only rows alive at `M` when given
 
+# scenario.ts
+
+Scenario tests (plans/v2-editor-tests.md). A scenario is a `.t` fragment with a `-- uses: a.t b.t` header, optional `-- choose: <value>` lines, and `-- expect: <tuple>` / `-- expect-not: <tuple>` lines. It runs on its `uses` files concatenated in order, followed by the fragment, with gas 3000 / 200000. Saved choice rows in a `uses` file (the `= V…` / `^ is` blocks the editor appends on a click) are dropped first, so every scenario starts a fresh game. Each `choose` line, in order, answers the next pending choice that offers that value, rendered as the editor shows it (e.g. `(cell z (s z))`). It works like a click: the `is` rows are appended and the program re-runs. A test therefore names choices by value, never by choice-term or moment ids, and survives rule edits. The final run passes when it reaches `done` (no pending choice), every `expect` line equals some tuple's rendered atom (interval dropped) at any time, and no `expect-not` line does. The module reads no files: the caller passes the `uses` texts, so the editor can pass its unsaved buffer. The engine's own scenarios live in `data/v2/tests` (`ttt.t`: a row ends the game; a full board ends it), and `v2_scenario.test.ts` runs them.
+
+**Key terms:**
+- `parseScenario` / `isScenario` / `runScenario(text, files)` → `{problems, ms}`; a problem is `missing: …`, `present: …`, `status <kind>`, `choose <v>: …`, `missing file: …`, or a parse or run error
+- `stripSavedChoices` — drops appended `= V…` / `^ is` blocks
+- `choiceRows(store, components, value)` — the rows a click on `value` appends; shared with `replay-choices.ts`
+
+# test-panel.ts
+
+The editor's Tests view (plans/v2-editor-tests.md). The server lists every `.t` in its test dirs at `GET /api/v2-tests`: `data/v2/tests` always, plus each `--v2-tests <dir>` (e.g. `../si/faq/tests`). It also adds the dirs to the end of the v2 search path. After each `run()` of file F, `web-v2.ts` calls `rerun`, which re-runs every scenario whose `uses` lists F, or F itself when F is a scenario. F's text is the editor buffer, saved or not; the other `uses` files are fetched fresh from `/data/v2/`. The batch runs in a module worker (`v2-test-worker.ts`). Results stream into the Result pane's Tests view and the header chip (`tests 2/3 ✗`). A new run terminates the old worker. The Tests button and chip show only while some scenario uses the open file.
+
+**Key terms:**
+- `TestPanel.rerun(file, buffer)` — fetch, select, run; a newer call abandons an older one (generation counter)
+
 # default-display.ts
 
 The bundled fallback display module (used when a program declares no `-- display:` directive). It renders an interactive icon tree from `icon T` / `icon:name` / `at X L` relations filtered to the selected choice-component's moment (`ctx.selectedIdx`), arranges each container's siblings per `left:right` / `above:below` constraints (via `icon-layout.ts`), and commits choices via `DisplayApi.commit` when an icon matches a slot of the selected component. An icon fitting several slots is handed to the host via `DisplayApi.setPending` and drawn dashed while `ctx.pending` names it. The choices strip itself (one row per component: rule names, each active term's variable name and its candidate values, slot picking for a pending term) is owned by the host page `web-v2.ts` (`renderChoices`), so every display module, bundled or `-- display:`, gets the same chooser; the old Info pane is gone and run errors render in the display area.
