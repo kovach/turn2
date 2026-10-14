@@ -1,3 +1,14 @@
+# v3: Turn compiled to episode procedures
+plan: plans/v3-procedural.md
+(implemented 26/10/13; design and corpus study in discussions/procedural-turn.md; code in ts/src/v3/, overview ts/src/v3/overview.md)
+
+- rules run as procedures: a rule's first match is a root listener, a tuple is dispatched once to the listeners registered before it, every other match is a lookup plus (where static analysis says more can arrive in the rule's scope) a subscription; an episode is a frame that ends when nothing is pending in it
+- the moment order is v2's, answered without graph walks: `u ≤ v` iff some moment on u's succ chain is a pred-tree ancestor of v (order-maintenance Euler tour, binary search over cached intervals); checked against reachability on random histories
+- `~>p`, `;`, `>p` run ahead; point reads (`#acc`, `not`, lookups that don't listen), exception decisions and frame ends wait for the frames/decisions they ran past (*gates*) and for unanswered choices below them — exactly where v2's walk blocks, so v3 has v2's state at every choice
+- agrees with v2 in lockstep (facts, every acc relation at each choice, option sets): the corpus, 35 Spirit Island spirit variants, 9 full si-game games; 3–23x faster than one v2 run, and it resumes after an answer instead of re-running
+- `ts/data/v3/{ttt,wolf-sheep}.t` rewrite two reactive programs in the procedural idioms: `v3-cli --report` shows no subscriptions; the old wolf-sheep's capture rule recurses forever after two captures (both engines run out of gas)
+- tests: ts/src/tests/v3_basic.test.ts; tools: src/v3-cli.ts, src/scratch/v3-diff.ts, src/scratch/v3-bench.ts
+
 # 26/10/12
 As of a couple days ago, direct interaction with opus 5.5 through CC seems more efficient than working through this log.
 Not sure if it will continue being a useful overview of the changes.
