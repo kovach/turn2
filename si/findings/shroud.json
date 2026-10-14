@@ -1,0 +1,44 @@
+{
+ "spirit": "Shroud of Silent Mist",
+ "slug": "shroud",
+ "wiki": "Shroud_of_Silent_Mist",
+ "expansion": "Jagged Earth",
+ "file": "spirit-shroud.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "GATHER POWER FROM THE COOL AND DARK",
+   "text": "Once a turn, when you Gain a Power Card without [Fire] , gain 1 Energy.",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "#acc cool-dark-used : spirit\nused-cool-dark S / cool-dark-used S\ngain-power-card S P, spirit:special S cool-dark, power-fire P 0, not cool-dark-used S\n  +used-cool-dark S\n  +gain-energy S 1",
+   "evidence": "three gains (ember has Fire, mist-a, mist-b don't): exactly one gain-energy shroud 1.",
+   "notes": "'without Fire' uses a @sum with a 0 default (power-fire P 0) since there is no negation. 'Once a turn' is an #agg flag; core has a single turn, with several turns the flag needs a turn key (episode ids are not bindable). Port to fresh-left ^ / #acc (2026-10-12): the #agg bool flag became a boolean acc relation over a `used-cool-dark` event, read with `not`; same outcome (1 Energy)."
+  },
+  {
+   "name": "MISTS SHIFT AND FLOW",
+   "text": "When targeting a land with a Power, you may Gather 1 of your [Presence] into the target or an adjacent land. This can enable you to meet Range and targeting requirements.",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "#acc mists-gather : spirit power land land land\nplayed S P, spirit:special S mists, power:range P R, presence-of S X, at X From\n  adjacent From Into, land Into, reach Into T J, le J 1, reach Into T K, le K R\n  / mists-gather S P T From Into\nmists-gather S P T From Into / targetable S P T\n#acc mists-option : spirit power land e\nmists-gather S P T From Into / mists-option S P T (gather From Into)\nbase-in-range S P T / mists-option S P T decline\ntargets S P T, spirit:special S mists\n  ?[rng] O\n  !(mists-option S P T O)\n  ~mists-choice S O\nmists-choice S O, is O (gather From Into), ~mist-gather S From Into\nmist-gather S From Into\n  ?[rng] X\n  !(presence-of S X, at X From)\n  ~mist-move X Into\nmist-move X Into, is X P, ~move P Into",
+   "evidence": "range-1 card from l1, forced to target the mountain l3: mist-move gathers h1 from l1 into l2 (seeds 7/1/2).",
+   "notes": "Targeting domain widened by rows; after the target is chosen a second choice picks the gather (or decline, only offered when the target was already in range). Encoding 'decline only if already legal' needed a separate base-in-range relation, i.e. the base must keep 'legal without help' distinguishable from 'targetable'."
+  },
+  {
+   "name": "SLOW AND SILENT DEATH",
+   "text": "Invaders and [Dahan] in your lands don't heal Damage. During Time Passes : 1 [Fear] (max. 5) per land of yours with Damaged Invaders. Gain 1 Energy per 3 lands of yours with Damaged Invaders.",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "time-passes, spirit:special S slow-death, has-presence S L, at P L, { heal P => }\n#acc silent-land : spirit land\nspirit:special S slow-death, has-presence S L, at P L, piece:kind P K, invader K\n  damage-on P D, gt D 0 / silent-land S L\n#acc silent-lands : spirit @sum\nspirit:special S slow-death / silent-lands S 0\nsilent-land S L / silent-lands S 1\ntime-passes, silent-lands S N, gt N 0, min5 N F, +fear-from (slow-death S) F\ntime-passes, silent-lands S N, div3 N E, gt E 0, +gain-energy S E",
+   "evidence": "after Time Passes: heal *74 (Town in l1) happens, the City in Shroud's l2 is still-damaged 1; fear 1 from 1 silent land; Energy floor(1/3)=0.",
+   "notes": "No core change, but a hook in BASE-EXT was essential: healing must be an explicit event (persistent +dmg, Time Passes emits heal P) so it can be intercepted; with Volcano-style turn-scoped damage the 'heal' is implicit in the interval and nothing can intercept it. Time Passes itself was added purely additively: `turn, >slow-phase, ~time-passes`."
+  }
+ ],
+ "base_ext": "Energy @sum; gain-power-card; power-fire @sum default; persistent damage + explicit Time Passes heal; Time Passes phase appended after slow-phase; Range/targeting with base-in-range vs targetable. The played card is a turn-scoped acc view (`#acc played`, `turn / played shroud creeping-mist`): a `turn, ^played \u2026` view now starts concurrently with the phases, so the targeting choice saw no `played` and died.",
+ "core_diff": "",
+ "language_issues": [
+  "Two encodings of 'damage lasts this turn' are incompatible: turn-scoped tuples (easy) cannot be extended past the turn, explicit heal events (interceptable) need every damage to persist; a base has to pick the interceptable one up front.",
+  "No negation: 'without Fire', 'decline only if already legal' each need a positive or 0-default helper relation.",
+  "Gathering 'one of your Presence' must be its own choice; matching `presence-of S X, at X From` moves all of them (core's presence-choice has this bug: it moves every Presence in the supply)."
+ ]
+}

@@ -1,0 +1,24 @@
+{
+ "spirit": "Bringer of Dreams and Nightmares",
+ "slug": "bringer",
+ "wiki": "Bringer_of_Dreams_and_Nightmares",
+ "expansion": "Base",
+ "file": "spirit-bringer.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "TO DREAM A THOUSAND DEATHS",
+   "text": "Your Powers never cause Damage, nor can they Destroy anything other than your own [Presence] . When your Powers would Destroy (or deal enough Damage to Destroy) [Explorer] / [Town] / [City] , instead generate 0/2/5 [Fear] . The Power Pushes all [Explorer] / [Town] it would Destroy. Notes: A single Power cannot Destroy a given Invader more than once. Powers that cause Damage via [Dahan] are affected just like all others. All effects other than Damage/Destroy work as usual.",
+   "status": "partial",
+   "mechanism": "exception (instead)",
+   "turn": "use-power S P, spirit:special S dream-a-thousand-deaths, { destroy X => ~dream-destroy X }\nuse-power S P, spirit:special S dream-a-thousand-deaths, { damage-piece X N => ~dream-damage X N }\n-- \"(or deal enough Damage to Destroy)\"\ndream-damage X N, piece:kind X K, kind:health K H, ge N H, ~dream-destroy X\n-- \"instead generate 0/2/5 Fear\"\ndream-destroy X, piece:kind X K, dream-fear K F, +fear-from X F\n-- \"The Power Pushes all Explorer / Town it would Destroy.\"\n-- (the exception RHS cannot mention the Spirit, so the pusher is looked up)\ndream-destroy X, piece:kind X K, dream-pushes K, at X L,\n  spirit:special S dream-a-thousand-deaths, ~push S X L",
+   "evidence": "with the rule: Town -> `fear-from *63 2`, `push bringer *63 l1`; Explorer dealt 1 Damage -> `fear-from *100 0`, pushed; Dahan -> dream-destroy only (not destroyed); total fear 2. Control without the rule: all three destroyed, fear 1",
+   "notes": "Maps very directly: two exceptions scoped to this Spirit's use-power episode replace destroy / damage-piece; 'or deal enough Damage to Destroy' falls out of checking Health inside the replacement. Own-Presence destruction is untouched because the base routes it through destroy-presence, not destroy. Missing: accumulated Damage across instructions (BASE-EXT is single-hit), 'a single Power cannot Destroy a given Invader more than once', Damage dealt by Dahan a Power moves (only matters once Powers can make Dahan deal Damage). The exception RHS may not mention the Spirit, so the push looks the Bringer up by its special-rule fact (would be ambiguous with two Bringers)."
+  }
+ ],
+ "base_ext": "Health (kind:health facts) and `damage-piece X N` that destroys when N >= Health (single-hit, no accumulated Damage).",
+ "core_diff": "",
+ "language_issues": [
+  "Exception RHS may only use the intercepted tuple's variables, so context (which Spirit's Power) must be re-derived in a helper rule; with two copies of a Spirit this would be ambiguous."
+ ]
+}

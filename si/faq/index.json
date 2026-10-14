@@ -1,0 +1,3414 @@
+[
+ {
+  "href": ".7w4geam",
+  "question": "If Finder of Paths Unseen gets Presence in the Ocean, can it make lands Coastal?"
+ },
+ {
+  "href": "this-power-in-repeats",
+  "question": "If you Repeat \"Infestation of Venomous Spiders\" with threshold, does the \"this Power\" in the threshold refer to all uses of the Power that turn, granting Damage twice from each skip?"
+ },
+ {
+  "href": "blight-card-flip-order",
+  "question": "When Blight is Added, what order do you perform all of the effects of Adding Blight? If you were in the middle of a Ravage, do you finish the Ravage first?"
+ },
+ {
+  "href": ".7w4g8r1",
+  "question": "A Spread of Rampant Green's \"Steady Regeneration\" rule says \"If the land is Healthy...\" and \"If the land is Blighted...\". Does that mean the Blight Card, or the land into which you'd put Presence?"
+ },
+ {
+  "href": ".7w4gd79",
+  "question": "Against France Level 6, can Fear cards destroy Explorers?"
+ },
+ {
+  "href": "mining-tunnels-and-the-empire-ascendant",
+  "question": "Against the Habsburg Mining Expedition at Level 6, can the Explore Actions from Mining Tunnels (Escalation) get extra Explorers from The Empire Ascendant (Level 6)?"
+ },
+ {
+  "href": "disease-preventing-ravages-by-habsburg-mining-expedition",
+  "question": "Against the Habsburg Mining Expedition Level 1+, does Disease only prevent Ravages in Mining lands during the Build Step?"
+ },
+ {
+  "href": ".7w4geee",
+  "question": "Against The Tsardom of Russia Level 2: a damaged Explorer with a Health bonus ends the turn in a way where it won't heal (e.g., in Shroud of Silent Mists' lands). It should be destroyed when the health bonus wears off \u2013 is it saved?"
+ },
+ {
+  "href": ".7w4gede",
+  "question": "Against Tsardom of Russia Level 2+, if Bringer of Dreams and Nightmares uses a Power that would destroy Explorers, can it get the bonus Fear from Russia?"
+ },
+ {
+  "href": ".7w4g8o1",
+  "question": "Are elements personal, or can you use elements from other spirits?"
+ },
+ {
+  "href": ".7w4g8ph",
+  "question": "Are Invader components unlimited?"
+ },
+ {
+  "href": "are-pieces-in-the-endless-dark-on-the-island",
+  "question": "Are pieces in The Endless Dark still on the island?"
+ },
+ {
+  "href": ".9v5kaak",
+  "question": "Are some Island tiles better than others for your first games?"
+ },
+ {
+  "href": ".7w4ghyo",
+  "question": "Are the Coastal lands on one board adjacent to the Ocean on adjacent boards? (It looks like Land 3 can almost touch the Ocean.)"
+ },
+ {
+  "href": "how-mandatory-are-fear-cards",
+  "question": "Are the effects of Fear Cards mandatory?"
+ },
+ {
+  "href": ".7w4ghh6",
+  "question": "Are the extra Builds from Bureaucrats Adjust Funding part of the normal Build for the purposes of Panicked by Wild Beasts?"
+ },
+ {
+  "href": ".9v5kavp",
+  "question": "Are the low complexity spirits always supposed to use a Power Progression, or is this only for beginners?"
+ },
+ {
+  "href": ".bu6odef",
+  "question": "Are the separate parts of an Event Card separate actions for the purpose of victory or defeat?"
+ },
+ {
+  "href": "Powers-ineligible-for-Gift-of-Wind-Sped-Steps",
+  "question": "Are there any Powers that use the words \"Push\" or \"Gather\" that Gift of Wind-Sped Steps can't make Fast?"
+ },
+ {
+  "href": ".7w4g8tg",
+  "question": "Are there some playthroughs for beginners?"
+ },
+ {
+  "href": "is-destroy-damage-against-durable-invaders",
+  "question": "Are \u201cDestroy\u201d Powers \u201cDamage dealing\u201d Powers when used against Durable Invaders (e.g., for Flame's Fury)?"
+ },
+ {
+  "href": ".7w4gee8",
+  "question": "As Volcano, when destroying your own Presence for \"Explosive Eruption,\" can that Presence be saved (by, e.g., \"Flowing and Silent Forms Dart By\")?"
+ },
+ {
+  "href": "scapegoats-action",
+  "question": "At Terror Level 2 and 3, how many actions is Scapegoats? It's very relevant against, eg, Russia Lvl 2."
+ },
+ {
+  "href": ".bu6ocpc",
+  "question": "At Terror Level III, can the Fear card Trade Suffers be used to replace a City with a Town in any land?"
+ },
+ {
+  "href": "Does-second-wave-follow-the-plus-one-blight-errata-for-subsequent-games",
+  "question": "Between waves of the Second Wave, if returning the island to Healthy, the Scenario says to put 2 Blight per player onto the Healthy side. Should that be \"2 Blight per player +1\"?"
+ },
+ {
+  "href": ".7w4geep",
+  "question": "Both Russia 1 and All Things Weaken can make Blight destroy Beasts. Which takes precedence?"
+ },
+ {
+  "href": "choosing-a-new-destination-for-bargain-of-coursing-paths",
+  "question": "Can \"Bargain of Coursing Paths\" move pieces to a different land each time it triggers?"
+ },
+ {
+  "href": "saving-presence-from-destruction-by-moving-it",
+  "question": "Can \"Flowing and Silent Forms Dart By\" save Presence from destruction even if that Presence can't be pushed? (e.g., if the only adjacent lands are under \"Absolute Stasis\")"
+ },
+ {
+  "href": "can-gift-of-furious-might-boost-gift-of-searing-heat",
+  "question": "Can \"Gift of Furious Might\" be used on Rising Heat of Stone and Sand to increase the damage from \"Gift of Searing Heat\"?"
+ },
+ {
+  "href": ".7w4gedi",
+  "question": "Can \"Tell the Old Stories\" restore Powers forgotten or replaced prior to the start of play? (e.g, Boon of Vigor with the Sunshine Aspect)"
+ },
+ {
+  "href": "token-limits",
+  "question": "Can a land have multiple copies of a given token (e.g., two Disease)? Can multiple Strife be attached to a single Invader?"
+ },
+ {
+  "href": "targeting-lands-sunk-by-deeps",
+  "question": "Can a land sunk by Deeps be targeted with Powers?"
+ },
+ {
+  "href": ".bu6og2r",
+  "question": "Can a single Action cause a trigger to happen multiple times? Eg, if Heart of the Wildfire's Presence moves to multiple lands in one action, or if The Kingdom of Scotland Level 5+ cascades Blight from one Coastal land to another?"
+ },
+ {
+  "href": ".7w4gef4",
+  "question": "Can a Spirit like Finder get its Presence in an in-play Ocean using \"Move 1 Presence\" on a growth track?"
+ },
+ {
+  "href": "choice-events-with-energy-loss-that-is-not-a-cost",
+  "question": "Can a Spirit pick the top option for Visions Out of Time even if they don\u2019t have 1 Energy or a Power Card that the Event can replace?"
+ },
+ {
+  "href": ".9v5kfpw",
+  "question": "Can a triggered action trigger itself if it does so via an (nested) basic action? Eg: Wildfire adds Presence, triggering Blight. The Blight card flips and its immediate effects (a basic action) let Wildfire add more Presence. Does Blazing Presence trigger again?"
+ },
+ {
+  "href": "triggered-repeats-at-unusual-times",
+  "question": "Can a triggered Repeat (like from \"Relentless Punishment\") repeat Powers resolved at an unusual time, such during the Invader Phase via the \"Ethereal Conjunction\" Event?"
+ },
+ {
+  "href": "moving-pieces-back-into-a-marked-land-with-bargain-of-coursing-paths",
+  "question": "Can Bargain of Coursing Paths move pieces back into one of the marked lands?"
+ },
+ {
+  "href": "adding-or-moving-pieces-to-locations-not-in-play",
+  "question": "Can Blight/Event/Fear Card effects add or move pieces to locations that aren't lands if those locations are in play (e.g., adding pieces to the Ocean if Ocean's Hungry Grasp is in play)?"
+ },
+ {
+  "href": "abducting-immobile-pieces",
+  "question": "Can Breath of Darkness Down Your Spine abduct pieces that can't move (e.g., because they're at the Lair Incarna)?"
+ },
+ {
+  "href": "breath-of-darkness-down-your-spine-adding-presence-to-the-endless-dark-in-growth",
+  "question": "Can Breath of Darkness Down Your Spine add Presence to The Endless Dark in Growth?"
+ },
+ {
+  "href": "can-strife-escape-the-endless-dark",
+  "question": "Can Breath of Darkness Down Your Spine choose Strife as one of the pieces escaping the Endless Dark?"
+ },
+ {
+  "href": "breath-of-abducting-invaders-with-badlands",
+  "question": "Can Breath of Darkness Down Your Spine use Damage bonuses (from Badlands or other sources) to abduct Invaders?"
+ },
+ {
+  "href": ".7w4g7yx",
+  "question": "Can Bringer of Dreams and Nightmares combine Damage from multiple Powers - eg, use a \"2 Damage\" Power and a \"1 Damage\" Power to earn 5 Fear for an unhurt City?"
+ },
+ {
+  "href": ".7w4g7yu",
+  "question": "Can Bringer of Dreams and Nightmares combine Damage-dealing Powers usefully with Damage from other Spirits?"
+ },
+ {
+  "href": "can-bringer-destroy-things-indirectly",
+  "question": "Can Bringer of Dreams and Nightmares destroy already-damaged pieces by moving them into/out of lands that affect their Health? (Eg: moving a Dahan that has taken 2+ Damage out of a land where it's getting a Health bonus from Promises of Protection.)"
+ },
+ {
+  "href": ".7w4g9jv",
+  "question": "Can Bringer of Dreams and Nightmares do real damage (destroying cities, etc) with Power X?"
+ },
+ {
+  "href": "to-dream-a-thousand-deaths-and-heart-tree-guards-the-land",
+  "question": "Can Bringer of Dreams and Nightmares use \"To Dream a Thousand Deaths\" to generate Fear/Push Invaders that are protected by the Heart-Tree Incarna?"
+ },
+ {
+  "href": "can-bringer-of-dreams-and-nightmares-benefit-from-badlands",
+  "question": "Can Bringer of Dreams and Nightmares' Powers benefit from Badlands?"
+ },
+ {
+  "href": ".7w4g8nw",
+  "question": "Can cascading Blight kill Presence twice?"
+ },
+ {
+  "href": ".7w4geas",
+  "question": "Can Dahan be moved into a land affected by Stubborn Solidity?"
+ },
+ {
+  "href": "forgetting-impending-powers",
+  "question": "Can Dances Up Earthquakes Forget an impending card when it gains a Major Power? How about to pay for a Choice Event?"
+ },
+ {
+  "href": "can-cards-be-made-impending-by-repeating-them",
+  "question": "Can Dances Up Earthquakes make a Power Card impending when Repeating it?"
+ },
+ {
+  "href": "dances-up-earthquakes-third-growth-option-delaying-a-card-with-0-energy",
+  "question": "Can Dances Up Earthquakes use its third growth option to delay an impending card from being played even if there's no Energy on that card to remove?"
+ },
+ {
+  "href": "dances-up-earthquakes-using-impending-only-plays-for-0-energy-power-cards",
+  "question": "Can Dances Up Earthquakes use one of its \"+1 Play for impending only\" spaces to make a 0-Energy Power Card impending and then play it immediately?"
+ },
+ {
+  "href": "changing-the-speed-of-actions-that-are-not-initial-power-uses",
+  "question": "Can effects that change a Power\u2019s Speed also change the Speed of other Actions taken in specific Phases? (e.g., dealing Damage with the Beasts token marked by \"Unearth a Beast of Wrathful Stone\")"
+ },
+ {
+  "href": "skipping-build-actions-in-mining-lands",
+  "question": "Can effects that skip Build Actions prevent Habsburg Mining Expedition Level 1+ from Ravaging in a Mining land that matches the Build Card?"
+ },
+ {
+  "href": ".bu6of00",
+  "question": "Can Events on an Event Card be resolved in the order of your choice? (e.g., to get the benefit from \"Canny Defense\" during the Ravage cause by \"New Cash Crops Take Hold\" earlier on the card)"
+ },
+ {
+  "href": ".7w4g8nh",
+  "question": "Can every Spirit be played in a solo game?"
+ },
+ {
+  "href": "dahan-trust-the-watchers-with-encompassing-ward",
+  "question": "Can Eyes use its Dahan Trust the Watchers special rule to Gather Dahan when targeting a Spirit with Encompassing Ward?"
+ },
+ {
+  "href": "targeting-the-origin-with-spreading-and-dreadful-mire",
+  "question": "Can Fathomless Mud of the Swamp target the origin land of Spreading and Dreadful Mire, or does that fail because moving Presence is required?"
+ },
+ {
+  "href": ".bu6offr",
+  "question": "Can Fear cards move Dahan to lands where Keeper of the Forbidden Wilds has a Sacred Site?"
+ },
+ {
+  "href": "event-and-fear-actions-destroying-invaders-in-the-endless-dark",
+  "question": "Can Fear/Event actions destroy Invaders in The Endless Dark?"
+ },
+ {
+  "href": ".7w4gef7",
+  "question": "Can Finder of Paths Unseen make two lands adjacent for **all** purposes?"
+ },
+ {
+  "href": ".7w4g8op",
+  "question": "Can Gift of Strength or Powerstorm (both Fast powers) be used on a Slow power card?"
+ },
+ {
+  "href": "can-gift-of-wind-sped-steps-affect-powers-which-might-not-gather-or-push",
+  "question": "Can Gift of Wind-Sped Steps affect a Power which *might* Gather or Push something, like Devouring Teeth's innate power Death Approaches From Beneath the Surface?"
+ },
+ {
+  "href": ".7w4g8rh",
+  "question": "Can I create my own Spirits / Adversaries / Scenarios / etc? What about sharing them online?"
+ },
+ {
+  "href": ".9v5ka9d",
+  "question": "Can I pick the target land for a Slow power during the Slow Power phase?"
+ },
+ {
+  "href": ".7w4g8rg",
+  "question": "Can I use an Innate Power more than once a turn, if I meet the threshold multiple times?"
+ },
+ {
+  "href": ".7w4g7z1",
+  "question": "Can I wait for the results of another Spirit's Growth before making my own Growth choice? E.g., see if they draw into a Power Card which handles a bad situation before making my own choices?"
+ },
+ {
+  "href": "invader-actions-in-non-land-locations",
+  "question": "Can Invader Actions happen in a place that isn't a land (e.g., in The Endless Dark)?"
+ },
+ {
+  "href": "invaders-added-isolate",
+  "question": "Can Invaders be Added to an Isolated land with no Invaders?"
+ },
+ {
+  "href": ".7w4gecr",
+  "question": "Can Isolate apply to Dahan?"
+ },
+ {
+  "href": ".7w4gebz",
+  "question": "Can Lure of the Deep Wilderness win the game in Terror Level 1 by using Enthrall the Foreign Explorers?"
+ },
+ {
+  "href": ".7w4geaq",
+  "question": "Can Mists Shift and Flow let you meet origin land targeting requirements? (E.g., targeting from a Jungle, or from a Sacred Site)"
+ },
+ {
+  "href": ".9v5kf36",
+  "question": "Can Ocean add Presence to the Ocean when choosing the third growth option?"
+ },
+ {
+  "href": "Can-one-person-play-more-than-one-Spirit",
+  "question": "Can one person play more than one Spirit?"
+ },
+ {
+  "href": "targeting-a-land-where-not-every-effect-can-be-resolved",
+  "question": "Can Powers target lands where it's impossible to resolve all of the effects (e.g., Spreading and Dreadful Mire targeting a land without Dahan)?"
+ },
+ {
+  "href": ".3y28aex",
+  "question": "Can Powerstorm or Gift of Strength let someone Repeat Innate Powers?"
+ },
+ {
+  "href": ".7w4g8nv",
+  "question": "Can Presence tokens destroyed by Blight be added to the island?"
+ },
+ {
+  "href": "relentless-punishment-and-spirit-targeting-powers",
+  "question": "Can Relentless Gaze of the Sun use Relentless Punishment to repeat Spirit-targeting Powers?"
+ },
+ {
+  "href": "repeating-on-specific-lands-with-targeting-conditions",
+  "question": "Can Relentless Gaze of the Sun usefully Repeat a Power Card with \"Relentless Punishment\" if the first use stops the land from satisfying the Range or Target restrictions? (e.g., if \"Lure of the Unknown\" Gathers a Town into a land, preventing that land from being a land without Invaders.)"
+ },
+ {
+  "href": ".7w4gefh",
+  "question": "Can Shifting Memory of Ages spend element markers to give other Spirits elements?"
+ },
+ {
+  "href": "Ethereal-Conjunction-and-effects-that-modify-forgetting",
+  "question": "Can Shifting Memory of Ages use Long Ages of Knowledge and Forgetfulness to avoid Forgetting the Power Card it uses via Ethereal Conjunction?"
+ },
+ {
+  "href": "gathering-the-locus-incarna-while-targeting-a-power",
+  "question": "Can Shroud of Silent Mist use \"Mists Shift and Flow\" to gather Presence from the Locus Aspect at the Locus Incarna? Can it use that Presence for targeting? How about if it gathers the Incarna itself?"
+ },
+ {
+  "href": ".bu6ofsj",
+  "question": "Can Sky Stretches to Shore let you, during the Slow Phase, Repeat an already-used Fast Power? (Assuming you have a Repeat from somewhere, like Powerstorm or Gift of Strength.)"
+ },
+ {
+  "href": ".9v5kfhb",
+  "question": "Can Spirit-targeting Powers let a Spirit pick \"one of their lands\" where nothing happens - eg, use Pact of the Joined Hunt to do damage in a land where you cannot gather a Dahan?"
+ },
+ {
+  "href": ".7w4g8rd",
+  "question": "Can Spirits May Yet Dream be used to flip any Fear card?"
+ },
+ {
+  "href": ".7w4gebh",
+  "question": "Can Stone's Unyielding Defiance use Hold the Island Fast with a Bulwark of Will (to take Blight from the box) even if the Blight being added will destroy their Presence?"
+ },
+ {
+  "href": ".7w4g8rr",
+  "question": "Can Strangling Firevine target at Range 0 to add two Wilds to the same land?"
+ },
+ {
+  "href": "adding-strife-to-lands-without-invaders",
+  "question": "Can Strife be added to a land without Invaders?"
+ },
+ {
+  "href": "can-strife-move-independently",
+  "question": "Can Strife move independently of the Invader piece it is attached to?"
+ },
+ {
+  "href": "bureaucrats-adjust-funding-in-lands-without-invaders",
+  "question": "Can the \"3 or fewer Towns/Cities\" effect of \"Bureaucrats Adjust Funding\" cause a Build Action in a land without Invaders?"
+ },
+ {
+  "href": ".9v5kc2j",
+  "question": "Can the \"next normal\" Ravage or Build be on a future turn?"
+ },
+ {
+  "href": ".9v5kfr8",
+  "question": "Can the damage done from Blood Draws Predators be boosted above 3?"
+ },
+ {
+  "href": ".bu6od0c",
+  "question": "Can the different thresholds of an innate power be used separately?"
+ },
+ {
+  "href": ".9v5ka97",
+  "question": "Can the Event card \"Outpaced\" be used to resolve a power that has been made fast by Lightning's Swift Strike's special rule?"
+ },
+ {
+  "href": "lair-gathering-an-invader-multiple-times",
+  "question": "Can the final threshold of the Lair Aspect move an Invader more than once if at least 12 Explorers/Dahan are present?"
+ },
+ {
+  "href": "do-healing-markers-grant-elements",
+  "question": "Can the Healing Markers claimed by Wounded Waters Bleeding be used for anything other than checking which Healing Markers you have? (e.g., do they grant Elements?)"
+ },
+ {
+  "href": "intensify-and-powers-that-add-multiple-token-types",
+  "question": "Can the Intensify Aspect add multiple token types with Hazards Spread Across the Island?"
+ },
+ {
+  "href": "intensifying-beasts-with-unearth-a-beast-of-wrathful-stone",
+  "question": "Can the Intensify Aspect create multiple marked Beasts with one use of Unearth a Beast of Wrathful Stone?"
+ },
+ {
+  "href": "intensify-extra-uses-with-air-marker",
+  "question": "Can the Intensify Aspect spend an Air marker to get an extra use of a Power?"
+ },
+ {
+  "href": "can-intensify-spend-markers-on-other-keywords",
+  "question": "Can the Intensify Aspect spend any Element markers on Push, Gather, Bring, Upgrade, or Downgrade instructions?"
+ },
+ {
+  "href": "intensify-preparing-without-insights-into-the-worlds-nature",
+  "question": "Can the Intensify Aspect still prepare Element markers without the Insights Into the World's Nature special rule?"
+ },
+ {
+  "href": "intensifying-a-bargain",
+  "question": "Can the Intensify Aspect strengthen a Bargain by spending Moon to Remove more Presence from the island? How about from a Presence track?"
+ },
+ {
+  "href": "extracting-the-salt-deposits-card-from-the-invader-deck",
+  "question": "Can the Salt Deposits Invader Card be removed or discarded from the Invader Deck?"
+ },
+ {
+  "href": ".9v5ka9n",
+  "question": "Can the same piece be moved multiple times with the same Event or Fear card?"
+ },
+ {
+  "href": "skipping-multiple-actions-in-a-land-with-exaltation-of-the-incandescent-sky",
+  "question": "Can the threshold of \"Exaltation of the Incandescent Sky\" skip multiple Invader actions in one land?"
+ },
+ {
+  "href": "checking-for-dahan-with-the-threshold-of-inspire-the-release-of-stolen-lands",
+  "question": "Can the threshold of Inspire the Release of Stolen Lands remove Invaders from lands without Dahan?"
+ },
+ {
+  "href": "can-the-violence-aspect-use-bonus-plays-on-powers-that-might-not-deal-damage-or-destroy",
+  "question": "Can the Violence Aspect use a bonus play for a Power Card that only might deal Damage to or Destroy something, like Veil the Night's Hunt?"
+ },
+ {
+  "href": ".bu6oc6l",
+  "question": "Can Thunderspeaker keep its Presence with Dahan when they are \"moved\" rather than Gathered or Pushed?"
+ },
+ {
+  "href": "replacing-presence-with-an-incarna-when-the-incarna-is-on-the-island",
+  "question": "Can Towering Roots of the Jungle replace Presence with its Incarna even if its Incarna is already on the island?"
+ },
+ {
+  "href": ".9v5kfqh",
+  "question": "Can triggered actions be triggered by the action that set them up?"
+ },
+ {
+  "href": "two-setup-instructions-placing-presence-in-the-same-land",
+  "question": "Can two Presence setup instructions place Presence into the same land? (e.g., Shadows Flicker Like Flames putting 2 Presence in the highest-numbered Jungle and 1 Presence in land #5 when land #5 is the highest-numbered Jungle)"
+ },
+ {
+  "href": "the-terror-of-a-slowly-unfolding-plague-and-ceaseless-mining",
+  "question": "Can Vengeance as a Burning Plague let the Habsburg Mining Expedition Ravage in Mining lands with Disease in order to earn Fear?"
+ },
+ {
+  "href": ".7w4gdtj",
+  "question": "Can Vengeance of the Dead trigger itself? How about if it's Repeated?"
+ },
+ {
+  "href": ".7w4geaf",
+  "question": "Can Volcano just decide to destroy Presence with Explosive Eruption without triggering any of the other effects (for the benefit from Collapse in a Blast of Lava and Steam)? Can it destroy more than it needs to?"
+ },
+ {
+  "href": "pushing-within-a-land",
+  "question": "Can Wandering Voice Keens Delirium use Inscrutable Journeying to Push its Incarna within a land?"
+ },
+ {
+  "href": ".9v5kfou",
+  "question": "Can Weave Together the Fabric of Place affect victory/loss condition X?"
+ },
+ {
+  "href": "maximum-number-of-healing-markers",
+  "question": "Can Wounded Waters Bleeding claim more than 5 Healing Markers?"
+ },
+ {
+  "href": "wounded-waters-bleeding-first-use-of-energy-growth",
+  "question": "Can Wounded Waters Bleeding use its third Growth Option on the turn it plays its first Healing Card (usually Turn 3)?"
+ },
+ {
+  "href": ".9v5kfqd",
+  "question": "Can Wrap in Wings of Sunlight grant Defend if you Move 0 Dahan?"
+ },
+ {
+  "href": ".9v5kfr0",
+  "question": "Can you \"move\" pieces from a land to that same land (e.g., with \"Wrap in Wings of Sunlight\")? If so, is it considered a move?"
+ },
+ {
+  "href": ".3y28auk",
+  "question": "Can you add or move Presence into lands with Blight?"
+ },
+ {
+  "href": ".7w4gefe",
+  "question": "Can you choose a land joined by Weave Together the Fabric of Place twice for a Fear card that asks each player to choose a different land?"
+ },
+ {
+  "href": ".7w4g8q2",
+  "question": "Can you choose a land protected by Infinite Vitality as a place to add Blight? (Due to cascade, Power, Event Card, etc.)"
+ },
+ {
+  "href": ".7w4ged0",
+  "question": "Can you disconnect the island using Cast Down into the Briny Deep?"
+ },
+ {
+  "href": ".7w4geao",
+  "question": "Can you do the effects on a Blighted Island card in a different order than listed?"
+ },
+ {
+  "href": ".7w4geb2",
+  "question": "Can you forget Draw Towards a Consuming Void to satisfy the requirements on its own threshold?"
+ },
+ {
+  "href": ".7w4gee7",
+  "question": "Can you Forget one Power Card to pay for multiple Forgetting requirements? (e.g., a self-targeted \"Entwined Power\" in solo)"
+ },
+ {
+  "href": ".7w4gef6",
+  "question": "Can you forget the card you gain from Aid to Lesser Spirits when you gain a Major Power?"
+ },
+ {
+  "href": ".3y28aur",
+  "question": "Can you get around the Serpent's presence limitation using Indomitable Claim? (Add a Presence, even if target land is a type of land you can\u2019t normally have Presence in)"
+ },
+ {
+  "href": "can-you-mix-two-or-more-scenarios",
+  "question": "Can you mix two or more Scenarios?"
+ },
+ {
+  "href": ".7w4gef8",
+  "question": "Can you place Presence during Growth based on range from your Presence in the Ocean?"
+ },
+ {
+  "href": ".7w4g8oz",
+  "question": "Can you play 5-6 players with two copies of the base game?"
+ },
+ {
+  "href": "can-you-play-against-france-without-events",
+  "question": "Can you play against France *(level 2+)* without using the Event deck?"
+ },
+ {
+  "href": "rulebook-pdf-links",
+  "question": "Can you post an electronic PDF of the rulebook?"
+ },
+ {
+  "href": "repeating-aid-from-lesser-spirits-cards",
+  "question": "Can you Repeat the Power Card granted by Aid from Lesser Spirits?"
+ },
+ {
+  "href": ".7w4gear",
+  "question": "Can you take the second growth option of Downpour Drenches the World if you have only 0 or 1 Power Cards in hand?"
+ },
+ {
+  "href": ".7w4gebo",
+  "question": "Can you target a power on a land where you know it won't do anything? For instance, target a land without Explorers with a \"Push 1 Explorer\" Power?"
+ },
+ {
+  "href": ".7w4gebe",
+  "question": "Can you use a Presence track action in the middle of Growth?"
+ },
+ {
+  "href": "observe-the-ever-changing-world-and-counts-as",
+  "question": "Can you use an optional \u201ccounts as\u201d effect to get an Element marker from Observe the Ever-Changing World? (e.g., by making a Presence count as a Beasts with Settle into Hunting Grounds)"
+ },
+ {
+  "href": ".bu6oc8n",
+  "question": "Can you use Blazing Renewal on a Spirit with no destroyed Presence just to do 4 Damage somewhere if you have the threshold elements?"
+ },
+ {
+  "href": ".7w4g8qz",
+  "question": "Can you use Energy you gain during the Fast Power Phase (e.g., from Boon of Vigor) to pay for cards you play that turn?"
+ },
+ {
+  "href": ".9v5ka9h",
+  "question": "Can you use the threshold effects of Innate Powers, even if you can't use the effects above them?"
+ },
+ {
+  "href": ".7w4gebr",
+  "question": "Do \"destroy N fewer Dahan\" effects protect Dahan against all forms of destruction (including by damage)?"
+ },
+ {
+  "href": "the-endless-dark-and-land-based-adversary-effects",
+  "question": "Do Adversary effects based on lands (e.g., the loss condition of the Kingdom of England) work in The Endless Dark?"
+ },
+ {
+  "href": ".7w4ghm5",
+  "question": "Do Damage bonuses apply to actions that conditionally do Damage even if those conditions aren't met?"
+ },
+ {
+  "href": ".9v5kcn7",
+  "question": "Do damage boosts affect the damage from the threshold effect of \"Instruments of their Own Ruin\"? Do Strife and Defend?"
+ },
+ {
+  "href": "where-impending-power-cards-are",
+  "question": "Do Dances Up Earthquakes' Impending Power Cards count as being in hand, play, or discard?"
+ },
+ {
+  "href": ".7w4gefb",
+  "question": "Do Defend effects stack normally with Weave Together the Fabric of Place?"
+ },
+ {
+  "href": "effects-that-check-for-gaining-power-cards-when-getting-power-cards-in-other-ways",
+  "question": "Do effects that interact with \u201cgaining\u201d Power Cards apply to every time a Spirit gets a new Power Card, no matter the method?"
+ },
+ {
+  "href": "timing-of-explorer-and-dahan-check-in-the-final-threshold-of-the-lair-aspect",
+  "question": "Do Explorers gathered by the Lair Aspect's final threshold enable that threshold to gather more Invaders?"
+ },
+ {
+  "href": ".3y28aul",
+  "question": "Do I have to do everything shown in a Growth option I pick?"
+ },
+ {
+  "href": ".7w4gani",
+  "question": "Do I need to forget two cards to trigger the conditional on Call on Midnight's Dreams?"
+ },
+ {
+  "href": "elements-from-impending-power-cards",
+  "question": "Do impending cards grant Elements once they\u2019re in play?"
+ },
+ {
+  "href": "counting-participating-invaders",
+  "question": "Do Invaders that are not participating in Ravage count towards making a land Ravage with \"No Bravery Without Numbers\" or getting a damage bonus from \"Fearful Mobs\"?"
+ },
+ {
+  "href": ".7w4geg4",
+  "question": "Do powers have to be resolved in order, or can you choose to do the effects in the order that's most convenient for you?"
+ },
+ {
+  "href": "power-cards-checking-for-invaders-participating-in-ravage-actions-they-cause",
+  "question": "Do Powers that cause Ravage Actions (e.g., \"Manifest Incarnation\") check if any Invaders are participating in Ravage, just like Invader Cards do?"
+ },
+ {
+  "href": ".3y28aqg",
+  "question": "Do Range buffs apply to Powers that affect \"a land with your Presence\" or \"one of your lands\"?"
+ },
+ {
+  "href": "numinous-crisis-energy",
+  "question": "Do Spirits gain Energy from Numinous Crisis if that Event doesn't flip the Blight Card?"
+ },
+ {
+  "href": "Stage-II-default-timing",
+  "question": "Do Stage II Escalations happen before or after the Explore?"
+ },
+ {
+  "href": "once-per-turn-actions-granted-by-powers",
+  "question": "Do the effects of the threshold of Unearth a Beast of Wrathful Stone count as your Power?"
+ },
+ {
+  "href": "intensify-markers-and-repeats",
+  "question": "Do the modifiers from Intensify carry over when Repeating a Power?"
+ },
+ {
+  "href": ".7w4geh1",
+  "question": "Do you pick the target for Let's See What Happens before or after seeing what card you draw?"
+ },
+ {
+  "href": ".7w4gcs0",
+  "question": "Do you win as soon as you earn the last Fear card and the Victory space is revealed?"
+ },
+ {
+  "href": ".3y28auq",
+  "question": "Does \"Entwined Power\" (you and target Spirit may use each others\u2019 Presence to target Powers) also allow you to count the other Spirit's Presence for the text effects of Powers (e.g., getting 1 Fear and dealing 1 Damage with \"Pull Beneath the Hungry Earth\")? How about for determining which lands are \"your lands\" for the purpose of a Power?"
+ },
+ {
+  "href": ".7w4gebg",
+  "question": "Does \"Reclaim half\" on the first growth track of Starlight Seeks its Form mean half of the discard, or half of all your cards?"
+ },
+ {
+  "href": ".9v5kfq9",
+  "question": "Does \"you can't destroy the same Invader twice in one action\" also apply to Presence destruction?"
+ },
+ {
+  "href": ".7w4geeo",
+  "question": "Does a Build have to happen for Habsburg Monarchy (Livestock Colony) Level 1 to Gather Towns?"
+ },
+ {
+  "href": ".7w4geg1",
+  "question": "Does a cascade count as part of the action that added the original Blight (e.g., for effects that care about Blight being added during a Ravage Action)?"
+ },
+ {
+  "href": ".9v5kc4h",
+  "question": "Does a damaged Invader or damage Dahan deal less damage than normal?"
+ },
+ {
+  "href": "counting-up-pieces-that-count-as-two-things",
+  "question": "Does a piece that counts as two token types (e.g., both a Badlands and a Beasts via \"Settle Into Hunting-Grounds\") have a double impact on effects scale with both token types (e.g., \"Beset by Many Troubles\")?"
+ },
+ {
+  "href": "breaking-range-or-target-requirements-in-the-middle-of-a-power",
+  "question": "Does a Power stop resolving if you can no longer meet the Range/Target requirements in the middle of using it? (e.g., because it moves Presence out of the origin land)"
+ },
+ {
+  "href": "ethereal-conjunction-and-costs",
+  "question": "Does a Spirit have to pay for the Power Card played via Ethereal Conjunction?"
+ },
+ {
+  "href": ".9v5kavn",
+  "question": "Does an \"or\" line on a power divide the entire card?"
+ },
+ {
+  "href": "ravage-damage-modifiers-that-check-for-strife",
+  "question": "Does Beset by Many Troubles count Strife being removed in the current Ravage Action?"
+ },
+ {
+  "href": ".9v5ka5b",
+  "question": "Does Blight added during Setup come from the box or from the Blight Pool?"
+ },
+ {
+  "href": "abducting-with-non-lethal-damage",
+  "question": "Does Breath of Darkness Down Your Spine need to do lethal Damage to a lone Invader to abduct it?"
+ },
+ {
+  "href": "ceaseless-mining-during-extra-build-steps",
+  "question": "Does Ceaseless Mining (Habsburg Mining Expedition Level 1) cause Ravages in Mining lands from extra Build Steps (e.g., from High Immigration when combining with the Kingdom of England)?"
+ },
+ {
+  "href": "do-island-wide-effects-check-land-contents-at-resolution",
+  "question": "Does Dahan on their Guard *(In each land, 1 Defense per Dahan)* provide Defense based on the number of Dahan at the time the Fear card was revealed or when the Ravage happens?"
+ },
+ {
+  "href": "deeps-damage-drowning-invaders",
+  "question": "Does Damage from the Deeps Aspect drown Invaders?"
+ },
+ {
+  "href": ".7w4gdax",
+  "question": "Does Damage to the land accumulate? If something does 1 damage to the land, and later on something else does another 1 damage, does it Blight?"
+ },
+ {
+  "href": ".7w4gd7j",
+  "question": "Does damage to the land from War Touches the Island's Shores carry over to future ravages?"
+ },
+ {
+  "href": "does-flipping-deeps-tokens-into-markers-change-the-pieces-in-a-land",
+  "question": "Does Deeps flipping Deeps tokens into markers count as changing the pieces in a land for the purpose of Observe the Ever-Changing World?"
+ },
+ {
+  "href": ".7w4g8nu",
+  "question": "Does Defend guard both the land and Dahan? Eg, if the Invaders attack for 3 Damage in a land with Defend 2, does the Defend 2 block damage to both the land and the Dahan?"
+ },
+ {
+  "href": "destiny-unfolds-and-getting-power-cards-in-ways-other-than-gaining-from-a-deck",
+  "question": "Does Destiny Unfolds have any effect on taking powers (e.g., via \"Transformative Sacrifice\") or gaining powers from a specific subset rather than from the deck (e.g., \"Let's See What Happens\")?"
+ },
+ {
+  "href": ".7w4g8r4",
+  "question": "Does Drowning Dahan give energy to Ocean's Hungry Grasp?"
+ },
+ {
+  "href": ".9v5kfsf",
+  "question": "Does Flame's Fury boost damage to Dahan?"
+ },
+ {
+  "href": "fragments-of-yesteryear-thematic-options",
+  "question": "Does Fragments of Yesteryear restore the Disease and Beasts added as part of Branch & Claw / Jagged Earth setup on the balanced boards?"
+ },
+ {
+  "href": "what-plays-does-rightmost-trickster-growth-check",
+  "question": "Does Grinning Trickster's rightmost Growth Option just use the Card Plays revealed on the Presence Track, or does it include modifiers (e.g., \"Back Against the Wall,\" or Invader benefit 4 in Powers Long Forgotten)?"
+ },
+ {
+  "href": ".7w4ged6",
+  "question": "Does hitting both the first and second thresholds of Downpour's 'Rain and Mud Suppress Conflict' reduce Dahan counterattack damage to 0 in Downpour's lands?"
+ },
+ {
+  "href": ".7w4gecq",
+  "question": "Does Isolate apply if you're checking adjacency between an Invader piece and something else? (Another sort of piece, or a land type.)"
+ },
+ {
+  "href": "isolate-and-cascading-blight",
+  "question": "Does Isolate prevent Blight cascades?"
+ },
+ {
+  "href": "isolate-blocking-spread-tumult-and-delusion",
+  "question": "Does Isolate stop Wandering Voice's Incarna from being adjacent to Dahan, thereby allowing the Dahan to participate in Ravage?"
+ },
+ {
+  "href": ".9v5kfoe",
+  "question": "Does making Explorers not participate in Ravage (e.g., with Lure of the Deep Wilderness) prevent \"Competition Among Hunters\" (The Tsardom of Russia Level 3) from causing Ravages?"
+ },
+ {
+  "href": ".7w4gef0",
+  "question": "Does Mists Shift and Flow make Range 0 powers effectively Range 1?"
+ },
+ {
+  "href": "offer-no-firm-foundations-against-kingdom-of-france",
+  "question": "Does Mud\u2019s Offer No Firm Foundations special rule do anything useful against The Kingdom of France Level 2+?"
+ },
+ {
+  "href": "repeating-power-cards-that-grant-repeats",
+  "question": "Does repeating a Power Card that grants repeats (e.g., \"Powerstorm\") create an infinite combo?"
+ },
+ {
+  "href": ".7w4g8nq",
+  "question": "Does Shadows of the Dahan (\"...you may pay 1 Energy to target a land with Dahan regardless of the Power's Range\") let you ignore other targeting requirements?"
+ },
+ {
+  "href": "Does-Sky-Stretches-to-Shore-affect-non-targeting-Range-arrows",
+  "question": "Does Sky Stretches to Shore boost Range arrows inside a Power's effect text?"
+ },
+ {
+  "href": ".9v5kc47",
+  "question": "Does Sweden's Escalation effect happen if no Explorer was added?"
+ },
+ {
+  "href": "what-is-granted-by-the-bonus-space-on-the-intensify-aspect",
+  "question": "Does the Bonus space on the Intensify Aspect grant extra Element Markers?"
+ },
+ {
+  "href": "avarice-rewarded-and-extra-sources-of-blight",
+  "question": "Does the cascade replacement from Habsburg Mining Expedition Level 1 apply to cascades caused by something other than adding Blight to a land with Blight *(e.g., the Sands effect of Varied Terrains)*? How about adding Blight to another land in a way that isn't called a \u201ccascade\u201d *(e.g., Scotland Level 5)*?"
+ },
+ {
+  "href": "repeats-and-gift-of-furious-might",
+  "question": "Does the Damage bonus from \"Gift of Furious Might\" persist when the affected Power is Repeated?"
+ },
+ {
+  "href": "does-the-deeps-aspect-change-which-lands-are-coastal",
+  "question": "Does the Deeps Aspect change which lands are Coastal by sinking lands?"
+ },
+ {
+  "href": "energy-oceans-hungry-grasp-bargains",
+  "question": "Does the Energy Ocean\u2019s Hungry Grasp gains from Drowning count as gaining Energy for the purpose of Bargains?"
+ },
+ {
+  "href": "does-lingering-plagues-prevent-vengeance-from-getting-fear-from-builds-where-theres-disease",
+  "question": "Does the event Lingering Plagues *(\"....Ignore Disease during Builds this Invader Phase\")* stop Vengeance from gaining Fear by letting Builds happen where there's Disease?"
+ },
+ {
+  "href": "checking-which-lands-dances-up-earthquakes-removed-quakes-from",
+  "question": "Does the final threshold of Earth Shudders, Buildings Fall affect all lands where Dances Up Earthquakes has ever removed Quake tokens?"
+ },
+ {
+  "href": ".7w4gef3",
+  "question": "Does The Great River scenario modify the initial Explore?"
+ },
+ {
+  "href": ".bu6od02",
+  "question": "Does the Kingdom of France's \"Slave Labor\" effect, converting Explorers into Towns, trigger if they don't Build normally?"
+ },
+ {
+  "href": ".7w4geah",
+  "question": "Does the Kingdom of Scotland's Escalation trigger if there are no coastal Towns/Cities in any land?"
+ },
+ {
+  "href": "unearth-a-beast-of-wrathful-stone-choice",
+  "question": "Does the marked Beasts from Unearth a Beast of Wrathful Stone need to move in order to do Damage?"
+ },
+ {
+  "href": "encircle-benefitting-from-its-own-range-bonus",
+  "question": "Does the middle threshold of the Encircle Aspect benefit from that Aspect's Range boost?"
+ },
+ {
+  "href": "does-order-of-builds-affect-what-builds",
+  "question": "Does the order of Builds matter to determine what Builds for Kingdom of England at Level 1+ or Kingdom of Scotland Level 3+?"
+ },
+ {
+  "href": ".7w4geay",
+  "question": "Does the Presence added via the threshold of Dream of the Untouched Land come from Presence Tracks?"
+ },
+ {
+  "href": ".7w4g8p2",
+  "question": "Does the Presence limit for Serpent Slumbering Beneath the Island count destroyed Presence?"
+ },
+ {
+  "href": ".bu6oebp",
+  "question": "Does the second effect of Tidal Boon *(\u201cif Dahan are pushed...\u201d)* last for the whole turn?"
+ },
+ {
+  "href": "unearth-a-beast-threshold-on-the-turn-the-marked-beasts-token-is-created",
+  "question": "Does the threshold of Unearth a Beast of Wrathful Stone let the marked Beasts token do Damage on the turn it's created?"
+ },
+ {
+  "href": "threatening-flames-and-isolate",
+  "question": "Does Threatening Flames grant bonus Fear if it can't move Invaders due to Isolate?"
+ },
+ {
+  "href": ".9v5ka9j",
+  "question": "Does unused energy carry over to the next turn?"
+ },
+ {
+  "href": ".7w4ged3",
+  "question": "Does Utter a Curse of Dread and Bone count Blight in the target land *and* adjacent lands, or do you have to choose?"
+ },
+ {
+  "href": "does-wounded-waters-sacrifice-on-the-turn-it-completely-heals",
+  "question": "Does Wounded Waters Bleeding need to sacrifice a Presence or a Power Card on the turn it removes \"Seeking a Path Towards Healing\"?"
+ },
+ {
+  "href": "claimed-pieces-are-not-spent",
+  "question": "Does Wounded Waters Bleeding spend Healing Markers when they gain a Healing Card?"
+ },
+ {
+  "href": "timing-of-avarice-rewarded",
+  "question": "During a Ravage by the Habsburg Mining Expedition Level 1+, does the upgrade from Avarice Rewarded happen before or after the Dahan counterattack?"
+ },
+ {
+  "href": ".7w4g8px",
+  "question": "During Explore, do you still add an Explorer if there is already an Explorer, Town, or City in that land?"
+ },
+ {
+  "href": "growth-order-for-pick-one-of-and-one-of",
+  "question": "During Growth, can Lure of the Deep Wilderness see which Power Card its gains before it decides whether to Reclaim or Add Presence?"
+ },
+ {
+  "href": ".7w4gegf",
+  "question": "Exactly where does Fortune-Seekers cause exploration?"
+ },
+ {
+  "href": "FAQ-Entry",
+  "question": "FAQ Entry"
+ },
+ {
+  "href": ".7w4ged4",
+  "question": "Finder of Paths Unseen has three Unique Powers which move/push pieces to \"a land\". Does that have to be a single land for the whole Power use?"
+ },
+ {
+  "href": ".9v5kfpp",
+  "question": "For \"Royal Backing\" (The Kingdom of Sweden Level 4), what is the timing of the Invader Card discard? How does it combine with other Adversaries which stack the Invader Deck?"
+ },
+ {
+  "href": ".7w4geek",
+  "question": "For an Event that does something \"for each Beasts\", is it one Action for the whole board?"
+ },
+ {
+  "href": "in-powers-long-forgotten-benefit-2-does-shifting-Presence-count-as-moving-it",
+  "question": "For benefit #2 in Powers Long Forgotten, does \"shifting\" Presence count as moving it?"
+ },
+ {
+  "href": ".9v5kfsd",
+  "question": "For Bureaucrats Adjust Funding, when do you check how many Towns or Cities there are on the boards?"
+ },
+ {
+  "href": ".7w4gec3",
+  "question": "For Dahan Insurrection, what types of actions are Constant Raiding and Military Reprisal?"
+ },
+ {
+  "href": ".7w4gef2",
+  "question": "For Dream of the Untouched Land, what orientation should the new board be placed in? Can it use Archipelago rules?"
+ },
+ {
+  "href": ".9v5kfqc",
+  "question": "For Durable Invaders from Habsburg Monarchy (Livestock Colony) Level 4, what exactly counts as a \u2018Destroy all\u2019 effect?"
+ },
+ {
+  "href": ".7w4geke",
+  "question": "For Finder of Paths Unseen growth option that lets you ignore ranges or Presence icon that gives you +1 Range, what does this effect?"
+ },
+ {
+  "href": ".7w4gebx",
+  "question": "For Finder of Paths Unseen's special rule Open the Ways, what does \"once between actions\" mean? Can you only change the choice once per turn?"
+ },
+ {
+  "href": ".7w4gedm",
+  "question": "For Forests of Living Obsidian, when do you check whether the origin land is your Sacred Site?"
+ },
+ {
+  "href": "does-habsburg-1-check-all-build-cards",
+  "question": "For Habsburg Level 1 (Migratory Herders), does it check all Build Cards, or just those in the normal Build Space?"
+ },
+ {
+  "href": "Does-Durable-destroy-to-damage-respect-restrictions-on-that-damage",
+  "question": "For Habsburg Monarchy (Livestock Colony) Level 4, when \"Destroy Town\" effects turn to Damage, does that Damage have to respect restrictions on which Towns could have been destroyed?"
+ },
+ {
+  "href": ".7w4gefz",
+  "question": "For Powers that let you skip some # of Invader Actions, how/when do you decide which Invader Actions to skip?"
+ },
+ {
+  "href": "open-the-ways-for-repeating-powers-on-adjacent-lands",
+  "question": "For Powers that Repeat themselves on an adjacent land, can Finder of Paths Unseen use \"Open the Ways\" before the Repeat to change which lands can be targeted by the Repeat?"
+ },
+ {
+  "href": ".7w4geby",
+  "question": "For Scotland Level 5+, the oceans are in play for purposes of Blight only. How does that interact with Powers, Special Rules, Events, etc. that deal with Blight?"
+ },
+ {
+  "href": ".7w4gejx",
+  "question": "For Shifting Memory of Ages' innate which lets them prepare element markers, if the pieces in the land change during an Action but end up the same as they were, do you get an Element marker?"
+ },
+ {
+  "href": ".7w4gedy",
+  "question": "For Shifting Memory of Ages' innate which lets them prepare element markers: does damaging pieces count? How about adding Strife? Scenario markers?"
+ },
+ {
+  "href": ".7w4gedz",
+  "question": "For Shifting Memory of Ages' innate which lets them prepare element markers: if a single power changes a bunch of things in the target land, can I get multiple element markers?"
+ },
+ {
+  "href": "foreign-dignitaries-visit-in-lands-that-are-not-ravaging",
+  "question": "For the \"Foreign Dignitaries Visit\" event, what happens if the lowest-numbered matching land on that board has no Invaders?"
+ },
+ {
+  "href": ".7w4gef9",
+  "question": "For the \"Relentless Optimism\" Event (Destroying Towns/Cities generates no fear), can Bringer of Dreams and Nightmares still gain Fear and Push?"
+ },
+ {
+  "href": "exactly-hitting-the-limit-of-wavering-resolve",
+  "question": "For the \"Wavering Resolve\" Event, if you have N Power Cards that add Fear, do you have to choose to Remove a set of Invaders that have exactly N Health between them?"
+ },
+ {
+  "href": ".9v5ka9m",
+  "question": "For the base effect of \"Instruments of Their Own Ruin,\" if there are multiple Invaders with Strife, do they deal Damage simultaneously? Can they deal Damage to each other?"
+ },
+ {
+  "href": ".9v5kbjr",
+  "question": "For the Dahan Event \"Retreat\", are you being told to (on each board) Push 2 Dahan from a *single* land with a City, or could you Push 1 Dahan from 2 different lands with Cities? What happens if you can't meet the full requirements?"
+ },
+ {
+  "href": ".7w4g8ra",
+  "question": "For the Dahan Raid and Dahan Enheartened fear cards, is the damage done to each Invader?"
+ },
+ {
+  "href": ".7w4gedh",
+  "question": "For the Event \"Dissolution Threatens\", whose Presence gets destroyed?"
+ },
+ {
+  "href": ".bu6od09",
+  "question": "For the Event card Outpaced on the second option, can Spirits help each other pay the Energy cost?"
+ },
+ {
+  "href": ".9v5kcfs",
+  "question": "For the event War Touches the Island's Shores, does Defend reduce the damage?"
+ },
+ {
+  "href": ".7w4geap",
+  "question": "For the Fire/Sun level of Why Don't You and Them fight, do the Dahan and Invader damage each other simultaneously? Does Defend help? Does Strife help?"
+ },
+ {
+  "href": ".7w4geaz",
+  "question": "For the power Storm-Swath, what happens if the origin land is the same as the target land?"
+ },
+ {
+  "href": ".7w4geb8",
+  "question": "For the third level of Exaltation of the Storm-Wind, what does \"one of your respective lands\" mean?"
+ },
+ {
+  "href": ".7w4gedl",
+  "question": "For the threshold of Dream of the Untouched Land: Should it respect the \"don't use together\" icons on the boards? What if we have 6 players?"
+ },
+ {
+  "href": ".7w4gang",
+  "question": "For the token effect \"New Diseases\", you do something on half the boards. Are you allowed to choose boards with no valid lands?"
+ },
+ {
+  "href": ".9v5kc3z",
+  "question": "For the unique power Call On Midnight's Dreams, does \"this Power\" refer to Call On Midnight's Dreams, or to the just-gained Power Card?"
+ },
+ {
+  "href": ".7w4gdth",
+  "question": "For Vengeance of the Dead, what counts as an \"effect\"? If a Power has multiple instructions that damage/destroy things, are those separate \"effects\"?"
+ },
+ {
+  "href": ".7w4geeq",
+  "question": "For Why Don't You And Them Fight, when do you need 3 Moons to make it Slow? The Fast phase, or the Slow phase?"
+ },
+ {
+  "href": "which-quake-tokens-are-removed-by-the-second-threshold-of-earth-shudders-buildings-fall",
+  "question": "From which lands does Dances Up Earthquakes remove Quake tokens when it uses the second threshold of Earth Shudders, Buildings Fall?"
+ },
+ {
+  "href": ".7w4gebt",
+  "question": "Heart of the Wildfire and Ocean's Hungry Grasp have special rules that refer to \"you\" adding or moving presence.  If another spirit moves your presence (e.g. with Flowing and Silent Forms Dart By), do those rules apply?"
+ },
+ {
+  "href": ".9v5ka98",
+  "question": "How can damage be allocated to Invaders? Do you need to destroy the Explorers before attacking Towns?"
+ },
+ {
+  "href": ".7w4g8os",
+  "question": "How can I get the promotional Spirits from the Kickstarters? (Serpent Slumbering Beneath the Island and Heart of the Wildfire)"
+ },
+ {
+  "href": ".bu6ocbc",
+  "question": "How can I tell what printing I have (from looking at the outside of the box)?"
+ },
+ {
+  "href": ".9v5ka9o",
+  "question": "How can Ocean's Hungry Grasp get Presence on inland lands?"
+ },
+ {
+  "href": "identifying-power-card-type",
+  "question": "How can you determine the type of a Power Card?"
+ },
+ {
+  "href": ".7w4geed",
+  "question": "How do Badlands / Flame's Fury work with \"Veil the Night's Hunt\"? How about Trickster's innate \"Why Don't You and Them Fight\"? Or (other Power that specifies unusual conditions on what can be damaged)?"
+ },
+ {
+  "href": ".7w4g8rl",
+  "question": "How do I figure out the Difficulty of a game using both an Adversary and a Scenario?"
+ },
+ {
+  "href": ".7w4gee6",
+  "question": "How do the elements placed onto Starlight's Presence tracks work?"
+ },
+ {
+  "href": ".7w4g8rs",
+  "question": "How do you pronounce \"Dahan\", anyway?"
+ },
+ {
+  "href": ".9v5kfb4",
+  "question": "How do you score a sacrifice victory?"
+ },
+ {
+  "href": ".9v5kcg2",
+  "question": "How does \"+1 Damage with Damage-dealing Powers\" (e.g., Flame's Fury) work? What exactly does it increase?"
+ },
+ {
+  "href": ".7w4gej2",
+  "question": "How does \"Absolute Stasis\" interact with victory condition X or loss condition Y?"
+ },
+ {
+  "href": ".7w4ged9",
+  "question": "How does \"Heavy Mining\" (The Kingdom of Sweden Level 1) interact with the \"Bestow the Endurance of Bedrock\" special rule of Stone's Unyielding Defiance?"
+ },
+ {
+  "href": ".9v5katl",
+  "question": "How does \"Invaders skip all actions\" in a particular land interact with a Stage II Escalation affecting that land?"
+ },
+ {
+  "href": ".7w4ganh",
+  "question": "How does a Stage II Coastal Lands card interact with the \"Fortification\" event *(After advancing Invader Cards: Invaders Build in one terrain not shown under any Invader Action)*?"
+ },
+ {
+  "href": ".7w4geb7",
+  "question": "How does All Things Weaken interact with Heart of the Wildfire? When Wildfire places Presence, does it then destroy its own Presence?"
+ },
+ {
+  "href": ".7w4geb9",
+  "question": "How does All Things Weaken interact with Stone's Unyielding Defiance's ability to protect Presence from destruction?"
+ },
+ {
+  "href": ".7w4gedj",
+  "question": "How does Bargains of Power and Protection work if you use it multiple times?"
+ },
+ {
+  "href": "entwined-power-in-destiny-unfolds",
+  "question": "How does Entwined Power work in Destiny Unfolds?"
+ },
+ {
+  "href": ".7w4gedc",
+  "question": "How does Farmers Seek the Dahan For Aid affect Habsburg Monarchy (Livestock Colony) Level 1?"
+ },
+ {
+  "href": "isolate-and-the-great-river",
+  "question": "How does Isolate interact with The Great River scenario?"
+ },
+ {
+  "href": ".7w4gedr",
+  "question": "How does Isolate interact with the Military Response rule in the Dahan Insurrection Scenario?"
+ },
+ {
+  "href": ".bu6odei",
+  "question": "How does Mists of Oblivion destroy invaders, if it only does one damage to each Town/City?"
+ },
+ {
+  "href": ".9v5kfrq",
+  "question": "How does Mists Shift and Flow interact with a Power targeting two lands?"
+ },
+ {
+  "href": ".7w4g8oq",
+  "question": "How does one move Presence during Growth?"
+ },
+ {
+  "href": "overseas-trade-seems-safer-and-disease",
+  "question": "How does Overseas Trade Seems Safer at Terror 2 (\"Invaders do not Build Cities in Coastal Lands this turn\") interact with Disease?"
+ },
+ {
+  "href": "overseas-trade-seems-safer-and-build-modifiers",
+  "question": "How does Overseas Trade Seems Safer at Terror 2 (\"Invaders do not Build Cities in Coastal Lands this turn\") interact with effects that change what gets Built?"
+ },
+ {
+  "href": "abducting-presence-with-movement-restrictions",
+  "question": "How does Reach from the Infinite Darkness work with Presence from Spirits with restrictions on where they can move Presence?"
+ },
+ {
+  "href": "relentless-punishment-and-triggered-repeats",
+  "question": "How does Relentless Punishment work with Power Cards that Repeat themselves (e.g., \"The Land Thrashes in Furious Pain\")?"
+ },
+ {
+  "href": "how-does-rumbling-earthquakes-damage-bonus-work",
+  "question": "How does Rumbling Earthquakes' ability to ignore Health bonuses interact with already-Damaged Invaders?"
+ },
+ {
+  "href": ".7w4g8nj",
+  "question": "How does Serpent Slumbering Beneath the Island work in a solo game?"
+ },
+ {
+  "href": "surges-of-colonization-and-explorers-are-reluctant",
+  "question": "How does Surges of Colonization interact with the Terror Level 2 effect of Explorers are Reluctant?"
+ },
+ {
+  "href": ".7w4g8oe",
+  "question": "How does the Stage II escalation (flag) effect for Brandenburg-Prussia work? Which lands can I add a town to?"
+ },
+ {
+  "href": "transforming-aspect-in-dahan-insurrection",
+  "question": "How does the Transforming Aspect interact with the Dahan Insurrection Scenario?"
+ },
+ {
+  "href": "vitality-and-adding-two-or-more-blight-at-once",
+  "question": "How does Vitality interact with effects that add two or more Blight at once (e.g., Kingdom of Sweden Level 1)?"
+ },
+ {
+  "href": "how-does-voice-of-command-interact-with-events-boosting-invader-damage-or-counting-Invaders",
+  "question": "How does Voice of Command interact with Events that boost Invader damage or count Invaders?"
+ },
+ {
+  "href": ".7w4gedw",
+  "question": "How exactly does Pour Time Sideways work?"
+ },
+ {
+  "href": "on-each-board-event-actions-with-bulleted-lists",
+  "question": "How many actions is the \"Act Cautiously in the Background\" option of \"Hard-Working Settlers,\" and what order do those actions resolve in?"
+ },
+ {
+  "href": "how-many-actions-habsburg-escalation",
+  "question": "How many Actions is the Habsburg Livestock Colony Escalation?"
+ },
+ {
+  "href": "how-many-healing-cards-can-wounded-waters-claim",
+  "question": "How many Healing Cards can Wounded Waters Bleeding claim?"
+ },
+ {
+  "href": "how-many-minor-powers-gained-by-nourishing-when-gaining-multiple-major-powers",
+  "question": "How many Minor Powers does the Nourishing Aspect gain if Vital Strength of the Earth gains multiple Major Powers at once (e.g., from Entwined Power in solo)?"
+ },
+ {
+  "href": ".9v5kehe",
+  "question": "How many Powers does Lightning's Swift Strike get to use as Fast?"
+ },
+ {
+  "href": "dark-fire-and-each-board-presence-destruction",
+  "question": "How many Presence can the Dark Fire save from Blight Cards like Downward Spiral or Blighted Island Events like Voracious Consumption?"
+ },
+ {
+  "href": ".9v5kfhf",
+  "question": "How many Presence tokens should I have?"
+ },
+ {
+  "href": "how-many-times-can-ember-eyed-behemoth-use-unrelenting-strides",
+  "question": "How many times can Ember-Eyed Behemoth use Unrelenting Strides if its Incarna is Empowered?"
+ },
+ {
+  "href": "how-much-damage-do-russian-explorers-do",
+  "question": "How much damage do Russian Explorers do (level 1+)?"
+ },
+ {
+  "href": ".7w4g8r9",
+  "question": "How much damage is done with the threshold effect of Instruments of their Own Ruin? Is full damage done in each adjacent land, or is it split up among the adjacent lands?"
+ },
+ {
+  "href": ".7w4g8pb",
+  "question": "How much energy can Ocean's Hungry Grasp gain for Drowned invaders?"
+ },
+ {
+  "href": "threatening-flames-in-a-land-with-no-explorers-or-towns",
+  "question": "How much Fear does Threatening Flames add when targeting a land with Cities, but no Explorers or Towns?"
+ },
+ {
+  "href": ".7w4g8pc",
+  "question": "How much Fear does Tsunami's threshold effect generate?"
+ },
+ {
+  "href": ".9v5ka9c",
+  "question": "How often do you apply the Blighted Island effects from Branch & Claw?"
+ },
+ {
+  "href": ".9v5ka95",
+  "question": "I got one of the fancy canonical-island playmats. How do I use it? And what are those new setup icons?"
+ },
+ {
+  "href": ".7w4gec4",
+  "question": "I'm confused - when do restrictions like \"there must be Invaders\" for Build and \"there must be a source of Explorers\" for Explore apply?"
+ },
+ {
+  "href": "entwined-downpour-are-joint-sacred-sites-wetlands-for-the-other-spirit",
+  "question": "If \"Entwined Power\" is used on Downpour Drenches the World and another Spirit: can lands with 2 of the other Spirit's Presence be treated as Downpour's Sacred Sites (and thus Wetlands) while the other Spirit is targeting?"
+ },
+ {
+  "href": ".7w4geaj",
+  "question": "If \"Weave Together the Fabric of Place\" joins lands on two adjacent boards, how does that work with \"On each board\" effects?"
+ },
+ {
+  "href": "does-devouring-teeth-get-plus-one-damage-on-gift-of-searing-heat",
+  "question": "If *Gift of Searing Heat* is used on Devouring Teeth Lurk Underfoot, and Devouring Teeth chooses to do 1 Damage, does it get the +1 Damage bonus from its Territorial Aggression special rule?"
+ },
+ {
+  "href": ".9v5kfqv",
+  "question": "If 2 Blight is added at once (eg: Sweden), can Stone's first innate pay for just 1 of it to come from the box? Or is the choice all-or-nothing?"
+ },
+ {
+  "href": "sacrificing-presence-to-prevent-effects-that-do-nothing",
+  "question": "If a \"Spirits may prevent this on any/all boards\" effect wouldn't do anything on a particular board it's affecting, can Spirits sacrifice Presence there anyway?"
+ },
+ {
+  "href": ".7w4gekm",
+  "question": "If a Badlands moves to a different land mid-action, can it boost Damage in both the original land and its new land?"
+ },
+ {
+  "href": ".bu6ofsi",
+  "question": "If a Dahan is killed in a ravage but no blight is added (from say, Infinite Vitality) does Sworn to Victory (Thunderspeaker's special rule) still activate?"
+ },
+ {
+  "href": "Do-not-participate-in-Ravage-and-scaling-Defend",
+  "question": "If a Dahan is not participating in Ravage, can it still grant Defend 1 in that Ravage from Bargains of Power and Protection or Canny Defense?"
+ },
+ {
+  "href": ".7w4gbg5",
+  "question": "If a Fear cards tells you to add Strife and then do something to pieces with Strife, does that affect just the newly-added Strife?"
+ },
+ {
+  "href": ".9v5ka92",
+  "question": "If a Fear or Event effect causes damage, can Bringer of Dreams and Nightmares still use it?"
+ },
+ {
+  "href": ".7w4gedo",
+  "question": "If a land matches an Invader Card multiple ways \u2013 eg, if the Stage III Jungle + Wetland comes up and \"Weave Together the Fabric of Place\" has been used to merge a Jungle with a Wetland \u2013 does it perform that action multiple times?"
+ },
+ {
+  "href": "pieces-arriving-in-the-middle-of-a-ravage-action",
+  "question": "If a piece is added or moved to a land mid-Ravage (e.g., by a Blight Card that flips during the Ravage), does that piece participate in the Ravage?"
+ },
+ {
+  "href": "conditions-changing-when-not-participating-in-ravage",
+  "question": "If a piece only conditionally doesn't participate in Ravage, and that condition changes mid-Ravage, does the piece participate for the rest of the Ravage Action?"
+ },
+ {
+  "href": "adding-badlands-and-dealing-damage-in-one-action",
+  "question": "If a Power both adds Badlands and deals Damage, does the Damage benefit from the new Badlands?"
+ },
+ {
+  "href": "damage-in-multiple-lands-when-one-has-badlands",
+  "question": "If a Power deals Damage in multiple lands, can Damage in one of those lands be increased by Badlands in one of the other lands?"
+ },
+ {
+  "href": "gift-of-furious-might-with-powers-that-deal-damage-mulitple-times",
+  "question": "If a Power deals Damage multiple times, can the Damage bonus from \"Gift of Furious Might\" be split across those instances of Damage?"
+ },
+ {
+  "href": "are-bonuses-capped-when-applied-to-effects-that-are-capped",
+  "question": "If a Power has a cap on the amount of Damage it can do, can Damage bonuses allow it to exceed that cap?"
+ },
+ {
+  "href": ".bu6odeb",
+  "question": "If a Power has a conditional effect (e.g., Defend if a Sacred Site is present), does the effect persist when the condition changes?"
+ },
+ {
+  "href": ".9v5kc4i",
+  "question": "If a Power moves Dahan into the Ocean when Ocean's Hungry Grasp is in play, can Thunderspeaker move its Presence with them into the Ocean?"
+ },
+ {
+  "href": ".7w4ghbu",
+  "question": "If a Power on a Power Card has been modified, do those modifiers persist if the Power Card leaves play?"
+ },
+ {
+  "href": "avarice-rewarded-with-no-ravaging-explorers-or-towns",
+  "question": "If a Ravage caused by the Habsburg Mining Expedition (Level 1+) would add a Blight to a land with Blight and no Explorers/Towns, what happens if there are no pieces to Upgrade (e.g., because only Cities are participating in that Ravage)?"
+ },
+ {
+  "href": ".7w4g8r8",
+  "question": "If a Ravage is prevented (by, e.g., A Year of Perfect Stillness or Choke the Land with Green) do the Dahan still fight back?"
+ },
+ {
+  "href": ".7w4g8qa",
+  "question": "If a region is adjacent to or contains more than one source of Invaders, do you add more than one Explorer?"
+ },
+ {
+  "href": "if-a-special-rule-cares-about-elements-when-does-it-check-your-element-total",
+  "question": "If a Special Rule cares about Elements, when does it check your Element total?"
+ },
+ {
+  "href": "once-per-power-limits-and-repeats",
+  "question": "If a special rule is limited to once per Power (e.g., those on the Healing Cards of Wounded Waters Bleeding), how does that limit apply to Repeated Powers?"
+ },
+ {
+  "href": "leaving-an-incarna-in-place-with-an-add-move-action",
+  "question": "If a Spirit has a Growth Action that adds or moves its Incarna, can it just leave its Incarna in place (whether on the island or in the supply)?"
+ },
+ {
+  "href": "computing-energy-and-plays-with-unusual-tracks",
+  "question": "If a Spirit has an unusually-shaped Presence Track, how does it determine the number of Energy/Plays it has access to each turn?"
+ },
+ {
+  "href": "Spirit-with-multiple-ways-to-set-up",
+  "question": "If a Spirit has multiple legal ways to set up on the island, can it choose the one it likes best?"
+ },
+ {
+  "href": ".7w4g9og",
+  "question": "If a Spirit reveals two 'Reclaim 1' spaces on their Presence tracks, can they Reclaim two cards?"
+ },
+ {
+  "href": "moving-an-incarna-under-settle-into-hunting-grounds",
+  "question": "If a Spirit with an Incarna uses Settle Into Hunting Grounds, can the Incarna still move that turn?"
+ },
+ {
+  "href": "timing-of-checking-range-and-target-for-powers-that-add-ongoing-effects",
+  "question": "If a Spirit's Power adds an ongoing effect in a land (e.g., Defend), does that effect go away if the Spirit can no longer meet the Range & Target requirements, or any conditional requirements in the Power?"
+ },
+ {
+  "href": ".7w4gebu",
+  "question": "If a Spirit's Presence counts as Beasts (say, due to \"Settle Into Hunting-Grounds\"), and a \"destroy Beasts\" effect destroys their Presence, is it still considered destroyed Presence? More generally, if Piece A also counts as Piece B, and a \"destroy/remove Piece B\" effect destroys/removes it, does it go to the supply for A or B?"
+ },
+ {
+  "href": "checking-for-adjacent-lands-in-setup",
+  "question": "If a Spirit's setup instructions reference the distance to other lands (e.g., Ember-Eyed Behemoth looking for a Wetland adjacent to a Jungle), does this check for lands on other boards?"
+ },
+ {
+  "href": "where-do-spirit-targeting-powers-add-their-fear",
+  "question": "If a Spirit-targeting Power adds Fear, which land does it add Fear in (e.g., for the purpose of Dread Apparitions)?"
+ },
+ {
+  "href": "unique-power-transferred-forgotten-regained",
+  "question": "If a Unique Power Card is transferred to another Spirit and then Forgotten, which Spirit is eligible to get it back via an effect that re-gains Forgotten Unique Powers, like *Tell the Old Stories*?"
+ },
+ {
+  "href": ".7w4g8p8",
+  "question": "If A Year of Perfect Stillness or Paralyzing Fright is used on a land, can that land still be a source for Exploration?"
+ },
+ {
+  "href": ".7w4g8oc",
+  "question": "If all my Presence from my Spirit Panel is placed on the board, how do I add more?"
+ },
+ {
+  "href": ".7w4geba",
+  "question": "If All Things Weaken is out, can the third level of Hold the Island Fast with a Bulwark of Will (Stone's Unyielding Defiance) save adjacent Presence from destruction?"
+ },
+ {
+  "href": "can-an-innate-power-that-only-changes-speed-or-range-be-targeted",
+  "question": "If all you can do with an innate power is change its Speed or Range (eg: either of Thunderspeaker's innates with 4 Air only), is that enough to target and use the Power?"
+ },
+ {
+  "href": "intensify-aspect-affecting-multiple-lands",
+  "question": "If an action affects multiple lands, can the Intensify Aspect spend prepared Element markers to affect multiple lands?"
+ },
+ {
+  "href": "affecting-extra-pieces-with-effects-that-scale-with-health",
+  "question": "If an Action bases its effects around Invaders with a specific amount of Health (e.g., 3 Health worth of Invaders), what does it mean for that Action to affect +1 piece (e.g., for the Intensify Aspect)?"
+ },
+ {
+  "href": "badlands-and-dealing-damage-multiple-times-with-one-action",
+  "question": "If an Action deals Damage multiple times, can it benefit from Badlands each time?"
+ },
+ {
+  "href": "nested-doubling-with-pour-time-sideways",
+  "question": "If an Adversary/Event/Scenario Action causes an Invader Action, does \"Pour Time Sideways\" double both the the original Action and then twice double the Invader Action?"
+ },
+ {
+  "href": ".9v5kcdu",
+  "question": "If an effect *(e.g., \"A Year of Perfect Stillness\")* makes \"Invaders skip all actions\", what is affected? How is this different from \"Skip all Invader actions\"?"
+ },
+ {
+  "href": "global-health-penalties-and-the-endless-dark",
+  "question": "If an effect changes the Health of all pieces that meet a particular condition, does that affect pieces in The Endless Dark?"
+ },
+ {
+  "href": "number-of-counterattacks-when-dahan-counterattack-early",
+  "question": "If an effect changes when Dahan deal Damage in Ravage (e.g., Words of Warning), is that Damage in addition to or instead of the normal Damage after Invaders?"
+ },
+ {
+  "href": ".7w4gi18",
+  "question": "If an effect happens after a particular step of the Invader Phase (e.g., \"after the Build Step\") and there are multiple Invader cards in the corresponding space, does it happen after resolving each card?"
+ },
+ {
+  "href": "moving-a-piece-multiple-times-with-an-each-X-effect",
+  "question": "If an effect moves pieces \"on each board,\" \"in each land,\" or for \"each Spirit,\" can the same piece be moved multiple times?"
+ },
+ {
+  "href": "removing-or-replacing-a-piece-that-cannot-be-destroyed",
+  "question": "If an effect prevents a piece from being damaged or destroyed, does that also prevent the piece from being removed or replaced?"
+ },
+ {
+  "href": "paying-costs-inside-effects",
+  "question": "If an effect says that you may X to Y (e.g., paying Energy to gain a Power Card, Destroying Presence to skip an Event on a board), are you allowed to get the second half for free if you can't do the first half?"
+ },
+ {
+  "href": "protecting-pieces-that-count-as-other-pieces",
+  "question": "If an effect skips destruction effects against a particular piece type (e.g., \"Heart-Tree Guards the Land\" protecting Beasts), does it also protect pieces that count as that type (e.g., Presence that counts as Beasts due to \"Settle Into Hunting-Grounds\")?"
+ },
+ {
+  "href": "Blitz-Slow-Phase",
+  "question": "If an effect specifically happens in the Slow Phase, but isn't a Slow Power, how does it work in the Blitz Scenario?"
+ },
+ {
+  "href": ".9v5kaai",
+  "question": "If an effect tells you to, eg, \"remove 2 Invaders\" (Twisted Flowers Murmur Ultimatums), can you just remove 2 Cities?"
+ },
+ {
+  "href": "actions-for-fear-and-event-cards-with-both-each-and-non-each-instructions",
+  "question": "If an Event or Fear Card has multiple instructions, only *some* of which are \"each\", how many actions is that? Eg: Dahan Threaten has each player add a Strife, then applies a rule where Strife lowers Invader Health."
+ },
+ {
+  "href": ".bu6og2y",
+  "question": "If an Explorer with Strife is affected by Voice of Command, does it still deal damage?"
+ },
+ {
+  "href": "removing-an-incarna-from-the-game",
+  "question": "If an Incarna is removed from the game or put back into the box (e.g., by Transform to a Murderous Darkness), can it be added back into the game?"
+ },
+ {
+  "href": ".7w4gefc",
+  "question": "If an inland and Coastal land get Woven Together by the Fabric of Place, can Ocean leave their Presence inland during Time Passes?"
+ },
+ {
+  "href": "moving-a-piece-twice-with-one-instruction",
+  "question": "If an instruction moves pieces in multiple lands, (e.g., \"Unbearable Gaze\" pushing a piece in origin land and a piece in target land), can it move the same piece twice: once from the first land to second land, and then from the second land to its final destination?"
+ },
+ {
+  "href": "pieces-saved-from-destruction-do-not-count-as-destroyed",
+  "question": "If an Invader is saved from destruction (e.g., by the Tsardom of Russia Level 2+), does it count towards effects that check which pieces were destroyed?"
+ },
+ {
+  "href": "if-an-invader-with-health-bonus-and-damage-is-moved-where-is-it-destroyed",
+  "question": "If an Invader or Dahan is in a land where it has a Health bonus, takes Damage equal to its normal Health, and then gets moved into a land where it has no Health bonus, where is it actually destroyed? (E.g., for *Vengeance of the Dead*)"
+ },
+ {
+  "href": "invaders-with-strife-not-participating-in-ravage",
+  "question": "If an Invader with Strife is not participating in a Ravage, does it still remove 1 Strife in that Ravage?"
+ },
+ {
+  "href": "can-dahan-get-strife",
+  "question": "If an Invader with Strife is replaced with a Dahan, does it keep the Strife?"
+ },
+ {
+  "href": ".9v5kfhe",
+  "question": "If another Spirit gets hold of \"Elemental Teachings\" (from Shifting Memory of Ages), can they Prepare Element markers?"
+ },
+ {
+  "href": "ordinary-piece-and-counts-as-piece-in-the-same-land",
+  "question": "If both a Beasts and something that counts as a Beasts (e.g., a sacred site of Many Minds Move as One) are in the same land and something destroys a Beasts there, can you choose which one is destroyed?"
+ },
+ {
+  "href": "affecting-the-endless-dark-with-land-targeting-powers-that-target-elsewhere",
+  "question": "If Breath of Darkness Down Your Spine uses a land-targeting Power that resolves an effect in a land other than \u201ctarget land\u201d (e.g., removing an Invader in \"2 lands with 4 or more Invaders\" with \"Vanish Softly Away, Forgotten by All\") can it choose The Endless Dark as one of those lands?"
+ },
+ {
+  "href": ".9v5kfh3",
+  "question": "If Bringer of Dreams and Nightmares does shadow damage to a damaged Town, causing Fear and Pushing it, does the damage get healed?"
+ },
+ {
+  "href": ".7w4g8pj",
+  "question": "If Bringer of Dreams and Nightmares Repeats a Power, can the Repeat \"destroy\" Invaders that were \"destroyed\" by the original Power use?"
+ },
+ {
+  "href": ".9v5katc",
+  "question": "If Bringer of Dreams and Nightmares uses \"Mists of Oblivion,\" do they get the Power Card's bonus fear for destroying Towns/Cities? (Relatedly, can they trigger \"Vengeance of the Dead\"?)"
+ },
+ {
+  "href": ".bu6oc6g",
+  "question": "If Bringer of Dreams and Nightmares uses a Power that Damages/Destroys Dahan, what happens?"
+ },
+ {
+  "href": ".7w4gebn",
+  "question": "If Bringer of Dreams and Nightmares uses Infestation of Venomous Spiders and meets the threshold, does it deal real Damage?"
+ },
+ {
+  "href": "range-bonuses-with-powers-that-gather-presence",
+  "question": "If Devouring Teeth Lurks Underfoot gets a Range bonus to Death Approaches from Beneath the Surface and targets a land at least Range 2 from its Presence, does it have to Gather Presence into that land?"
+ },
+ {
+  "href": ".7w4gean",
+  "question": "If Downpour Drenches the World has the elements for the first two thresholds of Rain and Mud Suppress Conflict, does it get Defend 2 per Presence?"
+ },
+ {
+  "href": "strifed-invaders-not-participating-in-ravage-near-the-voice-incarna",
+  "question": "If Exhale Confusion and Delirium stops Invaders with Strife from participating in Ravage, does Spread Tumult and Delusion still use that Strife to stop Dahan from participating as well?"
+ },
+ {
+  "href": "eyes-watch-from-the-trees-thresholds-trees-and-stones-speak-of-war",
+  "question": "If Eyes Watch From the Trees uses the threshold of *The Trees and Stones Speak of War*, do they get to Gather a Dahan afterwards? If so, when?"
+ },
+ {
+  "href": ".7w4geev",
+  "question": "If Finder of Paths Unseen causes Heart of the Wildfire to add/move Presence, destroying Invaders, does Finder need to pay for \"Responsibilities to the Dead\"? What if Finder destroys some of Volcano's Presence? Or if Finder moves Dahan during Dahan Insurrection?"
+ },
+ {
+  "href": "Finder-double-jeopardy",
+  "question": "If Finder of Paths Unseen has an action that both destroys Invaders, and *also* triggers their destruction by a second action by moving them, does it lose Presence twice from \"Responsibilities to the Dead\"? What's the timing?"
+ },
+ {
+  "href": ".7w4ged2",
+  "question": "If Finder of Paths Unseen makes 2 of its lands adjacent, then uses the Moon+Air threshold of its \"Lay Paths They Cannot Help But Walk\" Innate Power to Push its Presence out of one of those lands, are those two lands still adjacent for the Sun+Air threshold?"
+ },
+ {
+  "href": "finder-double-responsibilities-on-self-trigger",
+  "question": "If Finder of Paths Unseen moves Invaders to their destruction, and that destruction is also due to Finder's triggered action, does \"Responsibilities to the Dead\" happen once or twice? (e.g., Finder uses \"Melt Earth into Quicksand\" on a land, then later Pushes some Invaders there.)"
+ },
+ {
+  "href": ".7w4gebm",
+  "question": "If Finder of Paths Unseen uses Infestation of Venomous Spiders with threshold, when does it have to pay for Responsibilities of the Dead?"
+ },
+ {
+  "href": ".7w4geer",
+  "question": "If Fractured Days gives away its Unique Powers (e.g., with \"Entwined Power\"), can other Spirits play them?"
+ },
+ {
+  "href": ".7w4gedq",
+  "question": "If Gift of Nature's Connection comes up as an Event randomizer, does it work like Elemental Boon (we get to choose if it has the element or not)?"
+ },
+ {
+  "href": "ignoring-disease-in-mining-lands",
+  "question": "If Habsburg Mining Expedition Level 1+ would Ravage in a land with Disease, then an Event ignores Disease during Builds, does the Disease still prevent that Ravage?"
+ },
+ {
+  "href": "keep-watch-for-new-incursions-twice-on-the-same-land",
+  "question": "If Hearth-Vigil repeats Keep Watch for New Incursions on the same land, do they have to apply the Damage from the two uses in response to the same added/moved Invaders?"
+ },
+ {
+  "href": ".9v5kcmx",
+  "question": "If I gain an Element in the middle of resolving a Power, may I use that Element to gain a later threshold?"
+ },
+ {
+  "href": ".bu6oc73",
+  "question": "If I Gather/Push/otherwise move 2 Dahan at once, can I move 2 of Thunderspeaker's Presence along with them?"
+ },
+ {
+  "href": "What-do-range-boosts-affect",
+  "question": "If I get a Range boost, what Ranges does it affect?"
+ },
+ {
+  "href": ".3y28aeu",
+  "question": "If I have one Presence in a land, and I play Entwined Power on another Spirit who has one Presence there, do we have a Sacred Site?"
+ },
+ {
+  "href": ".7w4gec6",
+  "question": "If I meet the threshold for Draw Towards a Consuming Void, can I choose a different target land?"
+ },
+ {
+  "href": ".9v5ka8w",
+  "question": "If I use the \"forget this Power\" option on \"Call on Midnight's Dreams,\" can I still Repeat the Power Card?"
+ },
+ {
+  "href": ".bu6odrc",
+  "question": "If Invaders do extra damage in a land where all Invaders have Strife, what happens?"
+ },
+ {
+  "href": ".7w4geew",
+  "question": "If Invaders Ravage twice in the same round, how does Defend work? If each Ravage deals 1 damage to the land, do you add a Blight?"
+ },
+ {
+  "href": ".7w4gedn",
+  "question": "If Many Minds Move as One uses \"Settle Into Hunting-Grounds,\" do the two \"may count as Beasts\" rules stack?"
+ },
+ {
+  "href": "how-long-a-joining-of-swarms-and-flocks-lasts",
+  "question": "If Many Minds Moves as One gathers multiple Sacred Sites into one land with an action, do they still count as separate Beasts for the rest of that action?"
+ },
+ {
+  "href": "chaining-upgrades-and-downgrades",
+  "question": "If multiple pieces would be upgraded or downgraded simultaneously (e.g., with the Lair Aspect), is it possible to upgrade or downgrade the same piece multiple times?"
+ },
+ {
+  "href": ".9v5kfqb",
+  "question": "If Ocean's Presence is moved/destroyed entirely off a board in the middle of an action, when does \"treat the Ocean as Coastal Wetlands\" expire?"
+ },
+ {
+  "href": ".9v5kfq5",
+  "question": "If Oceans are in play, and you Weave Together an Ocean with a land, is the resulting joined land Coastal?"
+ },
+ {
+  "href": ".7w4geff",
+  "question": "If one of Shroud of Silent Mists lands is targeted with Vengeance of the Dead and Invaders have their Health boosted by an Event, when damaged Invaders die at the end of the turn when the health boost wears off, do you get the benefit of Vengeance of the Dead?"
+ },
+ {
+  "href": ".9v5kfo8",
+  "question": "If Pent-Up Calamity removes a Spirit's Presence to deal damage (via that Presence counting as, e.g., Beasts): can the threshold replace that Presence?"
+ },
+ {
+  "href": "not-participating-in-ravages-in-adjacent-lands",
+  "question": "If pieces in a land are affected by a \"do not participate in Ravage\" effect, do they also sit out Ravage Actions in other lands?"
+ },
+ {
+  "href": ".9v5kfog",
+  "question": "If playing Despicable Theft vs. Russia level 2+, do the Thieves get the benefits that Russian Explorers do?"
+ },
+ {
+  "href": "Drowning-thieves",
+  "question": "If playing Ocean's Hungry Grasp in the Despicable Theft Scenario, can you Drown Thieves if 2 Dahan are pushed into the Ocean in the same action? What if a Town is also Pushed in?"
+ },
+ {
+  "href": ".7w4gege",
+  "question": "If playing with Ocean's Hungry Grasp and you Weave Together a land with an Ocean, how does that work? What if Ocean's Hungry Grasp loses all their Presence from that board?"
+ },
+ {
+  "href": "entwined-power-rising-heat",
+  "question": "If Rising Heat of Stone and Sand has a Sacred Site in a land for targeting purposes due to \"Entwined Power,\" do Invaders there have -1 Health from its \"Blistering Heat\" Special Rule?"
+ },
+ {
+  "href": "Filled-Deep-Slumber-track",
+  "question": "If Serpent Slumbering Beneath the Island fills its Deep Slumber track (so only 13 is visible), does Absorb Essence still work?"
+ },
+ {
+  "href": ".7w4geau",
+  "question": "If Shadows Flicker Like Flame, with the Reach aspect, uses \"Reaching Grasp,\" can it let a Spirit ignore range for the entire turn?"
+ },
+ {
+  "href": ".7w4g8r6",
+  "question": "If Shadows Repeats a Power that it range-boosted with Shadows of the Dahan, does it have to pay Energy again?"
+ },
+ {
+  "href": "reach-aspect-and-repeats",
+  "question": "If Shadows with Reach ignores Range for a Power, then later Repeats that Power, do they get to ignore Range again?"
+ },
+ {
+  "href": ".bu6ofsl",
+  "question": "If Sky Stretches to Shore has been used on you, and you reveal the \"Outpaced\" Event, can you change a Power's speed at that point so it interacts differently with Outpaced?"
+ },
+ {
+  "href": ".7w4gehz",
+  "question": "If Starlight returns Presence to one of its Growth track rows, does it lose access to that Growth choice?"
+ },
+ {
+  "href": "separate-ravage-damage-modifiers-for-the-land-and-the-Dahan",
+  "question": "If the \"Xenophobia\" Event stops each individual Invader from dealing Damage to the land (but leaves them dealing Damage to Dahan), do Ravage Damage bonuses increase Damage dealt to the land?"
+ },
+ {
+  "href": ".bu6oc6k",
+  "question": "If the Blight card is Aid from Lesser Spirits and Bringer of Dreams and Nightmares is playing, is the Minor Power it gets subject to To Dream a Thousand Deaths?"
+ },
+ {
+  "href": ".3y28aus",
+  "question": "If the effects of a Fear Card earn you another Fear Card, does the new card resolve during that Invader Phase or the next one?"
+ },
+ {
+  "href": "end-of-phase-multiple-triggered-actions",
+  "question": "If the end of a Step or Phase triggers multiple Actions, are those Triggered Actions part of the same Action Tree?"
+ },
+ {
+  "href": ".7w4geaw",
+  "question": "If the Event Beasts Prey on the Injured happens in a game with Many Minds Move as One, do Many Minds' Sacred Sites count as a Badlands?"
+ },
+ {
+  "href": "towering-roots-of-the-jungle-incarna-destroyed-in-the-middle-of-an-action",
+  "question": "If the Incarna of Towering Roots of the Jungle is destroyed in the middle of an action, do Invaders/Dahan/Beasts become vulnerable immediately?"
+ },
+ {
+  "href": "intensifying-call-of-the-dahan-ways",
+  "question": "If the Intensify Aspect spends a Moon marker on \"Call of the Dahan Ways\" with threshold, which pieces can be replaced?"
+ },
+ {
+  "href": ".9v5kfa5",
+  "question": "If the Invaders get Powers Long Forgotten benefit #2, can they build a City in an empty Sands?"
+ },
+ {
+  "href": "Sweden-Escalation-and-triggered-actions",
+  "question": "If the Kingdom of Sweden Explores into a land with Escalation, can a triggered action like \"Call to Guard\" get rid of that Explorer before the Escalation checks if a Dahan will be replaced?"
+ },
+ {
+  "href": "moving-the-lair-incarna-to-a-coastal-land",
+  "question": "If the Lair Aspect finds a way to move their Incarna without counting it as Presence, can you it move to a Coastal land?"
+ },
+ {
+  "href": "number-of-locus-repeats",
+  "question": "If the Locus Aspect lets a Spirit Repeat a Power Card at its Incarna, what happens if that Spirit uses the Power Card again (e.g., via Powerstorm)? Can they Repeat the Power Card at the Incarna again?"
+ },
+ {
+  "href": "mentor-gifting-powers-with-unusual-elements",
+  "question": "If the Mentor Aspect gives another Spirit Elemental Boon, which Element Markers can they pick from? How about if it gives Gift of Nature\u2019s Connection?"
+ },
+ {
+  "href": "strong-and-constant-currents-in-an-inland-land",
+  "question": "If the text of Strong and Constant Currents is resolved in an inland land (e.g., due to Let's See What Happens), can it move Dahan?"
+ },
+ {
+  "href": "foreign-dignitaries-visit-with-multiple-invader-cards",
+  "question": "If there are multiple Ravage Cards, which lands get a Ravage Damage bonus from \"Foreign Dignitaries Visit\"?"
+ },
+ {
+  "href": ".9v5kfqt",
+  "question": "If there's only 1 Blight on the Healthy Island card, and you need to add 2 at once (eg: Sweden 1), what do you do?"
+ },
+ {
+  "href": ".7w4geeh",
+  "question": "If Trickster uses Let's See What Happens, do they automatically get elemental thresholds?"
+ },
+ {
+  "href": ".7w4geb6",
+  "question": "If Trickster's innate power Let\u2019s See What Happens draws Strong and Constant Currents, can you swap 1 Dahan in the target land with 1 Dahan in a Coastal land?"
+ },
+ {
+  "href": "can-ocean-push-between-adjacent-oceans",
+  "question": "If two distinct Oceans are made adjacent somehow (e.g., via Open the Ways), can Ocean\u2019s Hungry Grasp Push/Gather Presence between them with its Growth Options?"
+ },
+ {
+  "href": "multiple-changes-to-dahan-counterattack-timing",
+  "question": "If two effects change when Dahan in a land do Damage (e.g., Words of Warning and Warn of Impending Conflict), which one takes precedence?"
+ },
+ {
+  "href": ".7w4gedp",
+  "question": "If two lands are joined using Weave Together the Fabric of Place, is the conjoined land considered adjacent to itself?"
+ },
+ {
+  "href": "multiple-uses-of-unearth-a-beast-of-wrathful-stone",
+  "question": "If Unearth a Beast of Wrathful Stone is used multiple times with threshold, how many times do Marked Beasts tokens get to do Damage in the Slow Phase?"
+ },
+ {
+  "href": ".7w4ged7",
+  "question": "If Vengeance as a Burning Plague destroys Presence to prevent a penalty from a Blighted Land Event, does it get Disease from its 'Lingering Pestilence' special rule?"
+ },
+ {
+  "href": ".9v5kfoc",
+  "question": "If Vengeance as a Burning Plague's presence is saved from destruction, does it still get to add a Disease?"
+ },
+ {
+  "href": "terror-of-a-slowly-unfolding-plague-with-multiple-disease",
+  "question": "If Vengeance uses its 'The Terror of a Slowly Unfolding Plague' special rule to let Invaders Build in a land with multiple Disease, how much Fear does it generate?"
+ },
+ {
+  "href": "cross-board-woven-lands-and-skipping-invader-cards",
+  "question": "If Weave Together the Fabric of Place joins lands from two different boards, what happens if an effect skips an entire Invader Card on one of those boards? (e.g., \"Dream of the Untouched Land\")"
+ },
+ {
+  "href": ".7w4geak",
+  "question": "If Weave Together the Fabric of Place joins lands on two adjacent boards, what happens if you destroy one of those boards with Cast Down Into the Briny Deep?"
+ },
+ {
+  "href": ".7w4ge9b",
+  "question": "If you \"move\" a piece to where it was (Range 0), does it still trigger effects like Wildfire's Blazing Presence?"
+ },
+ {
+  "href": "repeating-powers-with-changed-speeds",
+  "question": "If you change a Power's speed, which phase can you Repeat it in?"
+ },
+ {
+  "href": ".7w4geeu",
+  "question": "If you create a land with no adjacent lands, how do things like Blight cascades or Push work? Can you target it from lands Range 2+ away?"
+ },
+ {
+  "href": ".7w4g8t8",
+  "question": "If you damage an Invader/Dahan and then replace it with another Invader/Dahan, does the new piece enter the game damaged?"
+ },
+ {
+  "href": ".9v5kfpl",
+  "question": "If you deal damage in multiple lands with a single instruction, does the damage happen simultaneously? Against Russia level 2+, if one of those lands is Isolated, can you attempt to Push an Isolated Explorer and thus destroy it?"
+ },
+ {
+  "href": ".9v5kfgq",
+  "question": "If you Forget a Power Card partway through resolution, do you continue resolving it? (E.g., if you gain a Major Power with \"Entwined Power\" and then Forget \"Entwined Power.\")"
+ },
+ {
+  "href": ".9v5kc40",
+  "question": "If you Forget one of your starting Unique Power Cards, is there any way to get it back?"
+ },
+ {
+  "href": "choosing-flexible-elements",
+  "question": "If you gain a flexible Element (e.g., an \"Any\" Element, or multiple Elements separated by slashes) from something other than a Presence Track, when do you choose which Element to gain?"
+ },
+ {
+  "href": ".7w4g8pe",
+  "question": "If you gain a Major Power by non-standard means or from a place other than the Major Power deck, do you have to Forget a card? How about the \"gifting\" of Entwined Power's threshold or \"taking\" a Major Power?"
+ },
+ {
+  "href": ".bu6og2h",
+  "question": "If you gain Elements from a Growth option, do they go away at the end of the turn?"
+ },
+ {
+  "href": ".7w4g8rf",
+  "question": "If you gain presence during the turn (after Growth) and uncover the \"any\" or another element, can you then use it for other powers?"
+ },
+ {
+  "href": "choosing-to-destroy-the-beasts-token-marked-by-unearth-a-beast-of-wrathful-stone",
+  "question": "If you have a choice between destroying a normal Beasts token and a Beasts token marked by Unearth a Beast of Wrathful Stone, can you pick the marked Beasts? If so, what happens?"
+ },
+ {
+  "href": ".7w4g8p3",
+  "question": "If you have a Growth option which lets place two Presence, can you chain them, placing the second one within range of the first one?"
+ },
+ {
+  "href": "instead-in-the-blinding-glare-threshold",
+  "question": "If you hit the threshold of Blinding Glare, does the \"Instead\" apply to just the Fear option or to the entire threshold?"
+ },
+ {
+  "href": ".7w4g8q9",
+  "question": "If you meet the elemental threshold for \"Powerstorm,\" can the target spirit pay for and repeat the same power multiple times?"
+ },
+ {
+  "href": ".7w4g8q3",
+  "question": "If you meet the threshold bonuses on Poisoned Land (Per Blight, +1 Fear and +4 Damage), do they count the Blight added by Poisoned Land itself?"
+ },
+ {
+  "href": ".7w4g8pd",
+  "question": "If you reach the threshold effect of Instruments of their Own Ruin, can the ravaging Invaders destroy adjacent Invaders before they ravage?"
+ },
+ {
+  "href": "Repeating-internal-range-boosts",
+  "question": "If you Repeat a card that boosts its own Range via an elemental threshold (eg: Sap the Strength of Multitudes), but don't have the threshold when you Repeat it, is the Repeat's range still boosted?"
+ },
+ {
+  "href": ".9v5ka9b",
+  "question": "If you Repeat a Power card with \"Powerstorm\" or \"Gift of Strength,\" do you get double the elements?"
+ },
+ {
+  "href": ".7w4gbf7",
+  "question": "If you repeat a Power, can you use another Power in between the two uses, or do the two uses have to go right after each other?"
+ },
+ {
+  "href": ".9v5kfpm",
+  "question": "If you sink a board when playing against Russia Lvl 2+, does the Pushed Explorer have to leave the destroyed board?"
+ },
+ {
+  "href": ".7w4gee1",
+  "question": "If you skip using the text effects of a Power *(p. 17 core rules)*, are you still considered to have targeted / used that Power? (For, eg, Shroud of Silent Mist.)"
+ },
+ {
+  "href": ".7w4geb0",
+  "question": "If you target yourself with Gift of Twinned Days in a solo game, can you repeat your lowest-cost power twice? If so, can you choose a different power to be \u2018lowest-cost\u2019 the second time?"
+ },
+ {
+  "href": ".7w4gee9",
+  "question": "If you target yourself with Growth Through Sacrifice and remove your only Presence on the island, is that land still considered \"your land\"? (So you could re-add a Presence to avoid losing?)"
+ },
+ {
+  "href": "Transformative-Sacrifice-threshold-timing",
+  "question": "If you target yourself with Transformative Sacrifice, do your new Powers help you hit the threshold?"
+ },
+ {
+  "href": "looping-bargain-of-coursing-paths",
+  "question": "If you use Bargain of Coursing Paths twice, can you move pieces back and forth between the marked lands an unlimited number of times?"
+ },
+ {
+  "href": ".7w4ganu",
+  "question": "If you use Encompassing Ward (\"Defend 2 in every land where Target Spirit has Presence\"), then the target Spirit moves some of their Presence, does the Defend move/change?"
+ },
+ {
+  "href": ".7w4geei",
+  "question": "If you use The Past Returns Again on a Stage II card, do you evaluate the Escalation effect again?"
+ },
+ {
+  "href": ".7w4gefa",
+  "question": "If you use Weave Together the Fabric of Place to join a land to the Ocean and the Event Relentless Optimism *(no Fear for destroying Towns/Cities)* comes out, can you get Fear when the effects wear off?"
+ },
+ {
+  "href": ".7w4ged1",
+  "question": "If you use Weave Together the Fabric of Place, what is the number of the conjoined land? Which board is it on?"
+ },
+ {
+  "href": "Do-selectors-check-just-once-or-are-they-updated",
+  "question": "If you're told do something for \"Each land that...\" / \"Each board that...\" / \"Each Spirit which...\", do you check which lands/boards/Spirits to affect at the beginning and then not change that list (like figuring out which lands Ravage)?"
+ },
+ {
+  "href": ".7w4gebf",
+  "question": "If you've used \"Settle into Hunting-Grounds\" (your Presence counts as Beasts and Badlands), and draw the \"Beasts Prey on the Injured\" Event (Beasts count as Badlands), does your Presence now count as 2 Badlands each?"
+ },
+ {
+  "href": "do-an-incarna-and-a-presence-together-make-a-sacred-site",
+  "question": "If your Incarna and 1 of your Presence are in the same land, is that land a Sacred Site for you?"
+ },
+ {
+  "href": "counts-as-for-victory-and-defeat",
+  "question": "If your Incarna is the only Presence you have left on the island, do you need to continually count it as Presence to avoid losing?"
+ },
+ {
+  "href": ".7w4g8qc",
+  "question": "In \"Veil the Night's Hunt,\" if there are fewer Invaders than Dahan, how much damage is done?"
+ },
+ {
+  "href": "timing-of-playing-carried-over-cards-in-second-wave",
+  "question": "In a Second Wave game, when can players play the Power Cards carried over from the prior wave?"
+ },
+ {
+  "href": ".bu6og25",
+  "question": "In a solo game, do you get bonuses on powers like Boon of Vigor that usually only happen if you target another player?"
+ },
+ {
+  "href": "gaining-powers-with-specific-traits-in-destiny-unfolds",
+  "question": "In Destiny Unfolds, if you only have Major Powers in your Destiny, can you gain Minor Powers normally from the deck? (Or vice versa)"
+ },
+ {
+  "href": "using-element-markers-to-meet-thresholds-in-elemental-invocation",
+  "question": "In Elemental Invocation, can a Spirit use Element Markers to legally target an Innate Power that would do nothing (and thus be untargetable) without those Elements?"
+ },
+ {
+  "href": "Relentless-Gaze-of-the-Sun-affecting-fewer-than-3-Presence-in-Growth",
+  "question": "In Growth, can Relentless Gaze of the Sun add fewer than 3 Destroyed Presence or move fewer than 3 Presence?"
+ },
+ {
+  "href": ".9v5kfas",
+  "question": "In Pent-Up Calamity, when you \"return\" Strife, where does it go?"
+ },
+ {
+  "href": ".9v5ka99",
+  "question": "In Powers Long Forgotten, how long do the effects of a token discovered by the Spirits or Invaders last for?"
+ },
+ {
+  "href": ".9v5ka91",
+  "question": "In Rituals of the Destroying Flame, if you Repeat a Power (and aren't targeting near a Flame Marker), do you need to pay 2 Energy again in order to Damage/Destroy Invaders?"
+ },
+ {
+  "href": "unusual-omen-situations-in-visions-out-of-time",
+  "question": "In the \"Visions Out of Time\" Event, what happens if multiple Omens end up in one land? How about if an Omen is temporarily out of the game due to being under Absolute Stasis?"
+ },
+ {
+  "href": ".7w4gd7c",
+  "question": "In the Beasts Attack Event, how is the damage done and which Beasts get removed?"
+ },
+ {
+  "href": ".9v5kavh",
+  "question": "In the Dahan Insurrection scenario, if Bringer of Dreams and Nightmares moves Dahan do they do real damage or shadow damage?"
+ },
+ {
+  "href": ".bu6ofsh",
+  "question": "In the Dahan Insurrection Scenario, what is the timing of \"Coordinated Insurrection\" (the uprising instead of a terror victory)? Can the Insurrection trigger actions \u2013 e.g., \"Vengeance of the Dead\"?"
+ },
+ {
+  "href": ".7w4gbg4",
+  "question": "In the Dahan Insurrection scenario, what's the timing and ordering of Constant Raiding and Military Response? If a Power both moves Dahan and deals damage *(eg, Vigor of the Breaking Dawn)*, which happens first?"
+ },
+ {
+  "href": "great-river-town-health-bonus-and-damage-migrate-off",
+  "question": "In the Great River Scenario, if a Town with a Health bonus and 2 Damage taken moves off the island due to Relentless Migration Eastwards, is it Destroyed or does it remain on the Scenario Card?"
+ },
+ {
+  "href": ".bu6og2w",
+  "question": "In the scenario *Ward the Shores*, if you play a card face-down to create a Warding Pattern, does it count as a Power Card?"
+ },
+ {
+  "href": ".9v5ka9q",
+  "question": "In the scenario Guard the Isle's Heart, does the extra Presence added during Setup come from your player mat?"
+ },
+ {
+  "href": ".9v5kaal",
+  "question": "In the scenario Ward the Shores, do the Warding Patterns added by the special power come from the supply of 4 Warding Patterns per player?"
+ },
+ {
+  "href": ".7w4gd1k",
+  "question": "In the scenario Ward the Shores, what's a 'Fear victory'? Can you win without placing warding patterns?"
+ },
+ {
+  "href": ".7w4gd7d",
+  "question": "In the Second Wave scenario, do you use the same Blight card as in the first game?"
+ },
+ {
+  "href": "second-wave-using-powers-from-first-wave-weird-cases",
+  "question": "In the Second Wave scenario, where exactly can a power from the first wave be used? What if the power is targeted from a Sacred Site? What about (one of many weird exception cases)?"
+ },
+ {
+  "href": "explore-timing-in-surges-of-colonization",
+  "question": "In the Surges of Colonization scenario, are the Explore Cards on surge turns resolved simultaneously or sequentially?"
+ },
+ {
+  "href": ".7w4gebb",
+  "question": "In which land does the threshold of Sleep and Never Waken generate fear?"
+ },
+ {
+  "href": "how-many-powers-is-close-the-ways",
+  "question": "Is \"Close the Ways\" one Power that targets three lands or three Powers that share a name?"
+ },
+ {
+  "href": "is-a-land-adjacent-to-or-within-range-of-itself",
+  "question": "Is a land adjacent to itself? Is it within Range 1 of itself? Can it be the nearest land to itself that meets a particular condition? Does Isolate change that?"
+ },
+ {
+  "href": ".7w4gee4",
+  "question": "Is Blight component-limited?"
+ },
+ {
+  "href": ".7w4g8tf",
+  "question": "Is Branch & Claw required for the Promo spirits (Serpent Slumbering Beneath the Island and Heart of the Wildfire)?"
+ },
+ {
+  "href": "coastal-lands-card-with-kingdom-of-scotland-and-habsburg-mining-expedition",
+  "question": "Is it possible for \"Untapped Salt Deposits\" (Habsburg Mining Expedition Level 4) to combine with \"Seize Opportunity\" (The Kingdom of Scotland Level 2), since they both alter what happens to the \u201cCoastal Lands\u201d card?"
+ },
+ {
+  "href": "incarna-adding-powers-in-second-wave",
+  "question": "Is it possible to add an Incarna that was never in the game in the first place (e.g., if a Power Card that adds an Incarna is carried over in Second Wave)?"
+ },
+ {
+  "href": "solo-destiny-unfolds",
+  "question": "Is it possible to play Destiny Unfolds with only one player?"
+ },
+ {
+  "href": "removing-replacing-or-destroying-an-incarna-counting-only-as-itself",
+  "question": "Is it possible to Remove, Replace, or Destroy an Incarna that is counting only at itself?"
+ },
+ {
+  "href": ".7w4geea",
+  "question": "Is Lure of the Deep Wilderness' ability to ignore Explorers the same as saying those Explorers do not participate in Ravage?"
+ },
+ {
+  "href": ".9v5kfot",
+  "question": "Is revealing a Fear or Event card part of the Fear / Event action(s), or does it happen first? Eg: with Finder of Paths Unseen, do I have to guess about adjacencies, or can I see the card first?"
+ },
+ {
+  "href": ".7w4gecw",
+  "question": "Is the \"6 or more damage to the land\" check of Kingdom of Sweden's Level 1 Heavy Mining affected by modifiers to the land's health? (e.g., All Things Weaken, the Resilience Aspect for Vital Strength of the Earth)"
+ },
+ {
+  "href": "the-endless-dark-and-spirit-targeting-powers",
+  "question": "Is The Endless Dark a land for Spirit-targeting Powers?"
+ },
+ {
+  "href": ".9v5kcwa",
+  "question": "Is the initial Explore considered part of Setup *(for, e.g., France Level 1)*?"
+ },
+ {
+  "href": ".7w4gec2",
+  "question": "Is the table of actions on p. 24 of Jagged Earth comprehensive, or examples?"
+ },
+ {
+  "href": ".9v5kcmw",
+  "question": "Is there a limit to how many cards you can have, or whether you can show them to people?"
+ },
+ {
+  "href": ".9v5ka9f",
+  "question": "Is there a stacking limit to how many Presence can be in a land? Can a large stack count as more than one Sacred Site?"
+ },
+ {
+  "href": "ordering-for-action-modifiers",
+  "question": "Is there an ordering or priority for action modifications? It seems weird that you can get a benefit from something being destroyed even if you save it from destruction."
+ },
+ {
+  "href": ".7w4gebc",
+  "question": "Is Trees Radiate Celestial Brilliance limited to targeting a Jungle without Blight?"
+ },
+ {
+  "href": ".9v5kfqi",
+  "question": "Many Minds Move as One says \"when *you* Gather or Push Beasts\" - is that identical to \"when *your actions* Gather or Push Beasts\"?"
+ },
+ {
+  "href": ".7w4gebd",
+  "question": "Moving (or otherwise affecting) \"a Sacred Site\" usually affects 2 Presence from that Spirit. What about River Surges in Sunlight when it has Presence in a Wetland? Or Incarna that count as Sacred Sites?"
+ },
+ {
+  "href": ".7w4g8of",
+  "question": "Must Gather/Push effects which don't say \"up to\" move exactly that many things? Eg: Does Fields Choked with Growth move exactly 3 Dahan?"
+ },
+ {
+  "href": ".9v5ka5d",
+  "question": "On Call to Trade, what can I Gather if the Terror Level is 2 or lower? The icon doesn't look quite right."
+ },
+ {
+  "href": ".7w4gec5",
+  "question": "On p. 28, the Jagged Earth rules say, \"The bad effects of Blight happen each time Blight is added to a land, regardless of the quantity of Blight.\" Does that mean once per *action* that adds Blight, or literally every time you put Blight down?"
+ },
+ {
+  "href": ".9v5ka9k",
+  "question": "On the \"Slave Rebellion\" Event card, what does it mean to \"return this card to the Event Deck as per Setup\"?"
+ },
+ {
+  "href": ".7w4g8qv",
+  "question": "On the Event card Sacred Sites Under Threat, what are the choices we are choosing from?"
+ },
+ {
+  "href": "range-arrows-with-element-icons",
+  "question": "On the Lair Aspect, what does the Range arrow with the Air icon on it mean?"
+ },
+ {
+  "href": "Relentless-Gaze-of-the-Sun-Energy-Growth-Option-timing",
+  "question": "On the last Growth option of Relentless Gaze of the Sun, when do you gain the extra Energy?"
+ },
+ {
+  "href": "intensify-and-abduct",
+  "question": "On the off chance that Intensify Aspect gets gifted a Unique Power from Breath of Darkness Down Your Spine (or vice versa), which Element Marker boosts Actions that directly Abduct pieces, like \"Swallowed by an Endless Dark\"?"
+ },
+ {
+  "href": ".bu6ocxq",
+  "question": "On the threshold effect of \"The Trees and Stones Speak of War\", do the Pushed Dahan each bring \"Defend 2\" with them, or \"Defend 2 per Dahan\"?"
+ },
+ {
+  "href": ".9v5kfqf",
+  "question": "Pieces that \"do not participate in Ravage\" are ignored for Ravages. Does this include checking for victory?"
+ },
+ {
+  "href": ".7w4gedx",
+  "question": "Playing Many Minds Move as One: if I treat my Sacred Site as Beasts Token in order to move it, do I have to move both Presence to the same land?"
+ },
+ {
+  "href": "distant-exploration-and-isolated-islets",
+  "question": "Playing with an Archipelago, Distant Exploration comes up (Invaders Explore at +1 distance). There's an empty islet with an Isolated Ocean. Can Invaders Explore its Coastal lands from facing islet's Coastal lands?"
+ },
+ {
+  "href": ".9v5kfqz",
+  "question": "Playing without Events - when Commanding Beasts, can you bounce back and forth between lands?"
+ },
+ {
+  "href": ".7w4g8re",
+  "question": "The Blighted Island card Disintegrating Ecosystem adds Blight to the board. Where does that come from?"
+ },
+ {
+  "href": ".7w4g8pl",
+  "question": "The Blighted Island card Disintegrating Ecosystem reads: \"Immediately, on each board destroy 1 Beast and add 1 Blight to a land with a Town/City.\" Are both effects to the same land, or can the destroyed Beast come from anywhere on the board?"
+ },
+ {
+  "href": "accelerate-elemental-invocation",
+  "question": "The definition of Accelerate in the Jagged Earth rulebook says that the affected Invader Card is discarded, but the reminder text on Elemental Invocation says it gets removed from the game. Which one is correct?"
+ },
+ {
+  "href": ".7w4g8r2",
+  "question": "The game is really hard and is kicking our butts. What can we do?"
+ },
+ {
+  "href": ".7w4g8r0",
+  "question": "The Kingdom of France's \"Frontier Explorers\" adds +1 Explorer when Exploring into a land without a Town/City. What happens with the Promising Farmland Event? (\"When Exploring, on each board, add 1 Town instead of 1 Explorer.\")"
+ },
+ {
+  "href": "which-powers-have-damage-and-destroy-instructions",
+  "question": "The Violence Aspect and An Ominous Dawn / Waving Resolve both check for Power Cards with specific instructions. Are there any Power Cards that use the specific words but don\u2019t count?"
+ },
+ {
+  "href": ".bu6od0k",
+  "question": "There's an effect that applies when \"(Dahan) outnumber (Town)/(City)\". Can I use it in a land with no Towns or Cities?"
+ },
+ {
+  "href": ".bu6oc8z",
+  "question": "Under a Spirit's Play Style, there's a Summary of Powers with bars in 5 categories. What do those categories mean?"
+ },
+ {
+  "href": ".7w4gec1",
+  "question": "Under \u201cRavage Timing\u201d on p. 7 of the Jagged Earth rulebook, it mentions \u201cmodifiers to individual Invader Damage\u201d happen first, and \u201cper-land modifiers\u201d only happen afterwards. Why is this relevant? What are some examples of individual vs. land modifiers?"
+ },
+ {
+  "href": "incarna-that-cannot-be-returned-to-play",
+  "question": "Unlike for other Incarna, there is no way to bring back the Incarna of the Lair and Warrior Aspects. What happens if those Incarna get Destroyed/Removed/Replaced?"
+ },
+ {
+  "href": ".7w4geag",
+  "question": "Unlock the Gates of Deepest Power can let you use a Major with all elemental thresholds. Does this let you use the threshold on Draw Towards a Consuming Void?"
+ },
+ {
+  "href": ".bu6ofsk",
+  "question": "Using Unlock the Gates of Deepest Power - if you play the gained Major Power by committing to Forget at end of turn, can you do other things with it? (Like Forget it for a Choice Event / another Major.)"
+ },
+ {
+  "href": ".7w4gec7",
+  "question": "Wait, is the target land of Bargains of Power and Protection relevant?"
+ },
+ {
+  "href": ".7w4g8nl",
+  "question": "What are 'Hills' in the Coming of Age section of the Event card Strange Tales Attract Explorers?"
+ },
+ {
+  "href": "what-are-your-actions",
+  "question": "What are \"your Actions\"? (e.g., for \"Responsibilities to the Dead\" or \"Spread Tumult and Delusion\")"
+ },
+ {
+  "href": ".7w4g8qw",
+  "question": "What are all the terrains on the thematic map of the island?"
+ },
+ {
+  "href": "what-are-apocrypha",
+  "question": "What are Apocrypha Spirits?"
+ },
+ {
+  "href": ".7w4g8qn",
+  "question": "What are some more-common mistakes in your first games?"
+ },
+ {
+  "href": ".9v5kf3e",
+  "question": "What are the \"spirit tokens\" in power 7 of Powers Long Forgotten?"
+ },
+ {
+  "href": ".7w4g8pg",
+  "question": "What are the options for making the map for a 2-player game?"
+ },
+ {
+  "href": ".9v5kfr7",
+  "question": "What are the restrictions on where Towns can go in Invaders Surge Inland?`"
+ },
+ {
+  "href": "intensify-aspect-and-non-power-actions",
+  "question": "What can the Intensify Aspect spend its Element markers on, aside from its Powers?"
+ },
+ {
+  "href": ".9v5ka94",
+  "question": "What changed between different printings of the game?"
+ },
+ {
+  "href": ".7w4gbfw",
+  "question": "What counts as \"adding\" a piece (e.g., adding an Invader for \"Confounding Mists\")?"
+ },
+ {
+  "href": ".bu6og2o",
+  "question": "What counts as \"creating a Sacred Site\" for the special rule of Keeper of the Forbidden Wilds?"
+ },
+ {
+  "href": "What-is-a-normal-ravage",
+  "question": "What counts as a single Ravage when \"the next normal Ravage\" is affected?"
+ },
+ {
+  "href": "what-is-during-play",
+  "question": "What counts as the end of Setup for \u201cDuring Play\u201d Adversary/Scenario effects? And how are they different from \u201cAfter Setup\u201d effects?"
+ },
+ {
+  "href": ".bu6oc8v",
+  "question": "What creates a sacrifice victory? What do you finish evaluating before deciding whether you have won or lost?"
+ },
+ {
+  "href": ".7w4gedv",
+  "question": "What do the \"x2\" and \"x3\" mean in the Growth choices for Fractured Days Split the Sky?"
+ },
+ {
+  "href": ".bu6odee",
+  "question": "What does \"-X Cost\" mean on a Growth option or Power threshold?"
+ },
+ {
+  "href": "mining-tunnels-and-the-salt-deposits-card",
+  "question": "What does \"Escalation ignores S\" on Habsburg Mining Expedition Level 4 mean?"
+ },
+ {
+  "href": ".7w4gecp",
+  "question": "What does \"in board/land order\" mean for Habsburg Monarchy (Livestock Colony) Level 1?"
+ },
+ {
+  "href": ".9v5kfqw",
+  "question": "What does \"move 1 Beast up to two lands\" mean on \"Guide the Way on Feathered Wings\"?"
+ },
+ {
+  "href": ".7w4gee2",
+  "question": "What does \"When an Event or Blight Card directly destroys Presence\" mean, for Stone's innate Hold the Island Fast with a Bulwark of Will?"
+ },
+ {
+  "href": ".7w4gd1f",
+  "question": "What does \"When exploring\" mean? (e.g., the Blitz scenario) Can I add the extra Explorer anywhere I want?"
+ },
+ {
+  "href": "definition-of-rulings-under-examination",
+  "question": "What does it mean for a ruling to \"be under examination\"?"
+ },
+ {
+  "href": ".bu6og2g",
+  "question": "What does it mean that a land \"matches\" an Invader card? Most places, it seems to mean \"has the land type shown on the card\" and nothing else, but the Notes on England (p. 27 JE) use it differently."
+ },
+ {
+  "href": ".7w4g8pv",
+  "question": "What does it mean when a Power's effects or Target Land shows (Terrain A)(Terrain B)? A or B? A next to B?"
+ },
+ {
+  "href": "Moving-towards-or-away",
+  "question": "What does moving pieces towards or away from something mean? (e.g., Pushing pieces towards the nearest Ocean with \"Sweep Into the Sea.\") What if you move a piece Inland?"
+ },
+ {
+  "href": ".7w4g9as",
+  "question": "What does the \"Coastal\" invader card do? Is it worse than the other Stage II cards?"
+ },
+ {
+  "href": ".7w4geeb",
+  "question": "What does the 2nd choice in Farmers Seek the Dahan for Aid modify: a Ravage Step, a Ravage Card, or Ravage Actions?"
+ },
+ {
+  "href": ".9v5kavi",
+  "question": "What does the Distant Exploration event card do?"
+ },
+ {
+  "href": ".9v5kavt",
+  "question": "What does the slash mean in effects like \"Push up to 3 (Explorer)/(Town)\"?"
+ },
+ {
+  "href": ".7w4g8ps",
+  "question": "What does the symbol on most of the Stage II Invader Cards mean?"
+ },
+ {
+  "href": ".bu6ocxx",
+  "question": "What does the threshold effect of Infinite Vitality protect against?"
+ },
+ {
+  "href": "vitality-in-lands-with-blight",
+  "question": "What does Vitality do in lands with Blight?"
+ },
+ {
+  "href": ".7w4gefi",
+  "question": "What exactly does \"healing damage\" refer to for Unquenchable Flames and Shroud of Silent Mist's \"Slow and Silent Death\"?"
+ },
+ {
+  "href": "what-game-items-have-been-replaced-or-retired",
+  "question": "What game items have been retired or replaced in expansions?"
+ },
+ {
+  "href": ".9v5kfqs",
+  "question": "What happens if 1 or more Invaders/Dahan moved into the Ocean aren't successfully destroyed by the Ocean in Play special rule?"
+ },
+ {
+  "href": "Weave-and-marked-lands",
+  "question": "What happens if a land that's been marked (e.g., by \"Bargain of Coursing Paths\") is merged with \"Weave Together the Fabric of Place\"? How about if the merged land becomes marked?"
+ },
+ {
+  "href": ".7w4gdtl",
+  "question": "What happens if a piece winds up in a place or state it's not allowed to be?"
+ },
+ {
+  "href": "using-powers-that-reference-an-incarna-that-is-not-yours",
+  "question": "What happens if a Power that references an Incarna is used by a Spirit that doesn't have that Incarna (e.g., if it's transferred via \"Entwined Power\")?"
+ },
+ {
+  "href": ".7w4g8pf",
+  "question": "What happens if Bringer of Dreams and Nightmares uses its special rule to push a Town into the Ocean on a board where Ocean's Hungry Grasp has presence?"
+ },
+ {
+  "href": ".7w4g8oj",
+  "question": "What happens if Bringer of Dreams and Nightmares uses the threshold effect of Cast Down into the Briny Deep?"
+ },
+ {
+  "href": ".7w4geal",
+  "question": "What happens if Cast Down into the Briny Deep sinks a board where a land is under Absolute Stasis?"
+ },
+ {
+  "href": "visions-of-a-shifting-future-with-reminder-card",
+  "question": "What happens if Fractured Days Split the Sky uses Visions of a Shifting Future on the Invader deck, and there is a reminder card right below the top card?"
+ },
+ {
+  "href": "moving-pieces-into-multiple-lands-marked-by-bargain-of-coursing-paths",
+  "question": "What happens if one Action adds or moves pieces into two lands that were marked by \"Bargain of Coursing Paths\"?"
+ },
+ {
+  "href": ".9v5kc2i",
+  "question": "What happens if one effect modifies \"the next normal Ravage\" and another effect skips it?"
+ },
+ {
+  "href": ".9v5ka9p",
+  "question": "What happens if Serpent Slumbering Beneath the Island is at its Presence limit and attempts to add Presence?"
+ },
+ {
+  "href": ".7w4gedd",
+  "question": "What happens if the Durable Towns of Habsburg Monarchy (Livestock Colony) Level 4 are moved into the Ocean? Do they Drown? Does Ocean's Hungry Grasp gain Energy?"
+ },
+ {
+  "href": ".7w4geav",
+  "question": "What happens if the pool of Thieves in Despicable Theft runs out?"
+ },
+ {
+  "href": ".7w4g8oi",
+  "question": "What happens if you destroy the entire island with Cast Down into the Briny Deep?"
+ },
+ {
+  "href": "gift-bargain-power-protection",
+  "question": "What happens if you gift Bargains of Power and Protection to another Spirit, who uses it? Now that the Reminder Card is in front of them, do you still get the benefit?"
+ },
+ {
+  "href": ".7w4gedb",
+  "question": "What happens if you give a Range boost to someone who's used Bargains of Power and Protection? Does it matter if they played Bargains on that turn or an earlier turn?"
+ },
+ {
+  "href": ".7w4g8ow",
+  "question": "What happens if you just add some of the Branch & Claw expansion cards / elements to the game? Do you think you could play with everything from the expansion but the Event Cards?"
+ },
+ {
+  "href": ".7w4g9jw",
+  "question": "What happens if you play Entwined Power in a solo game?"
+ },
+ {
+  "href": ".7w4g8p9",
+  "question": "What happens if you use Entwined Power to give another Spirit a card with Spirit-specific effects? (E.g., Absorb Essence, Swallow the Land-Dwellers)"
+ },
+ {
+  "href": "replaced-Blight",
+  "question": "What happens to Blight that is replaced with another piece?"
+ },
+ {
+  "href": "What-happens-to-items-in-the-ocean-if-OHG-has-no-presence-on-the-board",
+  "question": "What happens to items left in the ocean if the last Presence of Ocean's Hungry Grasp is removed from the Island Board?"
+ },
+ {
+  "href": "pieces-that-survive-deeps-sinking-a-land",
+  "question": "What happens to pieces left in a land when Deeps sinks it?"
+ },
+ {
+  "href": "where-replaced-pieces-go",
+  "question": "What happens to pieces when they get replaced? Do they go back to the box?"
+ },
+ {
+  "href": "removing-and-replacing-presence",
+  "question": "What happens to Presence when it gets removed or replaced?"
+ },
+ {
+  "href": "weave-together-the-fabric-of-place-and-the-lair-incarna",
+  "question": "What happens when \"Weave Together the Fabric of Place\" expires with the Incarna of the Lair Aspect in the woven land?"
+ },
+ {
+  "href": "invavder-cards-that-do-not-advance",
+  "question": "What happens when a specific Invader Card doesn't advance (e.g., due to \"Immigration Slows\")?"
+ },
+ {
+  "href": "incarna-going-to-presence-tracks-or-deep-slumber-track",
+  "question": "What happens when an Incarna would go to place off the island that only Presence goes, like being returned to a Presence Track by \"Numinious Crisis\" or moved to Serpent's \"Deep Slumber\" track by \"Absorb Essence\"?"
+ },
+ {
+  "href": "abducting-presence-and-blazing-presence",
+  "question": "What happens when Breath of Darkness Down Your Spine abducts Presence belonging to Heart of the Wildfire?"
+ },
+ {
+  "href": ".7w4g8qm",
+  "question": "What happens when Bringer of Dreams and Nightmares uses Instruments of their Own Ruin?"
+ },
+ {
+  "href": "fragments-of-yesteryear-on-an-expanded-ocean",
+  "question": "What happens when Fragments of Yesteryear is used on a land that has become part of the Ocean due to Deeps?"
+ },
+ {
+  "href": "how-does-badlands-interact-with-voice-of-command",
+  "question": "What happens when Invaders Ravage in a land with a Badlands affected by Voice of Command? Can Badlands damage that would normally be done to Dahan be assigned to Explorers?"
+ },
+ {
+  "href": "multiple-invader-cards-in-a-space",
+  "question": "What happens when multiple Invader Cards are in the same space on the Invader Board? (e.g., due to Explorers are Reluctant)"
+ },
+ {
+  "href": "deeps-aspect-connecting-oceans",
+  "question": "What happens when the Deeps Aspect expands an Ocean onto another board? How about if it connects two Oceans from different boards?"
+ },
+ {
+  "href": "targeting-the-mentor-aspect-with-boon-of-reimagining",
+  "question": "What happens when the Mentor Aspect is the target of \"Boon of Reimagining\"?"
+ },
+ {
+  "href": "mentor-aspect-and-entwined-power",
+  "question": "What happens when the Mentor Aspect uses Entwined Power on another Spirit? How about if another Spirit targets Mentor?"
+ },
+ {
+  "href": ".7w4gef1",
+  "question": "What Invader cards are \"specially placed during Setup\" for Visions of a Shifting Future or Rising Interest in the Island?"
+ },
+ {
+  "href": ".7w4gapm",
+  "question": "What is prevented by the Invader benefit #8 of Powers Long Forgotten?"
+ },
+ {
+  "href": "difficulty-of-habsburg-mining-expedition-level-0",
+  "question": "What is the Difficulty of Habsburg Mining Expedition Level 0 (just the loss condition and Escalation)?"
+ },
+ {
+  "href": ".9v5kfqe",
+  "question": "What is the exact timing of \"you may do both?\" on cards like \"Growth Through Sacrifice\"?"
+ },
+ {
+  "href": "Invader-Stage-when-deck-empty",
+  "question": "What is the Invader Stage when the Invader Deck is empty?"
+ },
+ {
+  "href": "Dances-Up-Earthquakes-penultimate-top-track-icon",
+  "question": "What is the penultimate space on Dance Up Earthquakes' top track? Is it a track action that lets it gain 2 extra Energy onto each impending card?"
+ },
+ {
+  "href": ".7w4g9ki",
+  "question": "What is the strange icon on the special rule for Heart of the Wildfire?"
+ },
+ {
+  "href": ".bu6og2q",
+  "question": "What is the timing of specifying a new Presence-track Element for Starlight?"
+ },
+ {
+  "href": ".9v5kfq7",
+  "question": "What is the timing of Victory / Defeat?"
+ },
+ {
+  "href": ".7w4gefg",
+  "question": "What land does Harbingers of the Lightning generate Fear in?"
+ },
+ {
+  "href": ".9v5kcg9",
+  "question": "What languages besides English is Spirit Island available in?"
+ },
+ {
+  "href": ".7w4gedk",
+  "question": "What sources of Energy gain do Bargains affect?"
+ },
+ {
+  "href": ".7w4g9dg",
+  "question": "What speed is Song of Sanctity?"
+ },
+ {
+  "href": "what-spirit-island-exists-is-there-an-order-to-the-expansions",
+  "question": "What Spirit Island games / expansions exist? Is there any required order to the expansions?"
+ },
+ {
+  "href": ".7w4g8pu",
+  "question": "What's the difference between an Invader and an Explorer (the stick figure)?"
+ },
+ {
+  "href": ".7w4gebl",
+  "question": "What's the point of using \"Elemental Teachings\" (Shifting Memory of Ages) on yourself? Don't you have those Elements available anyway?"
+ },
+ {
+  "href": ".7w4geiz",
+  "question": "What's the timing of ongoing effects expiring?"
+ },
+ {
+  "href": ".7w4gebi",
+  "question": "What's the timing of Shroud of Silent Mists' Fear? If Well-Prepared Explorers gives Explorers +1 Health until end of turn, do you earn Fear before a damaged Explorer is destroyed by the effect wearing off?"
+ },
+ {
+  "href": ".bu6og38",
+  "question": "What's the timing of Strife removal? When Invaders have reduced Health per Strife, do they get it back before damage is dealt?"
+ },
+ {
+  "href": ".7w4gee5",
+  "question": "What's the timing on using new Growth options?"
+ },
+ {
+  "href": "boon-of-reimagining-in-destiny-unfolds",
+  "question": "When \"Boon of Reimagining\" is used in the Destiny Unfolds scenario, what happens?"
+ },
+ {
+  "href": "when-damage-is-boosted-with-gift-of-furious-might-does-the-bonus-damage-obey-the-same-restrictions",
+  "question": "When \"Gift of Furious Might\" boosts Damage that's limited in some way \u2013 like the first level of Rising Heat's innate, which only damages Explorers \u2013 is the bonus damage also limited?"
+ },
+ {
+  "href": "fear-cards-checking-for-presence",
+  "question": "When a Fear Card lets each player do something in a land with Presence / a Sacred Site, must it be the Presence / Sacred Site of the Spirit they are playing?"
+ },
+ {
+  "href": "destroying-invaders-that-were-saved-from-destruction-and-then-replaced",
+  "question": "When a piece is saved from destruction by an action and then replaced (e.g., by the Transforming Aspect of Heart of the Wildfire replacing a Town/City with Explorers), can the replaced piece(s) be affected by any Damage/Destroy instructions remaining in the original action?"
+ },
+ {
+  "href": "min-1-health-limits-when-applying-multiple-modifiers",
+  "question": "When a piece or the land has both a bonus and a malus to Health, can players benefit from the standard \"min. 1\" limit on the malus by applying all of the penalties before the bonuses?"
+ },
+ {
+  "href": ".7w4g8p0",
+  "question": "When a Power (say, Blazing Renewal) does damage to each Invader, then its threshold effect says \"+4 Damage\", is that +4 overall Damage, or +3 Damage to each Invader?"
+ },
+ {
+  "href": "elements-on-face-down-cards-for-choice-events",
+  "question": "When a Power Card is played face-down for the Ward the Shores Scenario, which Elements does it have for the purpose of Choice Events that are aided by a particular Element?"
+ },
+ {
+  "href": "is-boosted-damage-from-the-same-source",
+  "question": "When a Power cares about how many Invaders that Power destroyed (eg: Mists of Oblivion, or Shadows' innate Power), do Damage boosts (Badlands, Flame's Fury) count?"
+ },
+ {
+  "href": ".7w4g8pr",
+  "question": "When a Power generates Fear directly and also destroys a Town or City, do you get Fear both times?"
+ },
+ {
+  "href": "timing-of-choosing-powers-for-once-this-turn-repeats",
+  "question": "When a Power like \"Powerstorm\" grants target Spirit the option to repeat a Power Card of their choice \"once this turn,\" do they have to immediately choose which Power Card will later be repeated?"
+ },
+ {
+  "href": "pieces-added-or-moved-by-ravages-do-not-cause-more-ravages",
+  "question": "When a Ravage changes which pieces are in other lands, can that cause additional Ravages from the current Ravage Card?"
+ },
+ {
+  "href": "special-rule-range-bonuses-to-targeting",
+  "question": "When a special rule grants a Range boost specifically for targeting lands with specific traits/contents, like \"Shadows of the Dahan,\" does that apply to Range arrows within a Power's text?"
+ },
+ {
+  "href": ".9v5kfd7",
+  "question": "When a Spirit uses a special rule to make a sacred site with only one Presence (e.g., River Surges in Sunlight using River's Domain in a Wetland), do they count as having two Presence there?"
+ },
+ {
+  "href": "adding-incarna-when-adding-presence",
+  "question": "When a Spirit with an Incarna adds Presence, may it add its Incarna?"
+ },
+ {
+  "href": ".7w4geej",
+  "question": "When a Stage II card shows up at an unusual time, when exactly do you resolve the Escalation effect?"
+ },
+ {
+  "href": "when-the-limits-of-irreprarable-damage-reset",
+  "question": "When against The Habsburg Monarchy (Livestock Colony), does \"Irreparable Damage\" (additional loss condition) check for 8+ Damage each Ravage Action, each Ravage Card, or each Ravage Step? Similarly, over what span is the Blight limit checked?"
+ },
+ {
+  "href": "scaling-removal-of-health-worth-of-invaders",
+  "question": "When an action removes N Health worth of Invaders scaling with a condition (e.g., the number of Dahan for Inspire the Release of Stolen Lands), do the Invaders have to be removed in batches of N Health?"
+ },
+ {
+  "href": "card-type-of-minor-powers-that-start-the-game-in-hand",
+  "question": "When an Aspect starts the game with a Minor Power in its hand, does that Minor Power count as a Unique Power (e.g., for Tell the Old Stories)?"
+ },
+ {
+  "href": "non-matching-lands-when-there-are-multiple-invader-cards",
+  "question": "When an effect checks for lands that don't match a Ravage Card / Build Card, but there are currently multiple Invader Cards of that type, do you choose a specific Invader Card?"
+ },
+ {
+  "href": ".9v5kfow",
+  "question": "When an effect checks if the Ravage Step added Blight to a board (e.g., \"Invested Aristocracy\" or Level 6 of The Tsardom of Russia), which sources of Blight count?"
+ },
+ {
+  "href": "splitting-on-each-board-effects",
+  "question": "When an effect does multiple things \"on each board,\" can each thing happen in a different land?"
+ },
+ {
+  "href": "affecting-multiple-lands-with-on-each-board-actions",
+  "question": "When an effect happens \"on each board,\" can it be split among multiple lands on that board?"
+ },
+ {
+  "href": "timing-of-resolving-a-power-played-mid-turn",
+  "question": "When an effect lets a Spirit play a Power Card outside of the Spirit Phase, does the Spirit immediately resolve that Power?"
+ },
+ {
+  "href": ".bu6ocb5",
+  "question": "When an effect lets you play a card, does that count against your allowed number of card plays?"
+ },
+ {
+  "href": "moving-pieces-with-on-each-board-actions",
+  "question": "When an effect moves Invaders \"on each board,\" is the chosen board the origin or the destination for those pieces?"
+ },
+ {
+  "href": ".bu6oczl",
+  "question": "When an effect reduces the Health of a piece (or it loses a bonus to Health), and it has already taken damage equal to its new health, is it destroyed immediately?"
+ },
+ {
+  "href": ".7w4g8pk",
+  "question": "When an Event says, \"On each board: Either destroy 2 presence (total) OR ...\", what does \"total\" mean?"
+ },
+ {
+  "href": "removing-disease-that-does-not-prevent-builds",
+  "question": "When an Event stops Disease from preventing Builds, is that Disease still removed when Invaders Build?"
+ },
+ {
+  "href": ".7w4gecz",
+  "question": "When an Explore Card adds new sources of Invaders (e.g., adding a Towns via Kingdom of Scotland Level 1 or the Event \"Promising Farmland\") are the Invaders able to immediately Explore from that new source?"
+ },
+ {
+  "href": ".7w4g8qb",
+  "question": "When an Invader card shows two terrain types, do they Explore (or Build, or Ravage) in every region of both terrains?"
+ },
+ {
+  "href": "pieces-attached-to-pieces-not-participating-in-ravage",
+  "question": "When an Invader with Strife is not participating in Ravage, is the Strife also ignored for modifiers to Ravage Actions?"
+ },
+ {
+  "href": ".3y28aut",
+  "question": "When are earned Fear Cards revealed?"
+ },
+ {
+  "href": "when-are-markers-considered-pieces",
+  "question": "When are Scenario Markers / Element Markers considered pieces?"
+ },
+ {
+  "href": ".7w4ged5",
+  "question": "When are the bonuses and penalties computed for Downpour's 'Rain and Mud Suppress Conflict' innate power?"
+ },
+ {
+  "href": ".7w4ghli",
+  "question": "When Blight is added to a land with Vitality, does it destroy Presence?"
+ },
+ {
+  "href": ".bu6ocb8",
+  "question": "When Blight is moved into a land, does it destroy Presence or cause cascades?"
+ },
+ {
+  "href": "breath-of-darkness-down-your-spine-abducting-russian-explorers",
+  "question": "When Breath of Darkness Down Your Spine faces the Tsardom of Russia Level 2+, can Breath abuct lone Explorers by doing Damage to them or directly destroying them?"
+ },
+ {
+  "href": "effects-that-do-not-work-in-the-endless-dark",
+  "question": "When Breath of Darkness Down your Spine targets The Endless Dark with a Power, which effects don't work there?"
+ },
+ {
+  "href": "which-powers-can-target-the-endless-dark",
+  "question": "When Breath of Darkness Down Your Spine targets The Endless Dark, which targeting restrictions can The Endless Dark meet?"
+ },
+ {
+  "href": "the-endless-dark-and-range-arrows-in-effect-text",
+  "question": "When Breath of Darkness Down Your Spine uses a Power that has a Range arrow in its effect text (e.g., \"Unleash a Torrent of the Self's Own Essence\"), can it ignore Range to choose The Endless Dark?"
+ },
+ {
+  "href": ".9v5kf34",
+  "question": "When Bringer of Dreams and Nightmares adds Blight, does that destroy Presence?"
+ },
+ {
+  "href": "putting-energy-on-impending-cards",
+  "question": "When can Dances Up Earthquakes put Energy on impending cards?"
+ },
+ {
+  "href": ".7w4g8qd",
+  "question": "When can Sharp Fangs behind the Leaves use the Call Forth Predators special rule, turning a Presence into a Beast token?"
+ },
+ {
+  "href": "range-checks-in-the-text-of-land-targeting-powers-measure-from-target-land",
+  "question": "When choosing Beasts to move with Flocking Red-Talons, which land do you measure Range from?"
+ },
+ {
+  "href": ".7w4gecx",
+  "question": "When combining Adversaries, how do you handle Escalation on Stage 3 Invader Cards when the Escalation cares about terrain? (France, Sweden)"
+ },
+ {
+  "href": "gathering-when-combining-habsburgs",
+  "question": "When combining the two Habsburg Adversaries, when does Migratory Herders (Livestock Colony Level 1) Gather check which lands match the Salt Deposits card (Mining Expedition Level 4)?"
+ },
+ {
+  "href": ".7w4g8oh",
+  "question": "When counting how many Invaders are in a land, are you counting pieces? Or do Towns count as 2 and Cities as 3?"
+ },
+ {
+  "href": ".7w4gef5",
+  "question": "When counting the number of power cards you have in play or have played (e.g., for \"Draw Towards a Consuming Void\"), do you count the extra Power Card from \"Aid from Lesser Spirits\"?"
+ },
+ {
+  "href": "impending-cards-and-modifiers-to-energy-gain-in-spirit-phase",
+  "question": "When Dances Up Earthquakes gains Energy directly onto impending cards, is that Energy decreased by Bargains or increased by Back Against the Wall?"
+ },
+ {
+  "href": "impending-cards-with-unlock-the-gates-of-deepest-power",
+  "question": "When Dances Up Earthquakes plays a Major Power via Unlock the Gates of Deepest Power, what happens if you make that Power Card impending?"
+ },
+ {
+  "href": "reimpending-an-impending-card",
+  "question": "When Dances Up Earthquakes puts an impending card into play, can it immediately make the card impending again?"
+ },
+ {
+  "href": "does-dark-fire-count-moon-as-fire-or-as-both-moon-and-fire",
+  "question": "When Dark Fire counts Moon as Fire (or vice versa), is that in addition to still being Moon?"
+ },
+ {
+  "href": "dark-fire-gaining-moon-or-fire-for-a-single-action",
+  "question": "When Dark Fire gains a Moon/Fire for only a single action (e.g., when playing Elemental Invocation), can it treat that Element as the other?"
+ },
+ {
+  "href": "do-disease-events-damage-dahan",
+  "question": "When Disease events do damage to Dahan, is the damage reduced by Defend powers?"
+ },
+ {
+  "href": "dividing-evenly",
+  "question": "When dividing pieces evenly between multiple lands (e.g., when moving Towns in The Great River) or Energy evenly between Spirits, do you account for existing pieces in those lands / Energy of those Spirits?"
+ },
+ {
+  "href": "voracious-consumption-prevention-timing",
+  "question": "When do Spirits decide whether or not to destroy Presence for the Voracious Consumption event?"
+ },
+ {
+  "href": ".7w4g8pt",
+  "question": "When do you pay the extra Energy for Shadows of the Dahan? (\"Whenever you use a Power, you may pay 1 Energy to target a land with Dahan...\")"
+ },
+ {
+  "href": "accelerating-past-reminder-cards",
+  "question": "When do you resolve a Reminder Card in the Invader Deck when accelerating multiple cards out of the deck (e.g., during the Despicable Theft scenario)?"
+ },
+ {
+  "href": "blitz-timing-details",
+  "question": "When does Blitz reduce the cost of a Fast Power and when does Blitz refund Energy for a Power being Fast?"
+ },
+ {
+  "href": ".7w4geda",
+  "question": "When does Brandenburg-Prussia Level 2's early Stage III card count as Stage III and when does it count as Stage II?"
+ },
+ {
+  "href": "breath-of-darkness-down-your-spine-checking-when-a-piece-is-alone",
+  "question": "When does Breath of Darkness Down Your Spine check if a piece is alone for the purpose of abducting it?"
+ },
+ {
+  "href": ".7w4g8p1",
+  "question": "When does destroying a Town or City cause Fear?"
+ },
+ {
+  "href": "when-observe-the-ever-changing-world-expires",
+  "question": "When does Observe the Ever-Changing World expire?"
+ },
+ {
+  "href": ".7w4g8qy",
+  "question": "When does Ocean's Hungry Grasp get to Drown invaders?"
+ },
+ {
+  "href": "timing-of-presence-check-for-relentless-punishment",
+  "question": "When does Relentless Punishment check how many of your Presence are in the origin land?"
+ },
+ {
+  "href": ".7w4gee3",
+  "question": "When does the damage from the 2nd level of Let Them Break Themselves Against the Stone happen?"
+ },
+ {
+  "href": "intensify-marker-timing",
+  "question": "When does the Intensify Aspect spend Element Markers? Does it have to have Element Markers handy when it plays a Power during Spirit Phase?"
+ },
+ {
+  "href": "when-do-you-choose-to-apply-the-bonus-from-gift-of-furious-might",
+  "question": "When does the target Spirit choose when to use the Damage bonus of Gift of Furious Might?"
+ },
+ {
+  "href": ".9v5kaam",
+  "question": "When doing an Invader action (Explore, Build, or Ravage), can you choose which lands they act in first?"
+ },
+ {
+  "href": ".7w4g8qu",
+  "question": "When Event cards ask you to discard the top major or minor power and do something on each board, do you discard just one card overall or one per board?"
+ },
+ {
+  "href": ".9v5kblb",
+  "question": "When exactly do you get the benefits from *Aid from Lesser Spirits*?"
+ },
+ {
+  "href": ".9v5kfpx",
+  "question": "When exactly do you have to pay a \"cost to use\" on a Power Card?"
+ },
+ {
+  "href": ".7w4gect",
+  "question": "When exactly do you have to pay for Finder's rule Responsibilities to the Dead when you move something?"
+ },
+ {
+  "href": "spreading-and-dreadful-mire-moving-presence-from-other-spirits",
+  "question": "When Fathomless Mud of the Swamp uses Spreading and Dreadful Mire, does the moved Presence have to be Mud\u2019s Presence?"
+ },
+ {
+  "href": ".7w4g8q1",
+  "question": "When Fear cards say \"Each player may...\" do the player choices have to happen in a space where they have presence or can they affect any space on the island?"
+ },
+ {
+  "href": ".7w4geb5",
+  "question": "When Finder of Paths Unseen reveals its \"+1 Range\" space by placing a Presence, can it use that to extend the range at which it places that Presence?"
+ },
+ {
+  "href": "fortune-seekers-during-a-salt-deposits-explore",
+  "question": "When Fortune-Seekers modifies the Salt Deposits card against the Habsburg Mining Expedition, which lands match the Explore Card?"
+ },
+ {
+  "href": "days-that-never-were-in-destiny-unfolds",
+  "question": "When Fractured Days Splits the Sky plays Destiny Unfolds and gains a card from their Destiny, do they also put a card in Days that Never Were?"
+ },
+ {
+  "href": "habsburg-mining-expedition-actions-from-build-cards",
+  "question": "When Habsburg Mining Expedition Level 1+ resolves a Build Card, when does it check which lands are Mining lands (which will Ravage instead of Build)?"
+ },
+ {
+  "href": "leftover-deeps-when-a-land-is-sunk-become-markers",
+  "question": "When happens to the Deeps tokens left over by Reclaimed by the Deeps? Can they be used to sink other lands if they can somehow get moved (e.g., by Weave Together the Fabric of Place)? If they are moved, does that un-sink the land they were in?"
+ },
+ {
+  "href": ".bu6ocxw",
+  "question": "When Heart of the Wildfire places Presence, does it immediately get the effect of any newly-revealed Fire element?"
+ },
+ {
+  "href": ".9v5kfqu",
+  "question": "When I can count one piece as another, can I change that mid-action? (eg: counting Many Minds Move as One's sacred sites as a Beasts?)"
+ },
+ {
+  "href": ".9v5kavs",
+  "question": "When I Repeat a Major Power, if I got the threshold effect the first time, do I get it on the repetition as well?"
+ },
+ {
+  "href": ".9v5kfgr",
+  "question": "When instructed to \"Repeat this Power\", do you have to obey the origin/range/target land restrictions?"
+ },
+ {
+  "href": "counting-multiple-piece-types",
+  "question": "When instructed to count multiple piece types separated by slashes (e.g., \"the fewest Towns/Cities\"), do players choose which piece type to count?"
+ },
+ {
+  "href": "definition-of-discarding-a-card",
+  "question": "When instructed to discard a card, which cards can you choose from? Where do those cards go?"
+ },
+ {
+  "href": ".bu6og24",
+  "question": "When Invader Damage Dahan, and it is boosted by Badlands, does the boost need to be applied efficiently?"
+ },
+ {
+  "href": ".7w4ganc",
+  "question": "When Invaders deal Damage to each other, is that damage dealt simultaneously?"
+ },
+ {
+  "href": ".9v5ka9g",
+  "question": "When Invaders have increased health, does Ocean's Hungry Grasp get a bonus when exchanging them for Energy?"
+ },
+ {
+  "href": ".7w4g8ot",
+  "question": "When Invaders Ravage, do they damage the land and Dahan simultaneously? Or one after the other?"
+ },
+ {
+  "href": "when-is-a-good-time-to-add-expansion-materials",
+  "question": "When is a good time to add expansion materials from Branch & Claw or Jagged Earth to the core game?"
+ },
+ {
+  "href": "when-does-swiftness-of-lightning-happen",
+  "question": "When is Swiftness of Lightning used to make Powers Fast?"
+ },
+ {
+  "href": "when-to-determine-the-range-bonus-from-reach-from-the-infinite-darkness",
+  "question": "When is the Range bonus of Reach from the Infinite Darkness determined?"
+ },
+ {
+  "href": ".7w4g8rn",
+  "question": "When Ocean's Hungry Grasp is in play against Brandenburg-Prussia, can the extra Towns from the Stage II Escalation be placed in the Ocean (and drowned immediately)?"
+ },
+ {
+  "href": "When-OHG-is-in-play-can-other-pieces-end-up-in-the-Ocean",
+  "question": "When Ocean's Hungry Grasp is in play, can Blight, other Spirit Presence, Beasts, or other tokens end up in the Ocean?"
+ },
+ {
+  "href": ".9v5kbka",
+  "question": "When Ocean's Hungry Grasps drowns a Town or a City, is the Fear earned immediately?"
+ },
+ {
+  "href": ".7w4gdtk",
+  "question": "When Oceans are in play, can Invader or Dahan pieces remain in the Ocean if they avoid Drowning?"
+ },
+ {
+  "href": "range-through-ocean",
+  "question": "When Ocean\u2019s Hungry Grasp is on a board, can Powers and Special Rules measure Range through that board\u2019s Ocean?"
+ },
+ {
+  "href": "card-type-of-face-down-power-cards",
+  "question": "When playing a Power Card face-down in the Ward the Shores scenario, is the card still a Major/Minor/Unique Power Card for the purpose of abilities that care (e.g., the Immense Aspect)?"
+ },
+ {
+  "href": ".9v5kbmn",
+  "question": "When playing against England, can A Spread of Rampant Green prevent the escalation effect or High Immigration Builds?"
+ },
+ {
+  "href": "can-slave-rebellion-victory-be-subverted-by-following-event-card",
+  "question": "When playing against France, if the Slave Rebellion event card causes a victory, can the next Event Card turn it into a sacrifice victory or otherwise undo it?"
+ },
+ {
+  "href": "losing-lands-in-elemental-invocation",
+  "question": "When playing Elemental Invocation, what happens to Element Markers on the border of lands sunk by Deeps or Destroyed by Cast Down Into the Briny Deep?"
+ },
+ {
+  "href": "exaltation-of-tangled-growth-in-solo-games",
+  "question": "When playing Fathomless Mud of the Swamp solo, can it gain 2 Power Cards with Exaltation of Tangled Growth?"
+ },
+ {
+  "href": ".7w4gecs",
+  "question": "When playing Fractured Days Split the Sky solo, is Pour Time Sideways useless?"
+ },
+ {
+  "href": ".7w4gebv",
+  "question": "When playing on an Archipelago, can Many Minds Move as one Gather/Push Beasts from a coastal land on one board to a \"Range 2 away\" coastal land on another board?"
+ },
+ {
+  "href": "presence-in-the-endless-dark-on-an-archipelago",
+  "question": "When playing on an archipelago, do two Spirits with Presence in The Endless Dark count as being on the same islet?"
+ },
+ {
+  "href": "can-i-use-a-middle-of-the-turn-card-play-as-a-warding-pattern",
+  "question": "When playing Ward the Shores, if you play a Power Card not during the Spirit Phase, can you play it face-down to add a warding pattern?"
+ },
+ {
+  "href": ".7w4gedu",
+  "question": "When playing with against France, what happens to Towns that end up somewhere other than on the island (e.g., on the Great River panel)?"
+ },
+ {
+  "href": "adjusting-scenarios-for-extra-board",
+  "question": "When playing with an extra board, do any Scenarios need adjusting?"
+ },
+ {
+  "href": ".7w4geax",
+  "question": "When playing without Events, can you use the Stage II \"Command Beasts\" card during Invader Stage III?"
+ },
+ {
+  "href": ".7w4geat",
+  "question": "When playing without Events, what type of Action is Commanding Beasts? Can you use your special rules to modify what the Beasts do?"
+ },
+ {
+  "href": "deeps-tokens-with-no-adjacent-lands",
+  "question": "When Reclaimed by the Deeps sinks a land that has no adjacent lands (not even the Ocean), what happens to the Deeps tokens?"
+ },
+ {
+  "href": "Choosing-a-Spirit-for-Consider-a-Harmonious-Nature",
+  "question": "When Relentless Gaze of the Sun chooses another Spirit with \"Consider a Harmonious Nature,\" must that Spirit have Destroyed Presence?"
+ },
+ {
+  "href": "Consider-a-Harmonious-Nature-in-solo-games",
+  "question": "When Relentless Gaze of the Sun is the only Spirit in the game, can it choose itself for the Plant thresholds of Consider a Harmonious Nature?"
+ },
+ {
+  "href": "where-can-relentless-gaze-of-the-sun-destroy-presence-with-consider-a-harmonious-nature",
+  "question": "When Relentless Gaze of the Sun uses Consider a Harmonious Nature to destroy Presence instead of adding Blight, which Presence can it pick?"
+ },
+ {
+  "href": "can-relentless-gaze-of-the-sun-double-elements-in-growth",
+  "question": "When Relentless Gaze of the Sun uses its final Growth option, does it also double the Elements it gains from its top Presence Track?"
+ },
+ {
+  "href": "moving-together",
+  "question": "When Relentless Gaze of the Sun uses its Growth Action to move up to 3 Presence, must those Presence come from the same land?"
+ },
+ {
+  "href": "making-different-choices-when-repeating-a-power",
+  "question": "When Repeating a Power that has choices, do you have to make the same choice the second time?"
+ },
+ {
+  "href": "unchosen-power-cards-in-visions-out-of-time",
+  "question": "When replacing a Power Card with Visions Out of Time, what happens to the 3 unchosen Power Cards?"
+ },
+ {
+  "href": "invader-stage-while-resolving-multiple-explore-cards",
+  "question": "When resolving a 2nd (or 3rd!) Explore Card in a single Invader Phase, what's the Invader Stage while resolving the later card(s)?"
+ },
+ {
+  "href": "adding-blight-to-a-rising-heat-sacred-site-with-damaged-livestock-colony-towns",
+  "question": "When Rising Heat of Stone and Sand has exactly two Presence in a land with a Durable Habsburg Monarchy (Livestock Colony) Town that has taken one Damage, what happens with Blight is added to the land?"
+ },
+ {
+  "href": "roiling-waters-adding-pieces-that-count-as-beasts",
+  "question": "When Roiling Waters Bleeding adds a non-Beasts piece that counts as a Beasts token (e.g., the Presence of a Spirit under \"Settle Into Hunting-Grounds\"), does it deal Damage?"
+ },
+ {
+  "href": ".7w4geai",
+  "question": "When Scotland Explores into Coastal Lands, what happens if there's an Isolated Coastal land? Do the other 2 Coastal lands on that board both have to add 1 Town, or can one get an Explorer?"
+ },
+ {
+  "href": ".7w4gdab",
+  "question": "When selecting a land with Mantle of Dread, do I have to choose a land with an Explorer and a Town if I can?"
+ },
+ {
+  "href": "picking-an-impending-card-with-ethereal-conjunction",
+  "question": "When selecting Power Cards for Ethereal Conjunction, can you choose a Power Card made impending by Dances Up Earthquakes?"
+ },
+ {
+  "href": "impossible-setup-on-the-thematic-map",
+  "question": "When setting up a Spirit, what happens if the setup instructions are impossible (e.g., adding Presence to a land with Blight when that board has no Blight)."
+ },
+ {
+  "href": ".9v5kbzg",
+  "question": "When setting up for the later rounds in Second Wave, should you place the initial Beasts and Disease on each board?"
+ },
+ {
+  "href": "dances-up-earthquakes-playing-cards-outside-of-the-spirit-phase",
+  "question": "When something lets Dances Up Earthquakes play a Power Card during the Fast, Invader, or Slow Phases, can they make that Power Card impending?"
+ },
+ {
+  "href": ".7w4geb4",
+  "question": "When Stone's Unyielding Defiance places a Presence from a +1 Card Play space and gains a Minor Power, can you look at the new Power before deciding where to place a Presence?"
+ },
+ {
+  "href": ".7w4g8r7",
+  "question": "When the Blight card is flipped to the Blighted Island side, how much Blight gets added?"
+ },
+ {
+  "href": "dark-fire-using-moon-fire-cards-in-choice-events",
+  "question": "When the Dark Fire Aspect discards a card with both Moon and Fire to pay for a choice event, how much Energy does that count towards the cost? How about if it forgets the power card isntead?"
+ },
+ {
+  "href": "dark-fire-aspect-checking-which-elements-it-has-on-cards-it-owns",
+  "question": "When the Dark Fire Aspect is playing a Scenario that cares about the Elements of cards you own, can it count Fire as Moon and vice versa?"
+ },
+ {
+  "href": "habsburg-monarchy-livestock-colony-building-in-a-fathomless-mud-sacred-site",
+  "question": "When the Habsburg Monarchy (Livestock Colony) Level 2+ would Build a City in an Inland Fathomless Mud Sacred Site, how many Explorers get Built?"
+ },
+ {
+  "href": "immense-counting-unused-plays",
+  "question": "When the Immense Aspect would grant an extra Element at the end of the Spirit Phase, do its Plays count as 1 Play or half a Play?"
+ },
+ {
+  "href": "boosting-replacements",
+  "question": "When the Intensify Aspect spends a Moon Marker when replacing a piece of type A with a piece of type B (e.g., replacing 1 Explorer with 1 Dahan with Call of the Dahan Ways), how many piece of type B will there be?"
+ },
+ {
+  "href": "adding-extra-destroyed-presence",
+  "question": "When the Intensify Aspect uses a Plant marker to increase the amount of destroyed Presence added with an action, can it only add one extra instead of two extra?"
+ },
+ {
+  "href": "blitz-setup-and-invader-steps",
+  "question": "When the Invaders do an extra set of actions during Setup in the Blitz Scenario, does that include any Adversary effects that happen during or trigger after the Build/Explore Step?"
+ },
+ {
+  "href": "kingdom-of-sweden-escalation-and-additional-explore-cards",
+  "question": "When the Kingdom of Sweden reveals an Escalation symbol, does the Escalation apply to all subsequent Explore Cards that turn?"
+ },
+ {
+  "href": "mentor-and-unlock-the-gates-of-deepest-power",
+  "question": "When the Mentor Aspect is the target of Unlock the Gates of Deepest Power, what happens?"
+ },
+ {
+  "href": "mentor-aspect-playing-destiny-unfolds",
+  "question": "When the Mentor Aspect plays in the Destiny Unfolds scenario, do they gain two cards from its Destiny when they gain a Power Card?"
+ },
+ {
+  "href": "can-nourishing-forget-the-new-minor-for-the-new-major",
+  "question": "When the Nourishing Aspect gains an extra Minor Power because it gained a Major Power, can it Forget the new Minor Power?"
+ },
+ {
+  "href": "whose-action-in-ritual-of-terror",
+  "question": "When the players collectively perform the Ritual of Terror, whose Action is it?"
+ },
+ {
+  "href": "farmers-seek-the-dahan-for-aid-during-salt-deposits",
+  "question": "When the Ravage Card is Salt Deposits, does \"Farmers Seek the Dahan for Aid\" cause it to Build in Mining lands, Ravage in Mining lands, or Build in non-Mining lands?"
+ },
+ {
+  "href": "warrior-aspect-incarna-damage-timing",
+  "question": "When the Warrior Aspect deals Damage by Dahan bringing its Incarna, can it deal the Damage before the move?"
+ },
+ {
+  "href": ".7w4gec0",
+  "question": "When Towns are Durable (have extra Health) due to Habsburg Monarchy (Livestock Colony) Level 4+: If Invaders blight a land during Ravage, does their Towns' extra Health wear off immediately?"
+ },
+ {
+  "href": "gift-of-twinned-days-being-the-lowest-cost-power-card-in-play",
+  "question": "When using \"Gift of Twinned Days,\" what happens if it's your lowest-cost Power Card in play?"
+ },
+ {
+  "href": "unlock-the-gates-of-deepest-power-forget-optional",
+  "question": "When using *Unlock the Gates of Deepest Power*, can target Spirit voluntarily choose to Forget when gaining a Major Power?"
+ },
+ {
+  "href": "origin-land-for-powers-with-unlimited-range",
+  "question": "When using a land-targeting Power with Range \"\u2014,\" which land is the origin land?"
+ },
+ {
+  "href": "Ethereal-Conjunction-and-thresholds",
+  "question": "When using a Power Card via Ethereal Conjunction, can you hit its thresholds? Do its own Elements contribute to those thresholds?"
+ },
+ {
+  "href": "dances-up-earthquakes-third-growth-option-picking-cards",
+  "question": "When using Dances Up Earthquakes' third growth option, can you pick the same impending card twice? Can you gain extra Energy onto one impending card and less Energy onto another impending card?"
+ },
+ {
+  "href": "what-counts-as-a-previous-use-for-relentless-punishment",
+  "question": "When using Relentless Punishment to repeat a Power Card, what counts as a previous use?"
+ },
+ {
+  "href": "spreading-and-dreadful-mire-with-entwined-power",
+  "question": "When using Spreading and Dreadful Mire, does it matter if you don't have a Sacred Site in the origin land when you resolve the first threshold (e.g., because you targeted via Entwined Power)?"
+ },
+ {
+  "href": "adding-disease-with-plague-ships-threshold",
+  "question": "When using the threshold of Plague Ships Sail to Distant Ports, must Energy be spent to add the final Disease?"
+ },
+ {
+  "href": "number-of-cards-transformative-sacrifice-can-take-and-play",
+  "question": "When using Transformative Sacrifice with threshold, what's the maximum number of Minor Powers that Target Spirit can Take and Play?"
+ },
+ {
+  "href": ".7w4gedg",
+  "question": "When Volcano Looming High uses Explosive Eruption vs Tsardom of Russia Level 2+, can they Push 1 Explorer from the origin land (when it does damage by destroying Presence) then destroy that Explorer using the thresholds of the innate that deal damage to nearby lands? Does that Push the Explorer again?"
+ },
+ {
+  "href": ".7w4gedf",
+  "question": "When Volcano uses Explosive Eruption, it deals damage both via destroying its Presence and the Innate Power. Does Badlands apply twice?"
+ },
+ {
+  "href": "war-touches-the-islands-shores-in-a-rising-heat-sacred-site",
+  "question": "When War Touches the Island\u2019s Shores does Damage in a land where Rising Heat of Stone and Sand has exactly 2 Presence, can you take advantage of the Health penalty from Blistering Heat to Destroy Invaders?"
+ },
+ {
+  "href": ".9v5kfq4",
+  "question": "When Weave Together the Fabric of Place expires, what if pieces in the joined land can't be legally moved to one (or both) of the printed lands?"
+ },
+ {
+  "href": "where-claimed-cards-go",
+  "question": "When Wounded Waters Bleeding claims a Healing Card, does it go to their hand?"
+ },
+ {
+  "href": "does-damage-change-health",
+  "question": "When you \"Remove 3 Health worth of Invaders,\" can you Remove 3 damaged Towns?"
+ },
+ {
+  "href": ".bu6og2z",
+  "question": "When you add Fear to the Fear pool mid-game, what exactly happens?"
+ },
+ {
+  "href": ".9v5ka9e",
+  "question": "When you gain a new Major Power, which Power Cards can you forget?"
+ },
+ {
+  "href": ".7w4gekj",
+  "question": "When you get the threshold on Unlock the Gates of Deepest Power, can you choose **not** to use the elemental threshold on the Power you gain?"
+ },
+ {
+  "href": ".9v5kavq",
+  "question": "When you hit the threshold of a Major Power, is the effect in addition to the base effect?"
+ },
+ {
+  "href": ".bu6od08",
+  "question": "When you reposition Presence on the board rather than adding new Presence, where can you measure the range from?"
+ },
+ {
+  "href": ".bu6odbi",
+  "question": "When you resolve a Choice Event, do you have to resolve one of the two options?"
+ },
+ {
+  "href": ".7w4g8p5",
+  "question": "When you resolve a Fear card, do you resolve only the current level?"
+ },
+ {
+  "href": ".7w4gat6",
+  "question": "When you return an Invader or Fear card to the box, can you look at it?"
+ },
+ {
+  "href": ".7w4gebw",
+  "question": "When you return Presence to your tracks, can you cover one of the leftmost solid-circle spaces that start the game without Presence?"
+ },
+ {
+  "href": ".9v5kfhc",
+  "question": "When you use a Power outside of its normal phase (e.g., during the Invader Phase via the Rouse the Spirits event), if Repeats have been granted to you (e.g., from Gift of Strength), can you use them then?"
+ },
+ {
+  "href": ".7w4g8p4",
+  "question": "When your Presence track gives you \"Any\" element, when do you have to choose what element that is? Can you change what it is during the turn?"
+ },
+ {
+  "href": "range-in-text-of-powers-that-target-spirits",
+  "question": "Where is Range in the text of a Spirit-targeting Power measured from?"
+ },
+ {
+  "href": "which-blight-count-as-irreparable-damage",
+  "question": "Which Blight is counted by \"Irreparable Damage,\" The Habsburg Monarchy (Livestock Colony) loss condition?"
+ },
+ {
+  "href": ".9v5ka9i",
+  "question": "Which elements does Elemental Boon have for the purpose of Events?"
+ },
+ {
+  "href": ".7w4g8q0",
+  "question": "Which lands are affected by the Level 1 effect \"Indentured Servants Earn Land\" of the Kingdom of England?"
+ },
+ {
+  "href": ".9v5kfbe",
+  "question": "Whose Presence does the range in Unrelenting Growth target from?"
+ },
+ {
+  "href": ".9v5ka9a",
+  "question": "Why do some of the Power cards have colored corners?"
+ },
+ {
+  "href": "why-remove-with-burn-brightest-befoe-the-end",
+  "question": "Why does Burn Brighted Before the End have the option to remove Presence instead of adding Presence? Isn't adding Presence always better?"
+ },
+ {
+  "href": ".9v5kfgv",
+  "question": "Why is there a copy of Sea Monsters in Jagged Earth *and* in Branch & Claw? What's the difference?"
+ },
+ {
+  "href": "will-there-ever-be-a-second-edition-of-spirit-island-or",
+  "question": "Will there ever be a Second Edition of Spirit Island? Or some sort of balance-tweak expansion for the current edition?"
+ },
+ {
+  "href": "avoiding-archipelago-islet-cost-with-entwined-power",
+  "question": "With an Archipelago, can Entwined Power's 'target via each others Presence' let you avoid paying 1 Energy to target a Spirit you don't otherwise share an islet with?"
+ },
+ {
+  "href": "can-shroud-of-silent-mist-gather-entwined-spirit-presence",
+  "question": "With Entwined Power, can Shroud of Silent Mist Gather another Spirit's Presence?"
+ },
+ {
+  "href": "timing-of-hlc-wave-of-immigration-relative-to-explore",
+  "question": "With Habsburg Monarchy (Livestock Colony) Level 5 (Wave of Immigration), do you do the effect before or after the Explore on that turn?"
+ },
+ {
+  "href": ".bu6odcf",
+  "question": "With Ocean's Hungry Grasp, what does it mean that \"Oceans are treated as Coastal Wetlands for Blight\" *(in addition to powers)*?"
+ },
+ {
+  "href": ".7w4gees",
+  "question": "With Pour Time Sideways and Dream of the Untouched Land could you use \"skip actions on one board\" on the \"extra time\" board (the board that Fractured Days' moved presence to)?"
+ },
+ {
+  "href": ".7w4gcrb",
+  "question": "With Powers Long Forgotten, when do you check whether a land is searched? Can a land be searched in the middle of a Power?"
+ },
+ {
+  "href": ".bu6odej",
+  "question": "With Promising Farmland, can you choose to add the Town in a land that wouldn't be explored anyway *(e.g., due to Wilds)*?"
+ },
+ {
+  "href": ".7w4gebq",
+  "question": "With Settle into Hunting Grounds, can your Presence count as both Badlands and Beasts for the same action? (e.g., if an Event does Damage per Beasts)"
+ },
+ {
+  "href": ".7w4gebk",
+  "question": "With Shifting Memory of Ages and the Elemental Invocation scenario, are the Element Markers considered to be in the adjacent lands for the purposes of Observe the Ever-Changing World?"
+ },
+ {
+  "href": ".bu6od05",
+  "question": "With Spirits that choose more than 1 Growth option, can I see the results of one choice before picking the next?"
+ },
+ {
+  "href": ".bu6od06",
+  "question": "With Spirits that get to choose multiple Growth options, if more than one option has \"Gain Power Card\", can I gain a Power Card *then* pick which Growth choice I was using?"
+ },
+ {
+  "href": ".9v5ka93",
+  "question": "With Sweep into the Sea, can you push Invaders into the Ocean on a board where Ocean's Hungry Grasp has presence?"
+ },
+ {
+  "href": ".9v5kfrp",
+  "question": "With Terror Turns to Madness, if Fear from it gets you to the next Terror Level, do you also get the next Terror Level's effects?"
+ },
+ {
+  "href": ".bu6od07",
+  "question": "With the \"Blitz\" scenario, can you use the Energy gained from playing an already-Fast 0-cost Power Card to help pay for another Power Card?"
+ },
+ {
+  "href": ".bu6ofs4",
+  "question": "With the Aid the Uprising part of the Slave Rebellion Event card against Kingdom of France, is damage calculated against each Invader with Strife separately?"
+ },
+ {
+  "href": ".9v5kfqq",
+  "question": "With the aspect Wind for Lightning's Swift Strike, can you choose later which Power to make fast?"
+ },
+ {
+  "href": ".bu6oeen",
+  "question": "With the Dahan event Rouse the Spirits, when do you check if you meet the condition *(3+ Dahan in your lands)*? Can another Spirit help you meet the condition?"
+ },
+ {
+  "href": ".7w4geds",
+  "question": "With the Despicable Theft Scenario, can you use Isolate to stop or detour Thieves?"
+ },
+ {
+  "href": ".7w4gefd",
+  "question": "With the Event Outpaced, do you need to pay for a card from Aid from Lesser Spirits?"
+ },
+ {
+  "href": ".7w4g8qr",
+  "question": "With the Fear card Overseas Trade Seems Safer at Terror level 2, what happens if a City would be built in a Coastal land?"
+ },
+ {
+  "href": ".bu6oegz",
+  "question": "With the growth of A Spread of Rampant Green, can I gain a power card and then choose where to use the first (non-optional) growth option?"
+ },
+ {
+  "href": ".7w4gedt",
+  "question": "With the Second Wave Scenario, how do you handle Still-Healthy Island cards?"
+ },
+ {
+  "href": "ward-the-shores-with-dances-up-earthquakes-impending-face-down",
+  "question": "With the Ward the Shores scenario, how does Dances Up Earthquakes' Impending ability interact with playing Power Cards face-down to make Warding Patterns?"
+ },
+ {
+  "href": ".7w4gebj",
+  "question": "With Unnerving Pall (from Shroud of Silent Mist), when do you choose which Invaders are participating in the Ravage? When the card is played, or at the time of the Ravage? What if new damaged Invaders move in?"
+ },
+ {
+  "href": "how-does-ravage-damage-work-with-voice-of-command",
+  "question": "With Voice of Command, can Explorers take Damage from Towns/Cities? How does distributing damage work when you have a mixed group of Dahan and Explorers?"
+ }
+]

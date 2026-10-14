@@ -1,0 +1,16 @@
+-- FAQ .7w4g8nu  https://querki.net/raw/darker/spirit-island-faq/.7w4g8nu
+-- Q: Does Defend guard both the land and Dahan? Eg, if the Invaders attack for
+--    3 Damage in a land with Defend 2, does the Defend 2 block damage to both?
+-- A: "Yes. The Defend 2 will reduce the 3 damage to 1, which is then applied
+--    to both the land and the Dahan. (And is not enough to add Blight /
+--    destroy a Dahan.)"
+-- uses: core.t
+--
+-- l1 Ravages with a Town and an Explorer (3 Damage) against Defend 2 and one
+-- Dahan. l2 is Defended fully so its Blight cascade can't reach l1.
+setup, +defend l1 2, +defend l2 9
+-- expect: invaders-deal-damage l1
+-- expect: damage-land l1 1
+-- expect: damage-dahan l1 1
+-- expect: count l1 blight 0
+-- expect: count l1 dahan 1

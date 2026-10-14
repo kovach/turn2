@@ -1,0 +1,13 @@
+-- FAQ .7w4g8qa  https://querki.net/raw/darker/spirit-island-faq/.7w4g8qa
+-- Q: If a region is adjacent to or contains more than one source of Invaders,
+--    do you add more than one Explorer?
+-- A: "No, you only add one Explorer if there is a source of Invaders,
+--    regardless of how many Cities, Towns, or Oceans are around or in it."
+-- uses: core.t
+--
+-- The Explore card is Mountain, so l3 is Explored. l3 has four sources: its
+-- own Town and City, and the City and Town of adjacent l2. It starts with no
+-- Explorer.
+scenario, ~>add-piece l3 town, ~add-piece l3 city
+-- expect: count l3 explorer 1
+-- expect-not: count l3 explorer 2

@@ -1,0 +1,34 @@
+{
+ "spirit": "Sharp Fangs Behind the Leaves",
+ "slug": "fangs",
+ "wiki": "Sharp_Fangs_Behind_the_Leaves",
+ "expansion": "Branch & Claw",
+ "file": "spirit-fangs.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "ALLY OF THE BEASTS",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "#acc ally-option : spirit e\nally-move S B From To, presence-of S P, at P From / ally-option S P\nally-move S B From To / ally-option S decline\nmove B To, beasts-at B From, land To, spirit:special S ally-of-the-beasts, has-presence S From\n  ~ally-move S B From To\nally-move S B From To\n  ?[rng] P\n  !(ally-option S P)\n  ~ally-choice S P To\nally-choice S C To, is C P, presence-of S P, ~move P To",
+   "evidence": "push fangs *171 l3 -> l2; ally-choice picks f1 (seeds 2,4) or f2 (seed 3): move f1 l2; or declines (seeds 7,1)",
+   "notes": "A trigger on the base `move` episode: `at`/`beasts-at` are read at the move's start, which is exactly 'moves from 1 of your lands'. First attempt read the destination after the move and got the old location; From/To must be passed along from the move itself. Two Beasts moving in parallel can both offer the same Presence (sibling concurrency).",
+   "text": "Your [Presence] may move with [Beasts] . (Whenever a [Beasts] moves from 1 of your lands to another land, you may move 1 [Presence] along with it.)"
+  },
+  {
+   "name": "CALL FORTH PREDATORS",
+   "status": "works",
+   "mechanism": "new state",
+   "turn": "#acc predator-option : spirit e\ncall-forth S, presence-of S P, at P L, land L / predator-option S P\ncall-forth S / predator-option S decline\nspirit-phase, spirit:special S call-forth-predators, ~call-forth S\ncall-forth S\n  ?[rng] P\n  !(predator-option S P)\n  ~predator-choice S P\npredator-choice S C, is C P, presence-of S P, at P L\n  ~>move P out-of-game\n  ~add-piece L beasts",
+   "evidence": "seeds 7,1: move f1 out-of-game; add-piece l3 beasts (new Beasts *7038 then pushed too)",
+   "notes": "'Leaves the game' is a location distinct from `destroyed`, so effects that return destroyed Presence naturally cannot find it.",
+   "text": "During each Spirit Phase, you may replace 1 of your [Presence] with 1 [Beasts] . The replaced [Presence] leaves the game. (It was not destroyed, so things which return destroyed [Presence] cannot bring it back.)"
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "Reading a location 'after' a move from a sibling rule sees the pre-move value (the sibling is unordered with the moved fact); pass values from the triggering episode's arguments instead.",
+  "'You may' needs an explicit `decline` option row in the choice domain each time."
+ ]
+}

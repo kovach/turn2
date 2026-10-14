@@ -1,0 +1,34 @@
+{
+ "spirit": "Fractured Days Split the Sky",
+ "slug": "fractured",
+ "wiki": "Fractured_Days_Split_the_Sky",
+ "expansion": "Jagged Earth",
+ "file": "spirit-fractured.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "FRAGMENTS OF SHATTERED TIME",
+   "text": "Each [Presence] on this ability represents 1 Time. Many of your Powers require Time as an additional cost. Spend it when you Resolve the Power. (Not when you play it.) When you Gain 1 Time , put 1 of your [Presence] here from your [Presence] track (or, optionally, the island). When you Spend 1 Time , return it to a [Presence] track - or if you have no free spaces, Destroy it.",
+   "status": "works",
+   "mechanism": "new state",
+   "turn": "#acc time : spirit @sum\nspirit:special S fragments / time S 0\npresence-of S P, at P (time-panel S) / time S 1\ngain-time S\n  ?[rng] P\n  !(presence-of S P, at P (track S))\n  ~time-from S P\ngain-time-from-island S\n  ?[rng] P\n  !(presence-of S P, at P L, land L)\n  ~time-from S P\ntime-from S C, is C P, ~move P (time-panel S)\nspend-time S N, gt N 0\n  ?[rng] P\n  !(presence-of S P, at P (time-panel S))\n  ~>spend-one S P\n  minus N 1 N1\n  ~spend-time S N1\nspend-one S C, is C P, track-free S F, gt F 0, ~move P (track S)\nspend-one S C, is C P, track-free S 0, ~move P destroyed\nuse-power S P, power:time-cost P N, ~spend-time S N\nfast-phase, played S P, power:time-cost P N, time S T, lt T N, { use-power S P => ^unaffordable S P }\nslow-phase, played S P, power:time-cost P N, time S T, lt T N, { use-power S P => ^unaffordable S P }",
+   "evidence": "gain 2 Time (f1 from track, f2 from island); slip (cost 1) resolves and returns 1 Time to the 1-space track; rewind (cost 1) finds no free space and destroys it; eon (cost 3) -> unaffordable fractured eon.",
+   "notes": "Time is just Presence at a location (time-panel S), counted by an @sum: the 'resource' is board state, as on the physical panel. Paying at resolve is a trigger on use-power; the 'cannot afford' gate is an exception over core's phase rule. 'or, optionally, the island' is modeled as a second gain episode rather than one combined choice."
+  },
+  {
+   "name": "DAYS THAT NEVER WERE",
+   "text": "Your 3rd Growth option lets you gain any one Power Card from a special set you create during Setup. When you gain a Power Card any other way, you may add one unchosen card to this set.",
+   "status": "partial",
+   "mechanism": "trigger (after/when)",
+   "turn": "growth-3 S\n  ?[rng] C\n  !(days-set S C)\n  ~days-gain S C\ndays-gain S C, is C K, +owns S K, ^left-days-set S K\nkept S G C, spirit:special S days, is C K\n  ?[rng] U\n  !(drawn G U, neq U K)\n  ~days-add S U\ndays-add S C, is C U, +days-set S U",
+   "evidence": "draw1 keeps card-d, days-add puts unchosen card-c in the set, growth-3 then gains card-c.",
+   "notes": "'any other way' is free: the trigger names the draw episode, not growth-3. Missing: removing a card from the set when it is gained (a growing relation can't shrink; would need location-style state like Time), and real decks/Growth options."
+  }
+ ],
+ "base_ext": "Presence track as a location with a space count (track-free); gain-power-draw over a fixed `drawn` set; growth-3 option.",
+ "core_diff": "",
+ "language_issues": [
+  "Sets that lose members (the Days set) can't be plain relations; anything removable must be modeled as a piece with an `at` location.",
+  "Choosing 'any card except the kept one' needs a JS `neq` over JSON-encoded terms."
+ ]
+}

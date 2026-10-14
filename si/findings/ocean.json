@@ -1,0 +1,34 @@
+{
+ "spirit": "Ocean's Hungry Grasp",
+ "slug": "ocean",
+ "wiki": "Ocean%27s_Hungry_Grasp",
+ "expansion": "Base",
+ "file": "spirit-ocean.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "OCEAN IN PLAY",
+   "text": "You may add/move [Presence] into Oceans, but may not add/move [Presence] into Inland lands. On boards where you have 1 or more [Presence] , Oceans are treated as Coastal Wetlands for Spirit Powers and [Blight] . You Drown any Invaders or [Dahan] moved to those Oceans.",
+   "status": "works",
+   "mechanism": "counts-as view",
+   "turn": "spirit:special S ocean-in-play, add-presence S, ocean O / presence-dest S O\nadd-presence S, spirit:special S ocean-in-play, (presence-choice S C), !(coastal C)\nocean-in-play O / land-for power O\nocean-in-play O / land-for blight O\nocean-in-play O / terrain-for power O wetland\nmove P O, ocean-in-play O, piece:kind P K, human K, ~drown P",
+   "evidence": "Presence added into `sea` (never Inland l2/l3); push-dest offers `sea`; a pushed Town that lands in `sea` is drowned (drown *85, fear 1)",
+   "notes": "Each clause is one mechanism: widen the Presence choice (acc rows), narrow it (extra `!`), counts-as land per context (land-for power/blight), and a trigger on move. Needed core.t to read lands through land-for <context>, with one base line changed (cascade reads land-for blight). The FAQ says Fear/Event pushes cannot drown; push-dest is keyed by spirit, not by cause, so this is not modeled. First attempt never drowned: the `+human` facts were top-level and could not join the move episode."
+  },
+  {
+   "name": "DROWNING",
+   "text": "Destroy Drowned pieces, placing Drowned Invaders here. At any time you may exchange (X) Health of these Invaders for 1 Energy, where X = number of players. (Ignore modifiers to Invader Health.)",
+   "status": "partial",
+   "mechanism": "trigger (after/when)",
+   "turn": "drown P, ~>destroy P, piece:kind P K, invader K, ~move P ocean-mat",
+   "evidence": "drown *85; move *85 ocean-mat; fear 1 (destroying a Town still generates Fear, as the FAQ confirms)",
+   "notes": "\"At any time you may exchange (X) Health ... for 1 Energy\" is not modeled: Turn has no \"at any time\" construct, so the option would have to be offered at every choice point."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "Top-level `+` facts sit on a branch unordered with the game and silently never join with episodes inside it; they must live in setup.",
+  "No way to express an option available \"at any time\"."
+ ]
+}

@@ -1,0 +1,44 @@
+{
+ "spirit": "Breath of Darkness Down Your Spine",
+ "slug": "breath",
+ "wiki": "Breath_of_Darkness_Down_Your_Spine",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-breath.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "TERROR STALKS THE LAND",
+   "text": "You have an Incarna ( [Breath of Darkness Down Your Spine] ). Empower [Breath of Darkness Down Your Spine] after uncovering [Empowered] . You may Abduct 1 [Explorer] / [Town] at empowered [Breath of Darkness Down Your Spine] each [Fasticon] phase.\n To Abduct a piece, Move it to The Endless Dark ( [Endless Dark] ). When pieces Escape, Move them to non-Ocean lands with your [Presence] / [Breath of Darkness Down Your Spine] ; if they have no legal land to move to, you lose.\n When your Powers would directly damage or directly destroy the only Invader in a land, instead Abduct it. (Check if it is alone at the start of the damage/destroy instruction. [Endless Dark] is not a land.)",
+   "status": "partial",
+   "mechanism": "new state + trigger (after/when) + exception (instead)",
+   "turn": "-- \"To Abduct a piece, Move it to The Endless Dark.\"\nabduct X, ~move X endless-dark\n-- \"Empower [Incarna] after uncovering [Empowered].\"\nuncover S empowered-space, spirit:special S terror, incarna-of S I, +empowered I\n-- \"You may Abduct 1 Explorer/Town at empowered [Incarna] each Fast phase.\"\nfast-phase, spirit:special S terror, incarna-of S I, empowered I, at I L, land L\n  ~abduct-offer S L\n#acc abduct-option : land e\nabduct-offer S L / abduct-option L decline\nabduct-offer S L, at X L, piece:kind X explorer / abduct-option L X\nabduct-offer S L, at X L, piece:kind X town / abduct-option L X\nabduct-offer S L\n  ?[rng] A\n  !(abduct-option L A)\n  ~abduct-choice A\nabduct-choice C, is C X, neq X decline, ~abduct X\n\n-- \"When pieces Escape, Move them to non-Ocean lands with your Presence /\n--  Incarna; if they have no legal land to move to, you lose.\"\n#acc escape-dest : e land\nescape X, spirit:special S terror, presence-of S P, at P L, land L\n  / escape-dest X L\n#acc escape-dest-count : e @sum\nescape X / escape-dest-count X 0\nescape-dest X L / escape-dest-count X 1\nescape X, escape-dest-count X 0, +defeat (escape X)\nescape X\n  ?[rng] L\n  !(escape-dest X L)\n  ~escape-to X L\nescape-to X C, is C L, ~move X L\n\n-- \"When your Powers would directly damage or directly destroy the only\n--  Invader in a land, instead Abduct it.\"  Approximation: \"alone\" is\n--  checked at the start of the Power, not of the destroy instruction.\n--  `land L` matters: land:invader-count also has rows for endless-dark\n--  (\"Endless Dark is not a land\").\nuse-power S P, spirit:special S terror, land:invader-count L 1, land L,\n  at X L, piece:kind X K, invader K,\n  { destroy X => ~abduct X }",
+   "evidence": "empowered bod after uncover; fast-phase abduct of l1 Explorer/Town (move *122 endless-dark); Power aimed at l3's lone Explorer: abduct *177 instead of destroy; escape moves pieces to a land with Presence, and with no Presence left: defeat (escape X).",
+   "notes": "Presence tracks are not modeled: 'uncovering' is an `uncover S empowered-space` episode. 'Alone' is checked at the start of the Power, not of the destroy instruction. Damage is not modeled (destroy only). The 'you lose' clause needs a count of destinations (@sum with a 0 row) because an empty choice silently resolves to nothing. First version wrongly applied 'instead Abduct' inside the Endless Dark: the invader count had rows for it; guarding with `land L` fixed it."
+  },
+  {
+   "name": "SHADOW-TOUCHED REALM",
+   "text": "Your land-targeting Powers can target [Endless Dark] as if it were a land, ignoring Range. ( [Endless Dark] is Inland and has no terrain.)",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "targeting S P, spirit:special S shadow-realm, power:targets P land\n  / power-target S P endless-dark\n-- \"(Endless Dark is Inland and has no terrain.)\" -- nothing to add: it has no\n-- land:terrain row and is not adjacent to an ocean.",
+   "evidence": "targeted breath dread endless-dark in several seeds; an Explorer there is destroyed normally by the Power.",
+   "notes": "One added row to the target domain. 'Inland, no terrain' holds automatically: no land:terrain row and no ocean adjacency."
+  },
+  {
+   "name": "A SPACE OF STRANGE AND INFINITE DARKNESS / TRAPPED IN THE ENDLESS DARK",
+   "text": "The Endless Dark ( [Endless Dark] ) is on the island, but isn't a land and isn't on any board. This can't be a [Sacred Site] . Spirits can't target this even if they have [Presence] here. Adding [Blight] here doesn't destroy [Presence] . Special rules that affect lands do nothing here. Invaders can't take Actions here. Pieces here are on the island when checking for Victory/Defeat. / Fear Cards and Token Events affect pieces here as if this were an Inland land, but can't remove Invaders here - when t[truncated]",
+   "status": "partial",
+   "mechanism": "counts-as view",
+   "turn": "#acc on-island : e\nat X L, land L / on-island X\nat X endless-dark / on-island X\n-- \"Fear Cards and Token Events affect pieces here as if this were an Inland\n--  land\" (no Fear Cards in core; the view is ready for them)\nspirit:special S terror / land-for fear endless-dark",
+   "evidence": "invader-on-island rows include pieces in endless-dark; no Ravage/Build/Explore there; untested for Fear Cards (none in core).",
+   "notes": "Most clauses hold for free because endless-dark has no `land` row and every base rule quantifies over land (closed-world default). Only the positive 'counts as' clauses need rows (on-island, land-for fear). The truncated remainder of Trapped (removal -> escape?) is not formalized."
+  }
+ ],
+ "base_ext": "Range/land targeting (as in spirit-roots.t), land:invader-count, test-only target narrowing, Incarna as a presence-of row.",
+ "core_diff": "",
+ "language_issues": [
+  "A choice with no options resolves to nothing silently, so 'if there is no legal destination, you lose' needs a separate @sum count of options with a 0 row.",
+  "Helper views that range over all locations (land:invader-count via `at X L`) leak into non-lands; every rule about lands needs an explicit `land L` guard. Closed-world 'not a land' is otherwise a strength: most Endless Dark restrictions needed no rules.",
+  "A test can narrow a rng choice with an extra `!` constraint read through the named choice tuple (`targeting S dread, (target-chosen S dread T), !(test-target T)`), which is a handy way to force scenarios."
+ ]
+}

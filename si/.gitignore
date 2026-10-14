@@ -1,0 +1,5 @@
+node_modules/
+__pycache__/
+*.cpuprofile
+# third-party rulebook PDFs (22 MB), kept locally only
+rulebooks/

@@ -1,0 +1,35 @@
+{
+ "spirit": "Dances Up Earthquakes",
+ "slug": "dances",
+ "wiki": "Dances_Up_Earthquakes",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-dances.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "BEGIN A DANCE OF DECADES",
+   "text": "Whenever you would play a Power Card, you may instead pay any amount of Energy onto the card to make it an impending card ( [Impending] ), setting it aside out of play for use on a future turn. (It doesn't provide Elements. It's still your Power Card, so it can be forgotten while it's impending.)",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "-- \"Whenever you would play a Power Card, you may instead ...\"\n-- (the \"may\" is decided before the play, in choose-cards)\nchoose-cards, spirit:special S dance-of-decades, turns-done N, wants S P N\n  ?[rng] R\n  !(may R)\n  ~dance-ask S P R N\nturn, turns-done N, >dance-ask S P R N, is R yes, { play-card S P _ => ~make-impending S P }\n-- \"... pay any amount of Energy onto the card to make it an impending card,\n--  setting it aside out of play for use on a future turn.\"\nmake-impending S P, energy S E, turns-done N\n  ?[rng] A\n  !(upto E A)\n  ~impending-pay S P N A\nimpending-pay S P N C, is C A\n  +energy-spend S A\n  +energy-on S P A\n  +impending S P N\n  ~move P impending\n-- \"(It doesn't provide Elements.)\" -- nothing to write: no `played` tuple\n-- exists for it, and Elements are counted from `played`.",
+   "evidence": "Seed 7: dance-ask yes -> make-impending dances quake -> impending-pay ... 0 -> energy-on dances quake 0; no `played`, so fire-elements 0 0 on turn 1. Seeds 1-4 decline: play-card dances quake 0, played, fire-elements 0 1.",
+   "notes": "'would play ... instead' is an exception on the base `play-card` episode, so the cost payment is skipped too. 'You may' can't live inside an exception (they intercept unconditionally within their context), so the decision is a choice in an earlier `choose-cards` step, and the exception's context starts after a 'yes'. That requires the base to split 'decide which cards' from 'play them'. 'Doesn't provide Elements' needs no rule, because Elements are counted from `played` tuples. 'Any amount' is a choice over a 0..Energy js generator. Forgetting an impending card is not modeled."
+  },
+  {
+   "name": "RHYTHMIC POWER BUILDS TO A CATACLYSMIC CRESCENDO",
+   "text": "When you gain Energy from your Presence Track, also gain [{{{width}}}px] Energy onto each Power Card made [Impending] on a previous turn. If any [Impending] now have Energy on them at least equal to their cost, discard that Energy and play them. (This costs no card plays.)",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "#acc energy-on-card : power @sum\nenergy-on S P A / energy-on-card P A\n-- \"When you gain Energy from your Presence Track, also gain 1 Energy onto each\n--  Power Card made Impending on a previous turn.\"\ngain-energy-from-track S X, spirit:special S crescendo, turns-done N\n  at P impending, impending S P M, lt M N\n  +energy-on S P 1\n-- \"If any Impending now have Energy on them at least equal to their cost,\n--  discard that Energy and play them. (This costs no card plays.)\"\nspirit-phase, spirit:special S crescendo, turns-done N, >gain-energy-phase N\n  at P impending, impending S P M, energy-on-card P E, power:cost P C, ge E C\n  ~crescendo-play S P N\ncrescendo-play S P N, ~move P in-play\nturn, turns-done N, >crescendo-play S P N, ^played S P",
+   "evidence": "Seed 8: 3 Energy put on Quake (cost 4), +1 on turn 2 -> crescendo-play dances quake 1, played, used-on-turn dances quake 1. Seed 14: 2 + 1 + 1 -> crescendo-play on turn 2 (third turn). Seed 7: 0 + 1 + 1 stays impending. Once played, no further feeding.",
+   "notes": "The wiki text lost the printed per-turn amount to a template glitch ([{{{width}}}px]); 1 is assumed. 'Previous turn' needs turn numbers (impending S P M with M < current). 'Discard that Energy' is implicit, since the card leaves `impending`. Played cards never leave `in-play` (no Time Passes discard in core)."
+  }
+ ],
+ "base_ext": "Multiple turns (turns-done counter), Energy as @sum with negative spends, Spirit Phase steps gain-energy (from a track value fact) / choose-cards / play-cards with turn-keyed play-card episodes that pay their cost, js-defs plus/neg/upto.",
+ "core_diff": "",
+ "language_issues": [
+  "Optional replacement ('you may instead') can't be an exception by itself, because exceptions are unconditional in their context; the choice must be made in an ordered earlier step and scope the exception, so the base has to separate deciding from doing.",
+  "`>play-card` / `>gain-energy-phase` without a turn key would also match earlier turns' episodes; every per-turn episode got a turn-number argument.",
+  "'Any amount of Energy' needs a js generator (`upto`) as the choice domain."
+ ]
+}

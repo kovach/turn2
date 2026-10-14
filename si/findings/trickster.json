@@ -1,0 +1,35 @@
+{
+ "spirit": "Grinning Trickster Stirs Up Trouble",
+ "slug": "trickster",
+ "wiki": "Grinning_Trickster_Stirs_Up_Trouble",
+ "expansion": "Jagged Earth",
+ "file": "spirit-trickster.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "A REAL FLAIR FOR DISCORD",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "use-power S Pw, spirit:special S flair-for-discord, (add-strife V), at V L\n  ^strife-added-by S Pw L\nfast-phase, (strife-added-by S Pw L), >use-power S Pw\n  ~flair S L\n#acc flair-option : e\nflair S L, at V L2, within-1 L L2, piece:kind V K, invader K / flair-option V\nflair S L / flair-option decline\nflair S L, energy S E, ge E 1\n  ?[rng] V\n  !(flair-option V)\n  ~flair-choice S V\nflair-choice S C, is C V, piece:kind V K, invader K\n  ~>pay-energy S 1\n  ~add-piece V strife",
+   "evidence": "seed 7: declines (energy stays 2); seeds 1-3: pay-energy trickster 1, extra Strife on an Invader in l1 or l2 (within 1 of l1); energy 1",
+   "notes": "Needed BASE-EXT Energy (@sum of signed changes), Strife, Range 1. The extra Strife must not re-trigger the rule: it is added with the physical `add-piece V strife` instead of the game verb `add-strife`, the same trick as Heavy Mining. That means other 'when Strife is added' rules (e.g. a future Senseless Roaming) would not see it either. Port to fresh-left ^ / #acc (2026-10-12): the generic `^phase` window no longer overlaps the phase's use-power episodes (each `^phase` starts at its own moment), so the trigger is anchored on the Fast and Slow phase episodes themselves (one rule each; the snippet shows the Fast one), peeking the trigger fact and continuing after the Power with `>use-power`. Options offered are unchanged; with seed 7 the rng now picks differently (an invader for the flair instead of decline, t2 instead of t1 to destroy), because option order follows store discovery order.",
+   "text": "After one of your Powers adds [Strife] in a land, you may pay 1 Energy to add 1 [Strife] within 1 [Range] of that land."
+  },
+  {
+   "name": "CLEANING UP MESSES IS A DRAG",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "use-power S Pw, spirit:special S cleaning-up-messes, neq Pw lets-see-what-happens,\n  (remove-blight L)\n  ^blight-removed-by S Pw\nfast-phase, (blight-removed-by S Pw), >use-power S Pw\n  ?[rng] P\n  !(presence-of S P, at P L, land L)\n  ~cleanup-destroy S P\ncleanup-destroy S C, is C P, ~destroy-presence-of P\ndestroy-presence-of P, ~move P destroyed",
+   "evidence": "cleanse removes Blight -> cleanup-destroy, t1 destroyed; Let's See What Happens also removes Blight but no cleanup fires",
+   "notes": "'Ignore this rule for Let's See What Happens' is a filter on the Power (`neq Pw lets-see-what-happens`), needing the user-defined neq js relation. Port to fresh-left ^ / #acc (2026-10-12): the generic `^phase` window no longer overlaps the phase's use-power episodes (each `^phase` starts at its own moment), so the trigger is anchored on the Fast and Slow phase episodes themselves (one rule each; the snippet shows the Fast one), peeking the trigger fact and continuing after the Power with `>use-power`. Options offered are unchanged; with seed 7 the rng now picks differently (an invader for the flair instead of decline, t2 instead of t1 to destroy), because option order follows store discovery order.",
+   "text": "After one of your Powers Removes [Blight] , Destroy 1 of your [Presence] . Ignore this rule for Let's See What Happens."
+  }
+ ],
+ "base_ext": "Energy as @sum of signed changes (gain/pay); Strife as a piece located on an Invader; remove-blight (to the Blight Card) with a choice; within-1 (Range 1); per-phase triggers anchored on the Fast/Slow phase episodes (the generic `^phase` window no longer works under fresh-left ^). The played cards are a turn-scoped acc view (`#acc played`, `turn / played \u2026`).",
+ "core_diff": "",
+ "language_issues": [
+  "Distinguishing 'added by a Power' from 'added by this special rule' needs two verbs for the same physical act; a rule-provenance notion would be cleaner.",
+  "No symbol inequality builtin; `neq` via #js-def JSON comparison.",
+  "Energy can't go below zero only by convention: nothing stops a payment exceeding the total except a guard in each paying rule (`energy S E, ge E 1`)."
+ ]
+}

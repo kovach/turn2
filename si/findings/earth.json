@@ -1,0 +1,22 @@
+{
+ "spirit": "Vital Strength of the Earth",
+ "slug": "earth",
+ "wiki": "Vital_Strength_of_the_Earth",
+ "expansion": "Base",
+ "file": "spirit-earth.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "EARTH'S VITALITY",
+   "text": "Defend 3 in every land where you have [Sacred Site] .",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "spirit:special S earths-vitality, sacred-site S L / defend-total L 3",
+   "evidence": "without the rule: damage-land l2 5; with Earth's Sacred Site in l2: damage-land l2 2 (5 - Defend 3)",
+   "notes": "A static ability is a standing acc contribution to the base defend-total @sum, recomputed every moment, so it switches off automatically when the Sacred Site is lost (e.g. Blight destroys a Presence). Simplest rule in the group: one line."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": []
+}

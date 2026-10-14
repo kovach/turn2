@@ -1,0 +1,22 @@
+{
+ "spirit": "Devouring Teeth Lurk Underfoot",
+ "slug": "teeth",
+ "wiki": "Devouring_Teeth_Lurk_Underfoot",
+ "expansion": "Horizons",
+ "file": "spirit-teeth.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "TERRITORIAL AGGRESSION",
+   "text": "Your Damage-Dealing Powers do +1 Damage. (This adds +1 Damage total for the Power, even if the Power Damages multiple Invaders or \"each Invader\". It can boost Minor/Major Power Cards, too, not just your Uniques + Innate.)",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "power-strike S P L, spirit:special S territorial-aggression, power:damage P N, gt N 0\n  / power-damage S P L 1",
+   "evidence": "power-damage teeth gnaw l3 2 (printed 1); 'assign-damage l3 2; count l3 town 0; fear 1'. Control: 'assign-damage l3 1; count l3 town 1; fear 0'.",
+   "notes": "Exactly the 'reify every modifiable quantity as a @sum' pattern: once the base sums a Power's Damage per use, '+1 Damage total for the Power, even if it damages multiple Invaders' is one contribution, and 'Damage-Dealing Powers' is the guard power:damage P N, gt N 0. Uses bx-damage.t."
+  }
+ ],
+ "base_ext": "bx-damage.t (see heat). Run: run.sh core.t bx-damage.t spirit-teeth.t",
+ "core_diff": "",
+ "language_issues": []
+}

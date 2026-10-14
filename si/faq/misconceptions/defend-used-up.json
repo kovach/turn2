@@ -1,0 +1,19 @@
+{
+ "id": "defend-used-up",
+ "misconception": "Defend is spent by the first Ravage in a land; a second Ravage there that turn is not reduced.",
+ "rulebook": "FAQ .7w4geew \"Defend applies each time the Invaders deal Damage in a land - it isn't 'used up' in the first Ravage.\"",
+ "caught_by": {
+  "q-7w4geew": [
+   "missing: count l1 blight 0",
+   "missing: count l1 dahan 1"
+  ]
+ },
+ "edits": [
+  {
+   "file": "core.t",
+   "find": "defend L N / defend-total L N",
+   "replace": "#acc defend-used : land\ndamage-land L D, +defend-spent L\ndefend-spent L / defend-used L\ndefend L N, not defend-used L / defend-total L N"
+  }
+ ],
+ "notes": "Spent forever rather than per turn; the scenario has only one turn. Uses a + fact because damage-land has ended by the next Ravage, and #acc reads only live tuples."
+}

@@ -1,0 +1,35 @@
+{
+ "spirit": "Finder of Paths Unseen",
+ "slug": "finder",
+ "wiki": "Finder_of_Paths_Unseen",
+ "expansion": "Promo Pack 2",
+ "file": "spirit-finder.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "RESPONSIBILITIES TO THE DEAD",
+   "text": "After one of your Actions Destroys 1 or more [Dahan] /Invaders, or directly triggers their Destruction by moving them, Destroy 1 of your [Presence] and lose 1 Energy. If you have no Energy to lose, Destroy another [Presence] .",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "use-power S P, destroy X, piece:kind X K, human-kind K, +action-destroyed S P X\n\n-- \"After one of your Actions Destroys 1 or more Dahan/Invaders, ...,\n--  Destroy 1 of your Presence and lose 1 Energy.\"\n#acc action-destroyed-some : spirit power\naction-destroyed S P X / action-destroyed-some S P\nturn, >use-power S P, action-destroyed-some S P,\n  spirit:special S responsibilities-to-the-dead\n  ~responsibility S\nresponsibility S\n  ~>destroy-own-presence S\n  energy S E\n  ~lose-energy-or-presence S E\nlose-energy-or-presence S E, gt E 0, +energy-change S -1\n-- \"If you have no Energy to lose, Destroy another Presence.\"\nlose-energy-or-presence S E, le E 0, ~destroy-own-presence S",
+   "evidence": "Fast 'Destroy 1 Explorer': action-destroyed finder waylay *132; responsibility finder (once); one Presence destroyed (is .. f3); energy-change finder -1; energy-report 0 (started at 1). Ravage destroys in the same turn did not trigger it.",
+   "notes": "'one of your Actions Destroys' falls out of episode nesting: a destroy matched inside use-power S P is that Action's (provenance for free), and this also covers 'triggers their Destruction by moving them' (a Drown happens inside the move inside the Power) \u2014 not tested. '1 or more' = a boolean acc so it fires once per Action. The action-destroyed marker is a + fact and would leak into later turns (single-turn test)."
+  },
+  {
+   "name": "OPEN THE WAYS",
+   "text": "You may make up to two of your lands adjacent at a time. You may change which lands are adjacent once between Actions. [1]",
+   "status": "partial",
+   "mechanism": "add-rows (widen)",
+   "turn": "open-ways S\n  ?[rng] A B\n  !(way-option S A B)\n  ~way S A B\nturn, >way S A B, is A X, is B Y, neq X Y\n  ^adjacent X Y\n  ^adjacent Y X",
+   "evidence": "Joint choice A=l1 B=l3 (the only pair of Finder's lands); 'adjacent l1 l3' and 'adjacent l3 l1' @ way-end..turn-end; probes in invader-phase and slow-phase both see the new adjacency.",
+   "notes": "Adjacency in core is a plain fact relation, so a Spirit can widen it just by emitting more adjacent tuples with a bounded interval; every acc/choice that reads adjacent picks them up. Partial: the way is chosen once at the start of the Fast phase and lasts the turn. 'change which lands are adjacent once between Actions' needs an adjacency to stop holding at an arbitrary later moment, i.e. retraction; Turn tuples only end with their enclosing episode, so a way would have to be an episode that the next change closes \u2014 no construct for that. Also no 'it persists across turns until changed'."
+  }
+ ],
+ "base_ext": "Energy as `#acc energy : spirit @sum` over energy-change facts; a Power Card 'Destroy 1 <kind>' in its target land.",
+ "core_diff": "",
+ "language_issues": [
+  "State kept in an episode vanishes when the episode ends (I first wrote `~energy-change finder 1`; the acc lost it); persistent resources must be `+` facts, and per-turn ones need `turn, >\u2026, ^`.",
+  "No retraction / 'until changed': a fact holds to top and a ^ tuple ends with its scope, so a toggleable state (Open the Ways) can only be approximated per turn; an @last relation can model 'current value' but not a set of tuples that other rules match directly (adjacent).",
+  "Symbol inequality still needs a #js-def (neq) for 'two different lands'."
+ ]
+}

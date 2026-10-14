@@ -1,0 +1,24 @@
+{
+ "spirit": "Lightning's Swift Strike",
+ "slug": "lightning",
+ "wiki": "Lightning%27s_Swift_Strike",
+ "expansion": "Base",
+ "file": "spirit-lightning.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "SWIFTNESS OF LIGHTNING",
+   "text": "For every [Air] you have, you may use 1 [Slow] Power as if it were [Fast] . (Power Cards or your Innate Powers.)",
+   "status": "works",
+   "mechanism": "override (@last)",
+   "turn": "made-fast S P T, turn T / speed P fast\n\nfast-phase, spirit:special S swiftness-of-lightning, ~swiftness S\nswiftness S, elements S air A, made-fast-count S U, lt U A\n  ?[rng] P\n  !(swift-option S P)\n  ~swift-choice S P\nfast-phase, turn T, >swift-choice S C, is C P, played S P\n  +made-fast S P T\n  ~>use-power S P\n  ~swiftness S",
+   "evidence": "seeds 7/3/11 with 2 Air and 3 Slow cards: exactly two cards get made-fast and use-power in the Fast phase; the third resolves in the Slow phase; no card resolves twice",
+   "notes": "Speed is an @last acc, so \"as if it were Fast\" is a later contribution and the base Slow phase skips the card on its own (One Use!). The Air count is re-read on every use, as the FAQ requires. First attempt made the same card Fast twice: the continuation ran inside swift-choice, before made-fast existed; `fast-phase, >swift-choice` fixed it. Innate Powers are not modeled. Port to fresh-left `^` (v2-caret-fresh-left): `^made-fast` from a separate `turn` rule started at a moment incomparable with the next `swiftness`, so the count never saw it; `made-fast` is now asserted in the chain that uses the Power and asks again, and names its turn so the speed override lasts exactly that turn."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "A rule's continuation runs inside the episode it first matched, so reads there cannot see facts that start when that episode ends; nothing warns about it (fix: `parent, >ep, ...`)."
+ ]
+}

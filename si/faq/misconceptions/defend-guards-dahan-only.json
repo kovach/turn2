@@ -1,0 +1,19 @@
+{
+ "id": "defend-guards-dahan-only",
+ "misconception": "Defend only protects the Dahan; the land still takes the Invaders' full Damage (and gets Blight).",
+ "rulebook": "p18 Defend: \"reduce the total amount of Damage they do by N\"; p9 \"Damage is done both to the land and Dahan.\"",
+ "caught_by": {
+  "q-7w4g8nu": [
+   "missing: damage-land l1 1",
+   "missing: count l1 blight 0"
+  ]
+ },
+ "edits": [
+  {
+   "file": "core.t",
+   "find": "  ~damage-land L D\n",
+   "replace": "  ~damage-land L Raw\n"
+  }
+ ],
+ "notes": "The FAQ answer adds that some Powers (Concealing Shadows) protect only the Dahan; this is the misconception that Defend in general works that way."
+}

@@ -1,0 +1,24 @@
+{
+ "spirit": "Fathomless Mud of the Swamp",
+ "slug": "mud",
+ "wiki": "Fathomless_Mud_of_the_Swamp",
+ "expansion": "Horizons",
+ "file": "spirit-mud.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "OFFER NO FIRM FOUNDATIONS",
+   "text": "At your [Sacred Site] , Build actions add [Explorer] instead of [Town] / [City] .",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "build L, sacred-site S L, spirit:special S no-firm-foundations\n  { add-piece L town => ~add-piece L explorer }\nbuild L, sacred-site S L, spirit:special S no-firm-foundations\n  { add-piece L city => ~add-piece L explorer }",
+   "evidence": "seed 1: build l1; add-piece l1 explorer; count l1 explorer 2, city 0 (base would add a City: 1 Town, 0 City). Seeds 7/2: cascaded Blight destroyed Mud's Presence first, so no Sacred Site at Build and the base City is built (correct).",
+   "notes": "Two exception rules, scoped to the build L episode and filtered by the Sacred Site. The replacement re-emits the same predicate (add-piece) with different arguments and does NOT loop, unlike the Badlands damage-dahan case where the replacement matches the pattern again. Works because core makes 'Build adds a Town/City' an add-piece episode inside build L."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "Two Blight additions in parallel (the land's own Blight and a cascade into it) both read the same Presence at their start and both 'destroy' it (move q2 destroyed twice) instead of destroying two different Presence; same sibling-concurrency issue as the missed cascade. Workaround: serialize Blight additions (not done)."
+ ]
+}

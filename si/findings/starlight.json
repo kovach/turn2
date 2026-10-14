@@ -1,0 +1,34 @@
+{
+ "spirit": "Starlight Seeks Its Form",
+ "slug": "starlight",
+ "wiki": "Starlight_Seeks_Its_Form",
+ "expansion": "Jagged Earth",
+ "file": "spirit-starlight.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "GROWTH BEGETS GROWTH",
+   "text": "You have 6 [Presence] tracks. (As usual, you may add [Presence] from any track.) 4 of the [Presence] tracks are next to rows of Growth choices: these choices start unavailable. Upon emptying a Growth track, pick one of its two Growth choices to be immediately available. The other stays unavailable for the rest of the game (cover with a spare piece) . After you add [Presence] from a space marked [Energyplus1] , gain 1 Energy.",
+   "status": "partial",
+   "mechanism": "add-rows (widen)",
+   "turn": "add-from-track S P L, at P Sp, space:track Sp T, track:growth T\n  >uncover S P\n  track-count T N, le N 1\n  ?[rng] G\n  !(track:choice T G)\n  ~unlock S G\nunlock S C, is C G, +growth-available S G\nadd-from-track S P L, at P Sp, space:bonus Sp energy+1\n  +gain-energy S 1",
+   "evidence": "adding a1 empties track tg: unlock picks one of its two choices (gain-power-and-energy or add-two-presence by seed), Growth can then choose it; the Energy+1 space gives gain-energy starlight 1.",
+   "notes": "Unavailable = no row; 'the other stays unavailable' needs no rule. 'Upon emptying' reads the track count after the uncover (`>uncover`, le N 1 because the count is read at the window start). Partial: 6 tracks/space order not modeled, and core's add-presence (from `supply`) had to be replaced by an add-from-track BASE-EXT."
+  },
+  {
+   "name": "SLOWLY COALESCING NATURE",
+   "text": "After revealing an [Element] , place 1 Element Marker of your choice on it. That element is permanent and is constantly available (As if pre-printed on the [Presence] track.)",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "add-from-track S P L, at P Sp, space:bonus Sp element\n  ?[rng] E\n  !(element E)\n  ~marker S E\nmarker S C, is C E, +permanent-element S E\npermanent-element S E / elements S E 1",
+   "evidence": "marker on the revealed Element space chooses air/water/fire by seed; report: starlight-element air 1 (core's elements acc includes it).",
+   "notes": "'As if pre-printed' = one more contribution to core's elements @sum; no core change."
+  }
+ ],
+ "base_ext": "Energy @sum; Presence-track spaces and tracks as locations with counts; add-from-track; Growth as a choice over growth-available rows.",
+ "core_diff": "",
+ "language_issues": [
+  "run.sh's output filter hides any tuple whose name starts with `element`/`power`/`land`/`spirit`\u2026; a report tuple named element-report silently vanished (renamed).",
+  "Counts read 'after' an action inside the same rule still see the value from the window start (le N 1 instead of N = 0), an easy off-by-one."
+ ]
+}

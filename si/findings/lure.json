@@ -1,0 +1,34 @@
+{
+ "spirit": "Lure of the Deep Wilderness",
+ "slug": "lure",
+ "wiki": "Lure_of_the_Deep_Wilderness",
+ "expansion": "Jagged Earth",
+ "file": "spirit-lure.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "HOME OF THE ISLAND'S HEART",
+   "status": "partial",
+   "mechanism": "add-constraint (narrow)",
+   "turn": "add-presence S, spirit:special S home-of-the-islands-heart, (presence-choice S C), !(inland C)",
+   "evidence": "seeds 1-4: move u2 l3; seed 7: move u2 l2 -- never l1 (coastal) or sea",
+   "notes": "One extra `!` on the base add-presence choice. 'Inland' had to be added as board data (+inland facts): it is the complement of coastal and acc bodies have no negation. Only 'added' is covered; core has no verb for moving Presence, so 'moved' would need the same constraint on that future choice.",
+   "text": "Your [Presence] may only be added/moved to lands that are Inland."
+  },
+  {
+   "name": "ENTHRALL THE FOREIGN EXPLORERS",
+   "status": "partial",
+   "mechanism": "exception (instead)",
+   "turn": "#acc enthralled-land : spirit land\nspirit:special S enthrall-the-foreign-explorers, presence-count S L N, land L / enthralled-land S L\ninvaders-deal-damage L, enthralled-land S L, at P L, piece:kind P explorer, { deals L P D => }\ninvaders-deal-damage L, enthralled-land S L, presence-count S L N,\n  land:count L explorer E, mul N 2 Out, minus E Out R0, pos R0 R,\n  kind:damage explorer D, mul R D X\n  / invader-damage L X",
+   "evidence": "1 Presence, 2 Explorers + Town in l1: deals l1 town 2 only, damage-land l1 2; with 3 Explorers: damage-land l1 3",
+   "notes": "Explorers are interchangeable, so instead of choosing which sit out, every Explorer's per-invader `deals` is suppressed by an exception and max(0, E - 2N) Explorer damage is added back as extra invader-damage rows. Works only because core exposes per-invader damage as tuples summed by an @sum acc. Not covered: non-participating Explorers can still be destroyed by Dahan counterattack, because core's kill-invaders choice is anonymous (no ~choice tuple), so no rule can add a constraint to it.",
+   "text": "For each of your [Presence] in a land, up to 2 [Explorer] do not participate in Ravage."
+  }
+ ],
+ "base_ext": "+inland board facts for l2/l3.",
+ "core_diff": "",
+ "language_issues": [
+  "No negation in acc bodies, so 'Inland' (= not coastal) had to be entered as data rather than derived.",
+  "An anonymous inline choice (`?[rng] V, !(...), is V X` as in core's kill-invaders) cannot be narrowed by other rules; only choices that emit a naming tuple (like presence-choice / push-to) are extensible."
+ ]
+}

@@ -1,0 +1,45 @@
+{
+ "spirit": "Hearth-Vigil",
+ "slug": "hearth",
+ "wiki": "Hearth-Vigil",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-hearth.t",
+ "core_variant": "core-hearth.t",
+ "rules": [
+  {
+   "name": "ROOTED IN THE COMMUNITY",
+   "text": "[Blight] added in your lands does not Destroy your [Presence] if [Dahan] are present. (Ravage Actions Destroy [Dahan] before added [Blight] destroys [Presence] and cascades.)",
+   "status": "works-with-hook",
+   "mechanism": "exception (instead)",
+   "turn": "add-blight L, spirit:special S rooted, has-presence S L, land:count L dahan C, gt C 0,\n  presence-of S X, at X L, { move X destroyed => }",
+   "evidence": "core-hearth.t: with Dahan alive only River's p1 is destroyed (move p1 destroyed), all Hearth Presence survive; without Fortify, Dahan die first (kill-dahan l1 1) and then move h1 destroyed. Against unmodified core.t, h1 survives in l1 although its Dahan was killed: kill-dahan and add-blight are concurrent siblings there.",
+   "notes": "The rule's parenthetical fixes an order the base leaves concurrent: core Ravage launches damage-land and damage-dahan as siblings, so the guard 'Dahan are present' read at add-blight start cannot see the Ravage's Dahan kills. core-hearth.t sequences damage-dahan before damage-land (one-line change). The exception filters on this spirit's own Presence by intercepting `move X destroyed` for X bound in the context (other spirits' Presence still destroyed)."
+  },
+  {
+   "name": "FORTIFY HEART AND HEARTH",
+   "text": "[Dahan] have +4 Health (each) while in your lands. Event and Blight Card Actions don't damage, destroy, or replace [Dahan] in your lands. (Ravages are not Event Actions even if caused by Events.)",
+   "status": "works-with-hook",
+   "mechanism": "add-rows (widen) + exception (instead)",
+   "turn": "-- \"Dahan have +4 Health (each) while in your lands.\"\nspirit:special S fortify, has-presence S L / dahan-health L 4\n-- \"Event and Blight Card Actions don't damage, destroy, or replace Dahan in\n--  your lands.\"\nevent-action E, spirit:special S fortify, has-presence S L, at V L, piece:kind V dahan,\n  { destroy V => }\nblight-card-action E, spirit:special S fortify, has-presence S L, at V L, piece:kind V dahan,\n  { destroy V => }",
+   "evidence": "kill-dahan l1 0 and kill-dahan l2 0 with 3 and 5 Damage (Health 6); the Event's event-destroy fires but no Dahan in l2 is destroyed (3 Dahan in l2 at report). Without Fortify: event destroys *295 and Ravage kills Dahan.",
+   "notes": "core.t hard-coded 'every 2 Damage destroys one Dahan' (half D N); +4 Health needs Health as a summable quantity, so core-hearth.t adds `#acc dahan-health : land @sum` with base row 2 and divides by it; the spirit then adds a 4 row (pure addition). Health is per land, not per Dahan (fine while all Dahan in a land share the bonus). Events/Blight Cards don't exist in core; a minimal event-action episode was added as BASE-EXT. 'damage' and 'replace' by Events are not modeled (no per-piece damage or replace in core)."
+  },
+  {
+   "name": "LOYAL GUARDIAN",
+   "text": "When all [Dahan] leave one of your lands, your [Presence] may Move with those [Dahan] . (Each [Dahan] can Bring any number of [Presence] .)",
+   "status": "partial",
+   "mechanism": "trigger (after/when)",
+   "turn": "move V To, piece:kind V dahan, at V From, land From, neq From To,\n  land:count From dahan 1, spirit:special S loyal, has-presence S From\n  ~loyal-follow S From To\n-- \"(Each Dahan can Bring any number of Presence.)\" -- one yes/no per Presence\nloyal-follow S From To, presence-of S P, at P From\n  ?[rng] Y\n  !(yes-no Y)\n  ~loyal-answer P To Y\nloyal-answer P To Y, is Y yes, ~move P To",
+   "evidence": "Slow-phase push of l1's only Dahan to l2: loyal-follow hearth l1 l2, loyal-answer h1 l2 ..., move h1 l2; report shows h1 in l2.",
+   "notes": "'All Dahan leave' is approximated as 'the last Dahan in the land moves' (read via land:count at the move's start). Several Dahan moved by one action (Gather/Push up to N) are not grouped, so 'each Dahan can bring Presence' to different destinations is only per-move. Needs neq (#js-def) to exclude moves within a land."
+  }
+ ],
+ "base_ext": "Event Actions as an `event-action E` episode (an event that destroys 1 Dahan in a land). core-hearth.t variant: Dahan Health as #acc dahan-health (@sum, base 2) and Ravage damaging Dahan before the land.",
+ "core_diff": "--- core.t\t2026-10-09 12:33:29.216961840 -0700\n+++ core-hearth.t\t2026-10-09 13:09:04.188397132 -0700\n@@ -106,8 +106,8 @@\n invaders-deal-damage L\n   ~>tally L\n   invader-damage L Raw, defend-total L Def, minus Raw Def D0, pos D0 D\n+  ~>damage-dahan L D\n   ~damage-land L D\n-  ~damage-dahan L D\n tally L, ^tallied\n \n -- \"1. Invaders Damage the Land: If 2 or more Damage is dealt, add a Blight\n@@ -115,7 +115,11 @@\n damage-land L D, ge D 2, ~add-blight L\n \n -- \"2. Invaders Fight the Dahan: Every 2 points of Damage destroys one Dahan.\"\n-damage-dahan L D, half D N, ~kill-dahan L N\n+#js-def div +A +B -C { yield [Math.floor(A / B)] }\n+-- p16 \"Each Dahan has 2 Health\" (Health exposed as a summable quantity)\n+#acc dahan-health : land @sum\n+land L / dahan-health L 2\n+damage-dahan L D, dahan-health L H, div D H N, ~kill-dahan L N\n kill-dahan L N, gt N 0, land:count L dahan C, gt C 0\n   ?[rng] V\n   !(at V L, piece:kind V dahan)\n",
+ "language_issues": [
+  "Sibling sub-episodes launched with plain `~a, ~b` from one rule body are concurrent, so a guard in b-triggered rules cannot see a's effects; ordering must be written into the base with `~>` (here: damage-dahan before damage-land).",
+  "Hard-coded arithmetic in base rules (half D N) blocks additive modifiers; quantities like Health must be @sum relations from the start.",
+  "Exceptions cannot filter on 'whose' a choice-based destroy is (destroy-presence carries an opaque choice term), so the exception intercepts the downstream `move X destroyed` with X bound in the context instead.",
+  "'When all X leave' needs grouping by action; Turn has no notion of an action boundary to aggregate moves over, so the trigger is per-move."
+ ]
+}

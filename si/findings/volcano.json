@@ -1,0 +1,43 @@
+{
+ "spirit": "Volcano Looming High",
+ "slug": "volcano",
+ "wiki": "Volcano_Looming_High",
+ "expansion": "Jagged Earth",
+ "file": "spirit-volcano.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "MOUNTAIN HOME",
+   "text": "Your [Presence] may only be added/moved into Mountains.",
+   "status": "partial",
+   "mechanism": "add-constraint (narrow)",
+   "turn": "add-presence S, spirit:special S mountain-home, (presence-choice S C)\n  !(land:terrain C mountain)",
+   "evidence": "Growth add-presence moved v4 to l3 (the only mountain) on every run.",
+   "notes": "Same narrowing pattern as Ocean's inland ban. Only 'added' is covered: core has no generic 'move Presence' choice to constrain, so 'moved' would need every Presence-moving effect to go through a named choice."
+  },
+  {
+   "name": "COLLAPSE IN A BLAST OF LAVA AND STEAM",
+   "text": "When your [Presence] is destroyed, in that land, deal 1 Damage per destroyed [Presence] to both Invaders and to [Dahan] .",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "destroy-presence C, is C X, presence-of S X, spirit:special S collapse, at X L\n  ~damage-invaders L 1\n  ~damage-dahan-in L 1",
+   "evidence": "Each Blight-destroyed Volcano Presence in l3 produced damage-invaders l3 1 and damage-dahan-in l3 1; the Explorer (1 Health) was destroyed, the Dahan (2 Health) after the second collapse.",
+   "notes": "Needed a whole Damage/Health BASE-EXT (turn-scoped dmg tuples, destroy when damage >= health, rng distribution of N damage). 'per destroyed Presence' is satisfied by firing once per destroy-presence episode; simultaneous destructions are not merged."
+  },
+  {
+   "name": "VOLCANIC PEAKS TOWER OVER THE LANDSCAPE",
+   "text": "Your Power Cards gain +1 [Range] if you have 3 or more [Presence] in the origin land.",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "played S P, power-card P, spirit:special S peaks, presence-count S O N, ge N 3\n  / power-range S P O 1",
+   "evidence": "range-0 card: can-target l3 only without the rule; can-target l3 and l2 with it (3 Presence in l3).",
+   "notes": "Clean once Range is a per-origin @sum (power-range S P O R): the bonus is one more contribution keyed by the origin land, so 'in the origin land' is exactly the key. Range itself (reach with bounded recursion) is BASE-EXT."
+  }
+ ],
+ "base_ext": "Damage/Health (persistent dmg facts on deal-damage-to's chain + destroy check (a `turn, >damage-mark, ^dmg` view now starts concurrently with the check; core has one turn, so the turn scope is not needed), player-divided N damage to Invaders or Dahan), Range/targeting (reach acc with bounded recursion, power-range @sum per origin, targetable). The played card is a turn-scoped acc view (`#acc played`).",
+ "core_diff": "",
+ "language_issues": [
+  "Run hits gas from core's unbounded Blight cascades once l2 and l3 are both blighted (the collapse test adds Blight to l3); results above are from before gas.",
+  "Damage that lasts 'until end of turn' needs the `turn, >damage-mark P N, ^dmg P N` idiom because damage is dealt deep inside nested episodes; there is no way to name the turn directly."
+ ]
+}

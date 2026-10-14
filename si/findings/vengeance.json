@@ -1,0 +1,43 @@
+{
+ "spirit": "Vengeance as a Burning Plague",
+ "slug": "vengeance",
+ "wiki": "Vengeance_as_a_Burning_Plague",
+ "expansion": "Jagged Earth",
+ "file": "spirit-vengeance.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "THE TERROR OF A SLOWLY UNFOLDING PLAGUE",
+   "text": "When [Disease] would prevent a Build on a board with your [Presence] , you may let the Build happen (removing no [Disease] ). If you do, 1 [Fear] .",
+   "status": "partial",
+   "mechanism": "exception (instead)",
+   "turn": "#acc has-any-presence : spirit\npresence-of S P, at P L, land L / has-any-presence S\nbuild-step, spirit:special S plague, has-any-presence S, has-disease L\n  invader-card:build C, card:terrain C T, land:terrain L T, has-invaders L\n  ?[rng] Y\n  !(yes-no Y)\n  ~plague-decides L Y\nbuild-step, (plague-decides L Y), is Y yes, { remove-one L disease => ~plague-build L }\nplague-build L, +fear-from (plague L) 1\nplague-build L, land:count L town Nt, land:count L city Nc, gt Nt Nc, ~add-piece L city\nplague-build L, land:count L town Nt, land:count L city Nc, le Nt Nc, ~add-piece L town",
+   "evidence": "with ext-disease.t: seeds 7/1/3 choose yes -> plague-build l1 adds a Town/City, Disease stays (count l1 disease 1), +1 Fear; seed 2 declines -> remove-one l1 disease.",
+   "notes": "An exception on another extension's exception: Disease already consumed the `build L` tuple and re-emitting `build L` inside build-step would be intercepted by Disease again (loop), so 'let the Build happen' restates the two base Build rules for plague-build. Works, but anything that later modifies `build` (e.g. Fathomless Mud) won't see these builds. Decision is taken at build-step start; the exception is then conditioned on the `is` answer."
+  },
+  {
+   "name": "LINGERING PESTILENCE",
+   "text": "When your [Presence] is destroyed by anything except a Spirit action, add 1 [Disease] where each destroyed [Presence] was.",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "destroy-presence C, is C X, presence-of S X, spirit:special S lingering, at X L\n  ~lingering S L\nlingering S L, ~add-piece L disease\nuse-power S P, { lingering _ _ => }",
+   "evidence": "Event-style Blight in l2 destroys g1 -> lingering plague l2, Disease added; plague's own Power adds Blight to l3 destroying g2 -> no Disease (seeds 1/2/3).",
+   "notes": "'except a Spirit action' is a nice fit: the trigger is cancelled by an empty exception scoped to every use-power episode. Requires that all Spirit actions run inside a recognisable episode (use-power; growth would need the same)."
+  },
+  {
+   "name": "WREAK VENGEANCE FOR THE LAND'S CORRUPTION",
+   "text": "Your actions treat [Blight] on the island as also being [Badlands] .",
+   "status": "works",
+   "mechanism": "counts-as view",
+   "turn": "spirit:special S wreak, at B L, piece:kind B blight / badlands-for S L 1",
+   "evidence": "fever's 1 Damage in l2 (1 Blight) -> damage-total plague l2 2.",
+   "notes": "Works because the BASE-EXT counts Badlands through a per-actor view (badlands-for S L); 'your actions' is the actor key."
+  }
+ ],
+ "base_ext": "yes/no decisions; Badlands as a per-actor @sum view used by Power damage; Power effects as rules keyed on power:effect. The played cards are a turn-scoped acc view (`#acc played`, `turn \u2026 / played \u2026`): a `turn, ^played \u2026` view now starts concurrently with the phases.",
+ "core_diff": "",
+ "language_issues": [
+  "An exception cannot be partially undone: once `{ build L => \u2026 }` has fired, the original tuple is gone, so an extension of the extension must re-implement the base effect (duplicating base rules).",
+  "With core's unbounded cascades, any scenario where Ravage blights adjacent lands exhausts tuple-gas (50000 rows): acc rows multiply per moment. The test Defends the Ravage to stay under the limit."
+ ]
+}

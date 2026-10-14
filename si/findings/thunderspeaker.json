@@ -1,0 +1,35 @@
+{
+ "spirit": "Thunderspeaker",
+ "slug": "thunderspeaker",
+ "wiki": "Thunderspeaker",
+ "expansion": "Base",
+ "file": "spirit-thunderspeaker.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "ALLY OF THE DAHAN",
+   "text": "Your [Presence] may move with [Dahan] . (Whenever a [Dahan] moves from 1 of your lands to another land, you may move 1 [Presence] along with it.)",
+   "status": "partial",
+   "mechanism": "trigger (after/when)",
+   "turn": "#acc ally-option : spirit land e\npresence-of S P, at P From / ally-option S From P\nspirit S, land From / ally-option S From stay\nmove D To, piece:kind D dahan, land To, at D From, land From,\n  spirit:special S ally-of-the-dahan, has-presence S From\n  ?[rng] C\n  !(ally-option S From C)\n  ~ally-choice S C To\nally-choice S C To, is C P, presence-of S P, ~move P To",
+   "evidence": "seed 2: two Dahan pushed out of l2; ally-choice moved t2 with one of them (`move t2 l3`). seed 3: t2 moved with BOTH Dahan (`move t2 l3; move t2 l1`)",
+   "notes": "The trigger is easy (match the base move episode; `at D From` read at its start is where the Dahan came from). Wrong when two Dahan move at the same moment (one Push of several Dahan = sibling push-to episodes): each trigger sees the same Presence still in the origin and both may take it. Correct only if the base moves pieces one at a time."
+  },
+  {
+   "name": "SWORN TO VICTORY",
+   "text": "After a Ravage Action destroys 1 or more [Dahan] , for each [Dahan] Destroyed, Destroy 1 of your [Presence] within 1 [Range] . [1] [2]",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "ravage L, destroy D, piece:kind D dahan, +dahan-lost-in L D\n#acc dahan-lost : land @sum\ndahan-lost-in L D / dahan-lost L 1\n-- \"After a Ravage Action ...\": after its last step (Dahan fight back) but\n-- still inside the Ravage, so it finishes before the next land Ravages.\nravage L, >dahan-fight-back L, dahan-lost L N, spirit:special S sworn-to-victory\n  ~sworn S L N\n-- \"for each Dahan Destroyed\": a counted loop, one Presence at a time, so\n-- that each destroys a *different* Presence (independent per-Dahan firings\n-- happen at one moment and may all choose the same Presence)\nsworn S L N, gt N 0\n  ?[rng] C\n  !(presence-of S C, at C L2, near L L2)\n  ~>destroy-presence C\n  minus N 1 N1\n  ~sworn S L N1",
+   "evidence": "l2 Ravage destroys 2 Dahan -> `sworn thunder l2 2; ... 1; ... 0` destroying 2 distinct Presence within 1 (all 6 seeds, no duplicate destroys); l1 loses 1 Dahan -> sworn l1 1 with no Presence left -> no-op",
+   "notes": "Two fixes were needed: (1) 'for each Dahan destroyed, destroy 1 Presence' as independent per-Dahan firings ran at one moment and could pick the same Presence -> rewritten as a counted loop; (2) placing it 'after the Ravage' (`ravage-step, >ravage L`) made it concurrent with the next land's Ravage (whose Blight destroyed the same Presence) -> anchored `ravage L, >dahan-fight-back L` instead, i.e. after the last step but inside the Ravage. That depends on knowing the base's last sub-step. dahan-lost is keyed by land only (+ facts), so a multi-turn game would accumulate counts across turns."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "'For each X, do Y (choosing)' as parallel firings lets choices at the same moment collide; needs a sequential counted loop (or a builtin 'for each, one at a time').",
+  "'After episode E' via `parent, >E` runs concurrently with whatever the base starts after E; to run strictly before the next base step one must hook inside E after its known last sub-step (`E, >last-step`) -- there is no 'at the end of E, still inside E' form.",
+  "Simultaneous moves (one Push of several pieces) are sibling episodes, so per-move triggers can't see each other's effects (Ally of the Dahan moved one Presence twice)."
+ ]
+}

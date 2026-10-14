@@ -1,0 +1,34 @@
+{
+ "spirit": "Downpour Drenches the World",
+ "slug": "downpour",
+ "wiki": "Downpour_Drenches_the_World",
+ "expansion": "Promo Pack 2",
+ "file": "spirit-downpour.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "DRENCH THE LANDSCAPE",
+   "text": "Spirit Actions and Special Rules treat your [Sacred Site] as Wetlands in addition to the printed terrain.",
+   "status": "works",
+   "mechanism": "counts-as view",
+   "turn": "sacred-site S L, spirit:special S drench / terrain-for power L wetland\nsacred-site S L, spirit:special S drench / terrain-for special-rule L wetland",
+   "evidence": "wetland-only range-0 cards: can-target rain l3, can-target flood l3 (mountain Sacred Site); at the same moment l3 is wetland only for contexts power and special-rule, not invader/blight.",
+   "notes": "Direct use of core's terrain-for <context> view. 'Special Rules' has no consumers in core (no other spirit's special rule reads terrain-for special-rule), so that half is declared but untested."
+  },
+  {
+   "name": "POUR DOWN POWER ACROSS THE ISLAND",
+   "text": "For each 2 [Water] you have, during the [Fasticon] / [Slowicon] phase you may either: Gain 1 Energy; or Repeat a land-targeting Power Card by paying its cost again. (It need not target the same land.) Use scenario markers or spare game pieces to track uses of this rule. (Max 5 times per turn, no matter how much [Water] you have.)",
+   "status": "works",
+   "mechanism": "new state",
+   "turn": "#acc pour-used : spirit @sum\nspirit:special S pour / pour-used S 0\npoured S O / pour-used S 1\nfast-phase, spirit:special S pour, ~pour S fast\nslow-phase, spirit:special S pour, ~pour S slow\n#acc pour-option : spirit e e\npour S Ph / pour-option S Ph energy\npour S Ph / pour-option S Ph decline\npour S Ph, played S P, speed P Ph, power:target-terrain P _, power:cost P C\n  energy S E, ge E C / pour-option S Ph (repeat P)\npour S Ph, elements S water W, pour-limit W Lim, pour-used S U, lt U Lim\n  ?[rng] O\n  !(pour-option S Ph O)\n  ~pour-choice S Ph O\npour-choice S Ph C, is C energy, +poured S energy\npour-choice S Ph C, is C (repeat P), +poured S (repeat P)\npour-choice S Ph C, is C energy, +gain-energy S 1\npour-choice S Ph C, is C (repeat P), power:cost P Cost, neg Cost NC\n  +gain-energy S NC\n  ~use-power S P\nfast-phase, >pour-choice S fast C, is C energy, ~pour S fast\nfast-phase, >pour-choice S fast C, is C (repeat P), ~pour S fast\nslow-phase, >pour-choice S slow C, is C energy, ~pour S slow\nslow-phase, >pour-choice S slow C, is C (repeat P), ~pour S slow",
+   "evidence": "4 Water -> exactly 2 pour-choice per turn; seed 2: repeat rain (gain-energy -1, use-power rain again) + gain 1 Energy; slow phase gets none (budget shared); seed 7: Energy twice.",
+   "notes": "Same loop shape as Swiftness of Lightning (budget acc recounted each use, `phase, >choice` to continue). 'Repeat' is simply another use-power episode. Needed 8 rules for one rule because each option x phase continuation is a separate rule. Port to fresh-left `^` (v2-caret-fresh-left): a use is now marked with `+poured` inside its choice; the old `turn, >pour-choice …, ^poured` started at a moment concurrent with the next offer, so the budget no longer counted earlier uses (4 uses instead of 2). `+` lasts past the turn, which is fine for the one-turn scenario but would need a turn key in a multi-turn game."
+  }
+ ],
+ "base_ext": "Energy @sum; Range/targeting with target-terrain read through terrain-for power.",
+ "core_diff": "",
+ "language_issues": [
+  "Per-phase loops ('during the Fast/Slow phase, repeatedly') need one continuation rule per phase and per non-decline option; a generic 'repeat until decline within the enclosing phase' form would collapse 4 rules to 1.",
+  "Two copies of the same fact (two Water icons on one card) can't be written as duplicate facts reliably; used one Water per card."
+ ]
+}

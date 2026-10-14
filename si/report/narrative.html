@@ -1,0 +1,258 @@
+<div class="page">
+<header class="top">
+  <p class="eyebrow">A formalization study</p>
+  <h1>Spirit Island in Turn</h1>
+  <p class="lede">Can the rules of a large, heavily expanded board game be written so that each Turn rule matches one rulebook sentence, and every expansion, card and spirit is added without rewriting what came before?</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#summary">Summary</a>
+  <a href="#primer">Reading Turn</a>
+  <a href="#base">The base rules</a>
+  <a href="#extensions">First extensions</a>
+  <a href="#patterns">Extension patterns</a>
+  <a href="#spirits">All spirits</a>
+  <a href="#issues">Language findings</a>
+  <a href="#next">What to change</a>
+  <a href="#appendix">Appendix</a>
+</nav>
+
+<section id="summary">
+<h2>Summary</h2>
+
+<div class="verdict">
+<p><b>Mostly yes, if the base is written for it.</b> All 37 spirits' special rules were written as separate files on top of one base slice. Of 67 rules, none needed rewriting the base except three (two spirits). Nineteen are partial: the core of the rule works, but some clause needed a feature Turn doesn't have.</p>
+<p>The additions only went in cleanly where the base exposed the right hook: a named view for each noun the rulebook uses, a summed relation for each quantity, its own episode for each verb, and a name for each choice. Where the base hadn't done that, the addition needed a base change or stayed partial.</p>
+</div>
+<p>The most common problems were not about individual rules:</p>
+<ul>
+<li><b>Simultaneity.</b> Rules that fire at the same moment cannot see each other's effects. The rulebook says “in any order you choose”. Turn's default is “all at once”.</li>
+<li><b>Optional replacements.</b> Turn exceptions always fire. Rules like “you may … instead” need the decision asked in an earlier step.</li>
+<li><b>No notion of an Action.</b> “Once per Action” and “at the same time” have nothing to key on.</li>
+<li><b>Silent timing mistakes.</b> Several first attempts ran without errors but read state from the wrong moment.</li>
+</ul>
+<p>Each of these has a concrete language change proposed in <a href="#next">What to change</a>.</p>
+
+%%SCOREBOARD%%
+<p>Status means: <span class="chip s-works">works</span> the rule was added without touching existing rules, and a run showed it doing what the text says. <span class="chip s-works-with-hook">needs base hook</span> it works, but only after changing an existing rule in <code>core.t</code> (the diff is shown). <span class="chip s-partial">partial</span> the core of the rule works and some clause is approximated or left out. <span class="chip s-not-expressible">not expressible</span> the rule could not be written in Turn as it stands.</p>
+</section>
+
+<section id="primer">
+<h2>Reading Turn</h2>
+<p>Turn derives tuples that live on intervals of a partial order of moments. Episodes are tuples with a duration; a rule body reads left to right, matching tuples and asserting new ones, and by default the rest of the body runs <i>inside</i> what it matched. The full language is described in <code>discussions/turn-tutorial.md</code> (<a href="#ref-turn">source</a>). The code in this report uses an invented highlighting scheme that colors each sigil by what it does:</p>
+<div class="legend">
+  <div><code><span class="t-sl">~</span></code><span>launch an episode</span></div>
+  <div><code><span class="t-sl">~&gt;</span> <span class="t-sl">&gt;</span></code><span>launch / match, then continue after it</span></div>
+  <div><code><span class="t-sa">+</span></code><span>assert a fact (lasts to the end of time)</span></div>
+  <div><code><span class="t-sa">^</span></code><span>assert inside the enclosing episode</span></div>
+  <div><code><span class="t-sq">?</span> <span class="t-sq">!</span></code><span>ask a choice / constrain its options</span></div>
+  <div><code><span class="t-ex">{ =&gt; }</span></code><span>exception: replace a tuple</span></div>
+  <div><code><span class="t-op">/</span></code><span>acc rule: body / computed row</span></div>
+  <div><code><span class="t-d">#acc</span> <span class="t-ag">@sum</span></code><span>declaration, aggregation</span></div>
+  <div><code><span class="t-v">Land</span></code><span>variable</span></div>
+  <div><code><span class="t-r">ravage</span></code><span>relation at the head of an atom</span></div>
+  <div><code><span class="t-b">is</span> <span class="t-b">ge</span></code><span>built-in</span></div>
+  <div><code><span class="t-c">-- p9</span></code><span>comment (usually the rulebook sentence)</span></div>
+</div>
+<p>Every experiment is a set of <code>.t</code> files concatenated and run headless: <code>run.sh core.t spirit-ocean.t</code>. Player decisions are written as <code>?[rng]</code> choices with a fixed seed, so a run is reproducible, and several seeds were tried where the choice mattered. All files are in <code>si/</code> and reproduced in the <a href="#appendix">appendix</a>.</p>
+</section>
+
+<section id="base">
+<h2>The base rules</h2>
+<p>The base slice (<a href="#src-core-t"><code>core.t</code></a>) covers the Invader Phase (Ravage, Build, Explore), Blight with Presence destruction and cascades, Fear from destroyed Towns and Cities, Defend, the five-phase turn, Elements, Power speed, Push, adding Presence and Sacred Sites. Each rule carries the rulebook sentence it implements. Most read close to the text. Build is two rules, one per sentence:</p>
+{{grep core.t 9 -- p10 Build: "Wherever there are Invaders}}
+<p>Explore's “you only add one Explorer” falls out of a boolean acc relation, which holds each land at most once:</p>
+{{grep core.t 13 -- p10 Explore: "Add an Explorer}}
+<p>Blight's two consequences are two rules. The cascade reads <code>has-blight</code> at the start of <code>add-blight</code>, which is exactly “if the land <i>already</i> had Blight”:</p>
+{{grep core.t 19 -- p15 "After Setup, whenever you add Blight}}
+<h3 id="base-simultaneity">Simultaneity was the first real bug</h3>
+<p>The natural reading of “the Invaders Ravage in each land of the shown type” launches one <code>ravage</code> episode per land. Turn makes those siblings: neither can see the other's effects. In a run, l2's Blight cascaded into l1 but could not see the Blight l1's own Ravage had just added, so l1 ended with two Blight and no second cascade, which no real play order allows. The rulebook says Powers resolve “in whatever order the players want”; Ravage needs the same. The fix is a loop that picks the next land:</p>
+{{grep core.t 12 -- (sequential variant}}
+<p>It works, but it is boilerplate for a very common rulebook idiom (“for each X, in an order you choose”), and the <code>+ravaged</code> marker would leak into the next turn unless keyed by turn.</p>
+</section>
+
+<section id="extensions">
+<h2>First extensions</h2>
+<p>Seven rules from expansions, Fear Cards, Power Cards and an Adversary were each written as a separate file and concatenated onto the unchanged base. Six worked; all six also ran together.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>How</th></tr></thead>
+<tbody>
+<tr><td><a href="#src-ext-disease-t">Disease</a></td><td>Branch &amp; Claw</td><td><span class="chip s-works">works</span></td><td>one exception: <code>{ build L =&gt; ~remove-one L disease }</code></td></tr>
+<tr><td><a href="#src-ext-wilds-t">Wilds</a></td><td>Branch &amp; Claw</td><td><span class="chip s-works">works</span></td><td>one exception on <code>explore</code></td></tr>
+<tr><td><a href="#src-ext-strife-t">Strife</a></td><td>Branch &amp; Claw</td><td><span class="chip s-works">works</span></td><td>exception on one Invader's damage contribution</td></tr>
+<tr><td><a href="#src-ext-sweden-t">Heavy Mining</a></td><td>Sweden, level 1</td><td><span class="chip s-works">works</span></td><td>trigger, plus two exceptions for “does not destroy Presence or cause cascades”</td></tr>
+<tr><td><a href="#src-ext-wow-t">Words of Warning</a></td><td>Thunderspeaker card</td><td><span class="chip s-works">works</span></td><td>exception reroutes fight-back to a start-of-Ravage snapshot</td></tr>
+<tr><td><a href="#src-ext-avoid-t">Avoid the Dahan</a></td><td>Fear Card, level 1</td><td><span class="chip s-works">works</span></td><td>one exception on <code>explore</code></td></tr>
+<tr><td><a href="#src-ext-badlands-t">Badlands</a></td><td>Jagged Earth</td><td><span class="chip s-not-expressible">loops</span></td><td>the boosted damage is caught again by the same exception</td></tr>
+</tbody></table></div>
+<p>“When Invaders would X, instead Y” is exactly what exceptions are for. Disease is the rulebook sentence and one line:</p>
+{{grep ext-disease.t 7 -- Branch & Claw, Disease}}
+<p>Heavy Mining carries its own exception to the Blight rules, and the Turn version has the same shape as the English:</p>
+{{grep ext-sweden.t 8 -- Sweden, level 1}}
+<p>Words of Warning changes the <i>order</i> of Ravage (“Dahan deal damage simultaneously with Invaders”). It still went in as an addition, because the base names the fight-back step as its own episode that an exception can reroute:</p>
+{{grep ext-wow.t 10 -- Words of Warning}}
+<p id="badlands-loop">Badlands failed. “+1 Damage per Badlands” re-emits <code>damage-dahan</code> with a bigger number, and the exception catches its own output forever:</p>
+{{grep ext-badlands.t 6 -- JE p7-8, Badlands}}
+<p>The fix is in the base: write Damage to Dahan as summed contributions, so Badlands only adds one. Strife works for that reason: the base writes each Invader's damage as its own tuple and sums them. Extensibility depends on the base exposing each quantity the rulebook names.</p>
+<p>The game itself is not purely additive either. Jagged Earth's <i>Ravage Timing</i> box says “This a change from existing rules” and reorders Ravage (<a href="#ref-je-rulebook">JE p. 7</a>).</p>
+</section>
+
+<section id="patterns">
+<h2>Extension patterns</h2>
+<p>Across the extensions and all the spirits, an addition hooks into the base in a small number of ways. Each one only works where the base reads the thing through a relation the addition can extend.</p>
+
+<div class="patterns">
+<div class="pattern"><h4>Trigger <span class="chip s-works">21 rules</span></h4>
+<p>“After X, do Y.” A rule matches the base episode for X and launches Y. Needs X to be its own episode, carrying who caused it.</p>
+{{rulecode vengeance|LINGERING PESTILENCE|3}}</div>
+<div class="pattern"><h4>Add rows <span class="chip s-works">16 rules</span></h4>
+<p>Widen a set or add to a total. Needs the base to read through a relation, never inline.</p>
+{{rulecode earth|EARTH'S VITALITY|1}}
+{{rulecode teeth|TERRITORIAL AGGRESSION|2}}</div>
+<div class="pattern"><h4>Exception <span class="chip s-works">13 rules</span></h4>
+<p>“When X would happen, instead Y.” Needs X to be a tuple emitted inside a context the rule can name.</p>
+{{rulecode mud|OFFER NO FIRM FOUNDATIONS|4}}</div>
+<div class="pattern"><h4>Counts as <span class="chip s-works">6 rules</span></h4>
+<p>“Your Presence in Wetlands counts as a Sacred Site.” Rows added to a view the base reads everything through.</p>
+{{rulecode river|RIVER'S DOMAIN|2}}</div>
+<div class="pattern"><h4>New state <span class="chip s-works">5 rules</span></h4>
+<p>A new resource or location. Time on Fractured Days' panel is Presence at a location, counted by a sum.</p>
+{{rulecode fractured|FRAGMENTS OF SHATTERED TIME|3}}</div>
+<div class="pattern"><h4>Narrow a choice <span class="chip s-works">4 rules</span></h4>
+<p>An extra <code>!</code> on a named choice. Constraints are conjunctive, so they can only remove options.</p>
+{{rulecode serpent|DEEP SLUMBER|-1}}</div>
+</div>
+<p>Two shapes have a second, less obvious requirement. A <b>scoped exception</b> (Heavy Mining, Stone's Bedrock, Towering Roots' Vitality) works only if the base runs the consequences of an event inside that event's episode, as <code>add-blight</code> does with its Presence destruction and cascade. A <b>late override</b> (Swiftness of Lightning) works only if the quantity is a latest-value-wins relation (<code>@last</code>), so “as if it were Fast” is just a later value.</p>
+
+</section>
+
+<section id="spirits">
+<h2>All spirits</h2>
+
+<p>Each spirit below quotes its special rules as printed (icons shown as labels), gives the status and mechanism, the key Turn lines with a link to their place in the source, what the run showed, and notes. Chips in the table jump to the rule.</p>
+<p>The forks that wrote the spirits also had to add rulebook machinery that the base slice lacks: Energy, Damage and Health, Range and targeting, Growth, Events, presence tracks, and Time Passes. That work is marked <code>BASE-EXT</code> in each file. It is additive, but it was written several times under different names, so the spirit files run one at a time against <code>core.t</code> and do not yet all load together. Merging those into one shared library is the obvious next step.</p>
+
+%%OVERVIEW%%
+%%SPIRITS%%
+</section>
+
+<section id="issues">
+<h2>Language findings</h2>
+
+<p>These are the problems that came up across many spirits, ranked by how often they decided a rule's status.</p>
+
+<h3 id="issue-1">1. Simultaneous firings can't see each other</h3>
+<p>Rules that fire at the same moment run as siblings, and none sees the others' effects. This produced wrong results in at least six places:</p>
+<ul>
+<li>Two Ravages missed a Blight cascade (<a href="#base">base rules</a>).</li>
+<li>Two Dahan moved by one Push both took the same Presence (<a href="#sp-thunderspeaker">Thunderspeaker</a>, <a href="#sp-fangs">Sharp Fangs</a>).</li>
+<li>Per-Dahan firings destroyed the same Presence twice (<a href="#thunderspeaker-sworn-to-victory">Sworn to Victory</a>).</li>
+<li>Two Blight additions in one land destroyed the same Presence (<a href="#sp-finder">Finder</a>).</li>
+<li>Damage to the land and to Dahan ran in parallel, so “Dahan present” couldn't see the Ravage's kills (<a href="#sp-hearth">Hearth-Vigil</a>).</li>
+</ul>
+<p>Every fix was the same: a hand-written loop that picks one item, acts on it, then continues.</p>
+
+<h3 id="issue-2">2. There is no Action</h3>
+<p>The rulebook counts and groups by Action: “max. once per Action” (<a href="#sp-memory">Shifting Memory</a>), “if you add multiple Presence at the same time, only once” (<a href="#sp-wildfire">Heart of the Wildfire</a>), “your Actions” (<a href="#sp-voice">Wandering Voice</a>), and “Spirit effects” (<a href="#wildfire-destructive-nature">Destructive Nature</a>).</p>
+<p>Turn has no Action to key on, and episode ids can't be bound. Where it worked, it was because the effect ran inside a named episode (<code>use-power S P</code>), which also gave “who did it” for free (<a href="#finder-responsibilities-to-the-dead">Responsibilities to the Dead</a>).</p>
+
+<h3 id="issue-3">3. Exceptions are always on</h3>
+<p>“You may … instead” cannot be one exception. Once installed it always replaces, and declining by re-emitting the original gets intercepted again and loops. Every optional rule asks first, in an earlier step, and installs the exception only on yes (<a href="#green-choke-the-land-with-green">Choke the Land</a>, <a href="#dances-begin-a-dance-of-decades">Dance of Decades</a>).</p>
+<p>A related problem: an exception can't be partly undone. <a href="#vengeance-the-terror-of-a-slowly-unfolding-plague">Vengeance</a> lets a Build happen that Disease already consumed, and had to restate the base Build rules to do it.</p>
+
+<h3 id="issue-4">4. Exceptions catch their own output</h3>
+<p>A replacement that matches its own pattern loops (Badlands). One that re-emits the same relation with arguments outside the pattern is fine (<a href="#mud-offer-no-firm-foundations">Fathomless Mud</a>). Several rules avoided re-triggering by using a lower-level verb, for example adding the Strife piece directly instead of “add Strife”. That works, but any other “when Strife is added” rule then can't see it.</p>
+
+<h3 id="issue-5">5. Silent timing mistakes</h3>
+<p>The most expensive category, because nothing reports an error:</p>
+<ul>
+<li>The rest of a rule runs inside the episode it matched, so it can't see facts that start when that episode ends (<a href="#sp-lightning">Lightning</a>).</li>
+<li><code>P, &gt;q</code> matches every earlier <code>q</code>, including other turns' and other offers' (<a href="#sp-dances">Dances</a>, <a href="#sp-behemoth">Behemoth</a>, <a href="#sp-keeper">Keeper</a>).</li>
+<li>Top-level facts never join episodes inside the game (<a href="#sp-ocean">Ocean</a>).</li>
+<li>A fact asserted from a rule anchored on another forever-fact floats where later reads can't see it (<a href="#sp-roots">Towering Roots</a>, <a href="#sp-wounded">Wounded Waters</a>).</li>
+<li>A <code>^</code> inside a short sub-episode is gone before its parent reads it (<a href="#sp-memory">Shifting Memory</a>).</li>
+<li>A choice with no options quietly resolves to nothing (<a href="#sp-breath">Breath of Darkness</a>, <a href="#sp-green">Green</a>).</li>
+<li>A head variable not bound in the body becomes a fresh object (<a href="#sp-keeper">Keeper</a>).</li>
+</ul>
+
+<h3 id="issue-6">6. Nothing can stop being true</h3>
+<p>Tuples only grow, and turn-scoped facts need a turn key that episode ids can't supply. So these could not be expressed directly:</p>
+<ul>
+<li>“Until changed” (<a href="#finder-open-the-ways">Open the Ways</a>).</li>
+<li>Removing a card from a set (<a href="#fractured-days-that-never-were">Days That Never Were</a>).</li>
+<li>“While the Incarna is here” as a standing guard (<a href="#roots-heart-tree-guards-the-land">Heart-Tree</a>).</li>
+</ul>
+<p>Things that change were modeled as pieces at locations, which works well. Healing had to become an explicit event so it could be intercepted (<a href="#shroud-slow-and-silent-death">Slow and Silent Death</a>).</p>
+
+<h3 id="issue-7">7. No negation, little arithmetic</h3>
+<p>Leaving things out by default is often free. The Endless Dark is “not a land” just by having no <code>land</code> row (<a href="#sp-breath">Breath of Darkness</a>). But other phrases needed workarounds:</p>
+<ul>
+<li>“Inland”, “without Fire” and “not a Sacred Site” needed zero rows or extra board data.</li>
+<li>Removing an explore source was impossible (<a href="#voice-a-clarion-voice-given-form">Isolate</a>).</li>
+<li>Clamps like “min. 1 Health” aren't additive (<a href="#heat-blistering-heat">Blistering Heat</a>).</li>
+<li>Symbol inequality, addition, subtraction and halving were all hand-written <code>#js-def</code>s.</li>
+</ul>
+
+<h3 id="issue-8">8. Bugs found in the base slice</h3>
+<p>The forks found bugs in <code>core.t</code> itself:</p>
+<ul>
+<li>Adding Presence moves every Presence in the supply, not one.</li>
+<li>There is no Blight supply or loss condition, so cascades between two blighted lands can recurse until the step limit.</li>
+<li>Blight's Presence destruction and cascade run as siblings.</li>
+<li>The “ravaged” marker never resets, so later turns never Ravage.</li>
+</ul>
+<p>None of these were fixed during the study, so every result was measured against the same base.</p>
+
+<h3>Every issue reported, by spirit</h3>
+%%ISSUES%%
+</section>
+
+<section id="next">
+<h2>What to change</h2>
+
+<h3>In the language</h3>
+<ol>
+<li><b>Sequential iteration.</b> A construct for “for each X (in an order the player chooses), do …”, written once instead of as a hand-rolled pick-next loop. The same construct would fix multi-piece moves and per-item triggers.
+  <span class="why">Why: <a href="#issue-1">§1 simultaneity</a> · <a href="#base-simultaneity">Ravage cascade</a> · <a href="#sp-thunderspeaker">Thunderspeaker</a> · <a href="#sp-fangs">Sharp Fangs</a> · <a href="#thunderspeaker-sworn-to-victory">Sworn to Victory</a> · <a href="#sp-finder">Finder</a> · <a href="#sp-hearth">Hearth-Vigil</a></span></li>
+<li><b>Optional exceptions.</b> <code>{? p … =&gt; e}</code>: ask a choice when the tuple is intercepted, and let a declined tuple pass through without being intercepted again.
+  <span class="why">Why: <a href="#issue-3">§3 always on</a> · <a href="#green-choke-the-land-with-green">Choke the Land</a> · <a href="#dances-begin-a-dance-of-decades">Dance of Decades</a> · <a href="#vengeance-the-terror-of-a-slowly-unfolding-plague">Vengeance</a></span></li>
+<li><b>Re-entrancy guard.</b> A replacement is never intercepted by the exception that produced it, which would fix Badlands-style boosts.
+  <span class="why">Why: <a href="#issue-4">§4 own output</a> · <a href="#badlands-loop">Badlands</a> · <a href="#mud-offer-no-firm-foundations">Fathomless Mud</a></span></li>
+<li><b>Actions as first-class.</b> Bindable episode ids (or a built-in “current action root”), so “once per Action”, “at the same time” and “your Actions” have something to key on.
+  <span class="why">Why: <a href="#issue-2">§2 no Action</a> · <a href="#sp-memory">Shifting Memory</a> · <a href="#sp-wildfire">Wildfire</a> · <a href="#sp-voice">Wandering Voice</a> · <a href="#wildfire-destructive-nature">Destructive Nature</a> · <a href="#finder-responsibilities-to-the-dead">Responsibilities to the Dead</a></span></li>
+<li><b>Lints for the silent traps.</b> Warn on:
+  <ul>
+  <li>a rule that matches top-level facts;</li>
+  <li><code>&gt;p</code> where nothing bounds which <code>p</code>;</li>
+  <li>a choice whose options are always empty;</li>
+  <li>an unbound head variable;</li>
+  <li>a read inside an episode that only becomes visible after it ends.</li>
+  </ul>
+  <span class="why">Why: <a href="#issue-5">§5 timing</a> · <a href="#sp-lightning">Lightning</a> · <a href="#sp-dances">Dances</a> · <a href="#sp-behemoth">Behemoth</a> · <a href="#sp-keeper">Keeper</a> · <a href="#sp-ocean">Ocean</a> · <a href="#sp-roots">Towering Roots</a> · <a href="#sp-breath">Breath of Darkness</a> · <a href="#sp-green">Green</a></span></li>
+<li><b>Interval-valued views.</b> Turn a run of equal acc values (“the Incarna is in L”) into a tuple with an interval, usable as an exception context.
+  <span class="why">Why: <a href="#issue-6">§6 nothing stops</a> · <a href="#roots-heart-tree-guards-the-land">Heart-Tree</a> · <a href="#finder-open-the-ways">Open the Ways</a></span></li>
+<li><b>Small built-ins.</b> Symbol <code>neq</code>, integer arithmetic, and stratified negation in acc bodies.
+  <span class="why">Why: <a href="#issue-7">§7 negation, arithmetic</a> · <a href="#voice-a-clarion-voice-given-form">Isolate</a> · <a href="#heat-blistering-heat">Blistering Heat</a> · <a href="#sp-breath">Breath of Darkness</a></span></li>
+</ol>
+<h3>In the way the rules are written</h3>
+<ul>
+<li>Every noun the rulebook uses gets a named view, and nothing reads it inline. Examples: <code>land-for</code>, <code>terrain-for</code>, <code>sacred-site</code>, <code>beasts-at</code>, <code>speed</code>, <code>health</code>, <code>push-dest</code>, <code>presence-source</code>.</li>
+<li>Every quantity is a sum of contributions, each tagged with its cause.</li>
+<li>Every verb is its own episode and carries its actor: <code>move</code>, <code>add-blight</code>, <code>destroy</code>, <code>heal</code>, <code>build</code>, <code>add-strife</code>, <code>use-power</code>, <code>growth</code>.</li>
+<li>Every choice is named, so other rules can constrain it.</li>
+<li>Steps the rulebook orders are ordered with <code>~&gt;</code>; nothing that can interact is left as siblings.</li>
+<li>One shared library for the rulebook machinery the forks each rewrote (Energy, Damage and Health, Range, Growth, Events, Time Passes, turn numbers), so all 37 spirit files can load together.</li>
+</ul>
+
+</section>
+
+<section id="appendix">
+<h2>Appendix</h2>
+<h3>Sources</h3>
+%%SOURCES%%
+<h3>Source files</h3>
+<p>Every file used in the study, with line anchors. Code excerpts above link to the line they came from.</p>
+%%FILEINDEX%%
+%%APPENDIX%%
+</section>
+</div>

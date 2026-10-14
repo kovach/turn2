@@ -1,0 +1,25 @@
+{
+ "spirit": "Relentless Gaze of the Sun",
+ "slug": "gaze",
+ "wiki": "Relentless_Gaze_of_the_Sun",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-gaze.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "RELENTLESS PUNISHMENT",
+   "text": "After using a Power Card, if you had at least 3 [Presence] in the origin land, you may Repeat it any number of times on the same target land(s) (ignoring origin, Range, and target requirements) by paying both: the Energy cost of the Power, and 1 Energy per previous use of the Power this turn each time you Repeat the Power. (You may Repeat each Power Card multiple times, but its 1st Repeat costs 1 extra, its 2nd Repeat costs 2 extra, etc. Check if the origin has at least 3 [Presence] when you target it the first time.)",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "turn, >use-power S P, spirit:special S relentless-punishment, power:card P\n  power:origin S P O, presence-count S O N, ge N 3\n  ~relentless S P 1\n-- \"... you may Repeat it any number of times ... by paying both the Energy\n--  cost of the Power, and 1 Energy per previous use of the Power this turn\"\nrelentless S P U, power:cost P C, plus C U Cost, energy S E, ge E Cost\n  ?[rng] R\n  !(may R)\n  ~relentless-ask S P U Cost R\nturn, >relentless-ask S P U Cost R, is R yes\n  +energy-spend S Cost\n  ~>repeat-power S P\n  plus U 1 U1\n  ~relentless S P U1\n-- \"on the same target land(s) (ignoring origin, Range, and target requirements)\"\nrepeat-power S P, power:target S P T, ^resolved-again S P T",
+   "evidence": "6 Energy, cost-1 card, 3 Presence at origin: seeds 2/3: relentless-ask gaze scorch 1 2 -> energy-spend gaze 2 -> resolved-again gaze scorch l2 -> relentless-ask gaze scorch 2 3 -> energy-spend gaze 3 -> resolved-again ...; gaze-energy 1 (next Repeat would cost 4, not offered). Seeds 7/1 decline the 2nd Repeat (gaze-energy 4).",
+   "notes": "Pure trigger after `use-power`, plus a self-recursive Repeat loop whose argument U counts previous uses. The origin check happens once, at the first use, matching the parenthetical. Approximations: '1 Energy per previous use of the Power this turn' is tracked by the loop counter, so uses from other Repeat effects aren't counted; origin/target are scenario facts (no targeting/Range model); the trigger is written against `turn, >use-power` rather than the current phase, so Repeats are not confined to the phase they started in."
+  }
+ ],
+ "base_ext": "Energy as an @sum acc of energy-gain / energy-spend facts (negative contributions via a `neg` #js-def), `plus` #js-def, power:cost / power:card / power:origin / power:target facts, a yes/no `may` domain.",
+ "core_diff": "",
+ "language_issues": [
+  "Arithmetic on costs (cost + previous uses) and spending needs #js-def plus/neg; Energy is an @sum with negative contributions.",
+  "No per-phase 'after' anchor: `turn, >use-power ...` continues until end of turn, so to confine Repeats to the current phase you'd need one rule per phase (no variable over episode names)."
+ ]
+}

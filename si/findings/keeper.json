@@ -1,0 +1,36 @@
+{
+ "spirit": "Keeper of the Forbidden Wilds",
+ "slug": "keeper",
+ "wiki": "Keeper_of_the_Forbidden_Wilds",
+ "expansion": "Branch & Claw",
+ "file": "spirit-keeper.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "FORBIDDEN GROUND",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "move P L, presence-of S P, spirit:special S forbidden-ground, land L, presence-count S L 1\n  +creates-sacred-site S L P\nspirit-phase, creates-sacred-site S L P, >move P L, ^sacred-site-created S L P, ~forbidden-ground S L\nfast-phase, creates-sacred-site S L P, >move P L, ^sacred-site-created S L P, ~forbidden-ground S L\ninvader-phase, creates-sacred-site S L P, >move P L, ^sacred-site-created S L P, ~forbidden-ground S L\nslow-phase, creates-sacred-site S L P, >move P L, ^sacred-site-created S L P, ~forbidden-ground S L\nforbidden-ground S L, at D L, piece:kind D dahan, ~push S D L",
+   "evidence": "sacred-site-created keeper l3 k2; forbidden-ground keeper l3 (once); push keeper *127 l3 -> l2",
+   "notes": "'After you create a Sacred Site' is a transition: the move that finds presence-count S L = 1 at its start creates it. The trigger needed a generic per-phase window (BASE-EXT `^phase`) plus a phase-scoped tag so it fires exactly once and is ordered before the next phase. Port to fresh-left `^`: the generic `^phase` window starts at its own moment inside each phase, incomparable with the move, so the trigger never fired; it is now one rule per phase, anchored on the phase episode and continuing after the move (`>move P L`).",
+   "text": "After you create a [Sacred Site] , Push all [Dahan] from that land."
+  },
+  {
+   "name": "FORBIDDEN GROUND (Dahan Events)",
+   "text": "Dahan Events never move [Dahan] to your [Sacred Site] , but Powers can do so.",
+   "status": "works",
+   "mechanism": "add-constraint (narrow)",
+   "turn": "push event D From, piece:kind D dahan, spirit:special K forbidden-ground,\n  (push-to D C), !(not-sacred-site K C)",
+   "evidence": "Event pushes 3 Dahan out of l2 (adjacent l1, l3=Sacred Site): all 3 go to l1 in every seed",
+   "notes": "Narrows only the Event's push choice (named by push-to), so Powers are unaffected. Needed a 'not a Sacred Site' relation: done by adding a 0 row to presence-count (additive) and `lt N 2`, since acc has no negation. Events are modeled as the pusher `event`."
+  }
+ ],
+ "base_ext": "presence-count 0 rows; not-sacred-site; Event as a push actor; the trigger written once per phase (spirit/fast/invader/slow-phase).",
+ "core_diff": "",
+ "language_issues": [
+  "`turn, >move P L` floats: it is after the move but unordered relative to the following phases, so effects can be invisible to the next phase; anchor triggers on a per-phase window instead.",
+  "`phase, >move P L` alone fires once per later phase (>p only requires p to end before the window ends); restricting to the phase the move happened in needed a phase-scoped tag: `phase, (move P L), ..., ^tag` then `phase, tag, >move P L`.",
+  "A head variable that is not bound in the body (I dropped S from the second rule) silently becomes a fresh object instead of an error (`forbidden-ground *8671 l3`).",
+  "'Not a Sacred Site' needs a complement; with no acc negation it is `presence-count S L N, lt N 2` plus explicit 0 rows."
+ ]
+}

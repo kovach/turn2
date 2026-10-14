@@ -1,0 +1,35 @@
+{
+ "spirit": "Ember-Eyed Behemoth",
+ "slug": "behemoth",
+ "wiki": "Ember-Eyed_Behemoth",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-behemoth.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "THE BEHEMOTH RISES",
+   "text": "You have an Incarna ( [Ember-Eyed Behemoth] ). Once per turn, during the Spirit, [Fasticon] , or [Slowicon] phase, you may either: Push [Ember-Eyed Behemoth] ; or Add or Move [Ember-Eyed Behemoth] to any of your [Sacred Site] on the island.",
+   "status": "works",
+   "mechanism": "new state",
+   "turn": "#acc rises-used : spirit @sum\nspirit:special S behemoth-rises / rises-used S 0\nrises-use S A / rises-used S 1\n#acc rises-limit : spirit @sum\nspirit:special S behemoth-rises / rises-limit S 1\n\n-- \"during the Spirit, Fast, or Slow phase, you may\"\nspirit-phase, spirit:special S behemoth-rises, ~rises-offer S\nfast-phase, spirit:special S behemoth-rises, ~rises-offer S\nslow-phase, spirit:special S behemoth-rises, ~rises-offer S\n\n-- \"either: Push [Incarna]; or Add or Move [Incarna] to any of your Sacred Sites\"\n#acc rises-option : spirit e\nrises-offer S / rises-option S decline\nrises-offer S, incarna-of S I, at I L, land L / rises-option S push\nrises-offer S, sacred-site S L / rises-option S (to L)\nrises-offer S, rises-used S U, rises-limit S Lim, lt U Lim\n  ?[rng] A\n  !(rises-option S A)\n  ~rises-choice S A\n-- a use is recorded inside the choice episode, so later reads see it\n-- (+ to top: in a multi-turn game this would need a turn key); after a use\n-- the same phase may offer again (only matters with Strides). The re-offer\n-- is nested in the choice: `rises-offer S, >rises-choice S C, ...` would also\n-- match choices of earlier offers (>p needs no overlap) and loop.\nrises-choice S C, is C A, neq A decline\n  +rises-use S A\n  ~>rises-act S A\n  ~rises-offer S\nrises-act S push, incarna-of S I, at I L, ~push S I L\nrises-act S (to L), incarna-of S I, ~move I L",
+   "evidence": "8 seeds: 0-2 uses per turn (e.g. seed 1: rises-report l3 then push, move eeb l3 then l2); options are decline / push / (to <Sacred Site>).",
+   "notes": "'Once per turn' = a use counter (@sum with a 0 row for 'unused') compared with an allowance (@sum, so Strides can add 1). The offer happens in each of the three phases with a decline option. Uses are recorded with + inside the choice episode; in a multi-turn game they would need a turn key (no 'until end of turn' fact that is also visible to later reads without floating)."
+  },
+  {
+   "name": "UNRELENTING STRIDES",
+   "text": "On any turn that you don't use Innate Powers, you may use The Behemoth Rises an additional time. (When you use an Innate Power, cover this Special Rule with a Reminder Marker; when you use this Special Rule, cover your Innate Power.)",
+   "status": "works",
+   "mechanism": "add-rows (widen) + exception (instead)",
+   "turn": "#acc innate-used : spirit @sum\nspirit S / innate-used S 0\nused-innate S P / innate-used S 1\nuse-power S P, power:innate P, +used-innate S P\nspirit:special S unrelenting, innate-used S 0 / rises-limit S 1\n-- \"when you use this Special Rule, cover your Innate Power\": once the extra\n-- use is taken, Innate Powers are not used.\nslow-phase, spirit:special S unrelenting, rises-used S U, ge U 2, power:innate P,\n  { use-power S P => }\nfast-phase, spirit:special S unrelenting, rises-used S U, ge U 2, power:innate P,\n  { use-power S P => }",
+   "evidence": "Seeds 1,3,5,6: two uses, Innate not used; seeds 2,4,8: one use, use-power behemoth smash; seed 7: no use, Innate used. Never two uses plus the Innate.",
+   "notes": "The physical 'cover' markers are a mutual exclusion; Turn expresses it as a conditional extra allowance row (no Innate used yet) plus an exception that drops the Innate's use-power once 2 uses happened. Concurrency caveat: a Slow-phase offer and the Slow Innate start at the same moment, so both read 'unused'."
+  }
+ ],
+ "base_ext": "Innate Powers modeled as played powers with power:innate; Incarna as a presence-of row and incarna-of fact; push reused from core.",
+ "core_diff": "",
+ "language_issues": [
+  "`P, >q ...` matches any earlier q, not just ones inside P (>q needs no overlap): a re-offer rule `rises-offer S, >rises-choice S C, ~rises-offer S` matched choices from previous offers and looped until gas; nesting the re-offer inside the choice episode fixed it.",
+  "Choice values that are compound terms (to l3) render as opaque refs (*6334) in output; reports have to destructure them.",
+  "'Once per turn' needs either negation or a counter; @sum with an explicit 0 row is the idiom (bool acc relations have no absent row to match)."
+ ]
+}

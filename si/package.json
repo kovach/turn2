@@ -1,0 +1,10 @@
+{
+  "name": "si",
+  "private": true,
+  "description": "Spirit Island in Turn: formalization, FAQ tests, game GUI files. Uses the engine in ../ts.",
+  "type": "module",
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "turn": "file:../ts"
+  }
+}

@@ -1,0 +1,34 @@
+{
+ "spirit": "Stone's Unyielding Defiance",
+ "slug": "stone",
+ "wiki": "Stone%27s_Unyielding_Defiance",
+ "expansion": "Jagged Earth",
+ "file": "spirit-stone.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "BESTOW THE ENDURANCE OF BEDROCK",
+   "text": "When [Blight] is added to one of your lands, unless the [Blight] then outnumbers your [Presence] , it does not cascade or destroy [Presence] (yours or others').",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "add-blight L, spirit:special S bedrock, presence-count S L N\n  land:count L blight B, plus B 1 B1, le B1 N\n  { destroy-presence _ => }\n  { cascade _ => }",
+   "evidence": "Ravage in l2 (1 Blight + 1 added vs 2 Stone Presence): bedrock-check l2 2 1, then no destroy-presence and no cascade from that add-blight, on seeds 7/1/2. A later Power-added 3rd Blight (outnumbers) destroys Presence and cascades normally.",
+   "notes": "Direct fit: two empty-RHS exceptions scoped to the add-blight episode, gated by values read at its start (Blight before + 1 vs Presence). Depends on core exposing destroy-presence and cascade as separate episodes inside add-blight. 'Then outnumbers' is computed as B+1 (arithmetic via #js-def plus)."
+  },
+  {
+   "name": "DEEP LAYERS EXPOSED TO THE SURFACE",
+   "text": "The first time you uncover each of your \"+1 Card Play\" [Presence] spaces, gain a Minor Power. (They're marked with [Minorsymbol] as a reminder.)",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "gain-power S D, ^gained-power S D\n#acc deep-layers-done : space\nuncovered Sp / deep-layers-done Sp\nmove P To, at P Sp, space:owner Sp S, space:bonus Sp card-play\n  spirit:special S deep-layers, not deep-layers-done Sp\n  +uncovered Sp\n  ~gain-power S minor",
+   "evidence": "s3 moved off the card-play space, back on, off again: one deep-layers-done sp-card 1 and one gained-power stone minor.",
+   "notes": "'Uncover' = a move whose piece was on the space at the move's start (acc `at` read at the episode start gives the old location). 'The first time' needs a persistent #agg flag per space; with several turns an #agg flag is the right scope here (once per game). Presence-track spaces had to be modeled as locations (BASE-EXT). Port to fresh-left ^ / #acc (2026-10-12): the #agg bool \"first time\" flag became a boolean acc relation over an `uncovered` event, read with `not`; same outcome."
+  }
+ ],
+ "base_ext": "Presence-track spaces as locations (space:owner, space:bonus); gain-power recorded only (no deck).",
+ "core_diff": "",
+ "language_issues": [
+  "Core runs Blight's two consequences (destroy Presence, cascade) as sibling episodes, so a cascade that returns to the same land sees Presence that its sibling already destroyed: p1 was 'destroyed' 5 times in one run; core should sequence them (`~>destroy-presence\u2026; ~cascade`).",
+  "Core has no Blight supply, so once two adjacent lands are blighted the cascade can ping-pong indefinitely (bounded only by rng luck); real game ends by running out of Blight."
+ ]
+}

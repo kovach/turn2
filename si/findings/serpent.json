@@ -1,0 +1,25 @@
+{
+ "spirit": "Serpent Slumbering Beneath the Island",
+ "slug": "serpent",
+ "wiki": "Serpent_Slumbering_Beneath_the_Island",
+ "expansion": "Promo Pack 1",
+ "file": "spirit-serpent.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "DEEP SLUMBER",
+   "status": "works",
+   "mechanism": "add-constraint (narrow)",
+   "turn": "  +slumber-track 0 5, +slumber-track 1 7, +slumber-track 2 8, +slumber-track 3 10\n  +slumber-track 4 11, +slumber-track 5 12, +slumber-track 6 13\n#acc absorb-uses : spirit @sum\nspirit:special S deep-slumber / absorb-uses S 0\nabsorbed S U / absorb-uses S 1\n#acc presence-limit : spirit @sum\nabsorb-uses S A, slumber-track A M / presence-limit S M\n#acc on-island : spirit @sum\npresence-of S P, at P L, land L / on-island S 1\n#acc under-limit : spirit\non-island S N, presence-limit S M, lt N M / under-limit S\nadd-presence S, spirit:special S deep-slumber, (presence-choice S C), !(presence-dest S C, under-limit S)",
+   "evidence": "Spirit Phase growth with 5 on island: no Presence placed; after Absorb Essence (limit 7) slow-phase growth places s6 (l1/l2); serpent-limit 7",
+   "notes": "The printed track is data (slumber-track index -> limit); the limit is an acc lookup by number of Absorb uses; the narrowing constraint makes the add-presence choice empty when at the limit, and an empty choice resolves to nothing. Purely additive.",
+   "text": "You start off limited to 5 [Presence] on the island. Raise this with your \"Absorb Essence\" Power Card. Each use covers the lowest revealed number; your [Presence] limit is the lowest uncovered number. 5 7 8 10 11 12 13"
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "A constraint that does not depend on the chosen value (under-limit S) still has to be written inside a `!(...)` that mentions the choice variable (`!(presence-dest S C, under-limit S)`).",
+  "core's presence-choice moves every Presence in the supply (`presence-of S P, at P supply` is not a choice), so the scenario keeps one in supply; a real 'add a Presence from your track' needs its own choice."
+ ]
+}

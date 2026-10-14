@@ -1,0 +1,25 @@
+{
+ "spirit": "Rising Heat of Stone and Sand",
+ "slug": "heat",
+ "wiki": "Rising_Heat_of_Stone_and_Sand",
+ "expansion": "Horizons",
+ "file": "spirit-heat.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "BLISTERING HEAT",
+   "text": "At your [Sacred Site] , Invaders have -1 Health (min. 1).",
+   "status": "partial",
+   "mechanism": "add-rows (widen)",
+   "turn": "at P L, piece:kind P K, invader K, kind:health K H, gt H 1,\n  sacred-site S L, spirit:special S blistering-heat\n  / health P -1",
+   "evidence": "Fast '2 Damage' at Heat's Sacred Site with a Town and City: seeds 1-3 'assign *.. l3 2; assign-damage l3 0' destroying the City (Health 3-1=2); control without the rule: only the Town can be destroyed. Final health report shows the City back at 3 once the Sacred Site is gone.",
+   "notes": "Health is a @sum relation (bx-damage.t), so -1 is one added contribution. 'min. 1' is approximated by only applying -1 to Invaders whose printed Health is above 1; that is exact only while this is the sole Health modifier \u2014 a clamp over the sum is not additive and would need the base to expose effective-health = max(1, raw sum) as a second layer. Partial because the shared Damage model has no partial Damage carry-over."
+  }
+ ],
+ "base_ext": "bx-damage.t (shared with teeth): Invader Health as `#acc health : e @sum` from kind:health; a Power's Damage as `#acc power-damage : spirit power land @sum`; Damage assignment by repeated rng choice of an Invader whose Health fits the remaining Damage (no partial Damage). Run: run.sh core.t bx-damage.t spirit-heat.t",
+ "core_diff": "",
+ "language_issues": [
+  "Recursive episodes nest (assign-damage inside assign inside assign-damage), so an outer episode is still alive during the inner step and an acc relation keyed only by land (assignable L V) mixed rows from D=2 and D=1; fix: key the acc row by every argument of the episode (assignable L D V).",
+  "Clamping a summed quantity (min. 1) cannot be expressed as another @sum contribution; needs a separate post-aggregation layer in the base."
+ ]
+}

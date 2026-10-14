@@ -1,0 +1,34 @@
+{
+ "spirit": "A Spread of Rampant Green",
+ "slug": "green",
+ "wiki": "A_Spread_of_Rampant_Green",
+ "expansion": "Base",
+ "file": "spirit-green.t",
+ "core_variant": "core-green.t",
+ "rules": [
+  {
+   "name": "CHOKE THE LAND WITH GREEN",
+   "text": "Whenever Invaders would Ravage or Build in a land with your [Sacred Site] , you may prevent it by destroying one of your [Presence] in that land.",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "ravage-chosen C, is C L, spirit:special S choke-the-land, sacred-site S L\n  ?[rng] Y\n  !(yes-no Y)\n  ~choke-ask S L ravage Y\n-- ... and only a \"yes\" installs the exception. \"by destroying one of your\n-- Presence in that land\" is its replacement.\nravage-chosen C, is C L, (choke-ask S L ravage Y), is Y yes, { ravage L => ~choke L }\n-- \"... or Build\": same, asked at the start of the Build step\n-- (the base has no build-target view, so its condition is restated here)\nbuild-step, spirit:special S choke-the-land, sacred-site S L, has-invaders L,\n  invader-card:build C, card:terrain C T, land:terrain L T\n  ?[rng] Y\n  !(yes-no Y)\n  ~choke-ask S L build Y\nbuild-step, (choke-ask S L build Y), is Y yes, { build L => ~choke L }\n-- (the RHS may only use the intercepted tuple's variables, so the Spirit is\n--  looked up again)\nchoke L, spirit:special S choke-the-land\n  ?[rng] P\n  !(presence-of S P, at P L)\n  ~destroy-presence P",
+   "evidence": "seeds 3,6 answer yes: `_ravage_prime1 l2; choke l2; move g1 destroyed`, no `ravage l2`, l2 Blight stays 1; answer no: `ravage l2; damage-land l2 5`. Build: seed 1 yes on l2 -> `choke l2`, `build l1` still happens",
+   "notes": "An exception cannot be optional: once installed it always replaces, and a declined replacement cannot re-emit `ravage L` (it would be intercepted again and loop). So the 'may' is asked first (when the base chooses the land to Ravage -- ravage-chosen -- and at the start of the Build step), and only a 'yes' installs the exception. For Build the base has no build-target view, so its card/terrain/invaders condition is restated in the spirit file."
+  },
+  {
+   "name": "STEADY REGENERATION",
+   "text": "When adding [Presence] to the board via Growth, you may optionally use your destroyed [Presence] . If the island is Healthy, do so freely. If the island is Blighted, doing so costs 1 Energy per destroyed [Presence] you add.",
+   "status": "works-with-hook",
+   "mechanism": "add-rows (widen)",
+   "turn": "growth S, add-presence S, spirit:special S steady-regeneration,\n  presence-of S P, at P destroyed, island-state healthy\n  / presence-source S P\n-- \"If the island is Blighted, doing so costs 1 Energy per destroyed\n--  Presence you add.\"\ngrowth S, add-presence S, spirit:special S steady-regeneration,\n  presence-of S P, at P destroyed, island-state blighted, energy S E, ge E 1\n  / presence-source S P\ngrowth S, spirit:special S steady-regeneration, island-state blighted,\n  placing S C X, is C P, at P destroyed, +energy-change S -1",
+   "evidence": "seed 5: `move g3 l3` -- the destroyed Presence g3 was added by Growth; other seeds chose g4 from the supply",
+   "notes": "core.t hard-codes `presence-of S P, at P supply` as the source of an added Presence (and, as written, moves EVERY supply Presence -- a core bug). core-green.t makes the source a choice over a presence-source view; then the rule is two added rows (Healthy: free; Blighted: offered only with Energy >= 1) plus a trigger that charges 1 Energy. 'via Growth' is checked by requiring the growth S episode to be alive in the acc body. The Blighted Island flip is not modeled (island-state is a fact)."
+  }
+ ],
+ "base_ext": "Energy (#acc energy); Growth reduced to `growth S, ~add-presence S`; island-state healthy fact (no Blight Card).",
+ "core_diff": "--- core.t\t2026-10-09 12:33:29.216961840 -0700\n+++ core-green.t\t2026-10-09 13:11:31.589939037 -0700\n@@ -250,8 +250,15 @@\n   ?[rng] L\n   !(presence-dest S L)\n   ~presence-choice S L\n-presence-choice S L, is L X, presence-of S P, at P supply, ~>placing S P, ~move P X\n-placing S P, ^nothing\n+-- which Presence is added is also a choice, over presence-source (by\n+-- default: the Presence still in the supply, i.e. on the tracks)\n+#acc presence-source : spirit e\n+presence-of S P, at P supply / presence-source S P\n+presence-choice S L, is L X\n+  ?[rng] P\n+  !(presence-source S P)\n+  ~placing S P X\n+placing S C X, is C P, ~move P X\n \n -- Beasts are counted through a view, so other pieces can \"count as\" Beasts.\n #acc beasts-at : e land\n",
+ "language_issues": [
+  "Exceptions are unconditional: 'you may prevent it' must be decided by a choice placed before the intercepted tuple is emitted; deciding inside the replacement cannot fall back to the original (re-emission is re-intercepted).",
+  "A choice domain derived from an acc that depends on the choice's own follow-up episode is silently empty (my first yes-no acc keyed on choke-ask): the choice resolves to nothing with no warning."
+ ]
+}

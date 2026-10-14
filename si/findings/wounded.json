@@ -1,0 +1,26 @@
+{
+ "spirit": "Wounded Waters Bleeding",
+ "slug": "wounded",
+ "wiki": "Wounded_Waters_Bleeding",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-wounded.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "SEEKING A PATH TOWARDS HEALING",
+   "text": "After playing cards each Spirit Phase: Claim a Healing Marker (Element Marker) matching whichever of [Water] or [Animal] you have more of. ( You break ties. ) You may then Claim a Healing Card if you meet its requirements. ( You can claim your first Healing Card on Turn 3. ) Then Destroy 1 [Presence] or Forget a Power Card ( unless a Healing Card just removed this rule ).",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "-- \"After playing cards each Spirit Phase:\"\nafter-play-cards, spirit:special S seeking-a-path, ~seeking S\nseeking S\n  ~>claim-marker S\n  ~>maybe-claim-healing S\n  ~pay-the-cost S\n\n-- \"Claim a Healing Marker (Element Marker) matching whichever of Water or\n--  Animal you have more of. (You break ties.)\"\n#acc markers : spirit element @sum\nspirit S, element E / markers S E 0\nhealing-marker S E / markers S E 1\nclaim-marker S, elements S water W, elements S animal A, gt W A, +healing-marker S water\nclaim-marker S, elements S water W, elements S animal A, lt W A, +healing-marker S animal\nclaim-marker S, elements S water W, elements S animal A, ge W A, le W A\n  ?[rng] E\n  !(healing-element E)\n  ~tie-break S E\ntie-break S C, is C E, +healing-marker S E\nsetup, +healing-element water, +healing-element animal\n\n-- \"You may then Claim a Healing Card if you meet its requirements. (You can\n--  claim your first Healing Card on Turn 3.)\"\n-- (turn 3 = two turns already done; the card and its requirement are invented:\n--  \"serene-waters: 2 Water Healing Markers; removes Seeking a Path\")\nmaybe-claim-healing S, turns-done N, ge N 2, healing-card H, healing:water H Need, markers S water M, ge M Need\n  ?[rng] R\n  !(may R)\n  ~healing-ask S H R N\n-- (healing-ask carries the turn number N: `>healing-ask` alone would also\n--  match the ask of an earlier turn)\nseeking S, turns-done N, >healing-ask S H R N, is R yes\n  +claimed S H\n  ^healing-claimed S H\n-- a claimed card that removes this rule: from now on the rule is gone ...\nseeking S, turns-done N, >healing-ask S H R N, is R yes, healing:removes-rule H\n  +rule-removed S seeking-a-path\nturn, rule-removed S seeking-a-path, { seeking S => }\n\n-- \"Then Destroy 1 Presence or Forget a Power Card\"\n#acc wounded-option : spirit e\npay-the-cost S, presence-of S P, at P L, land L / wounded-option S P\npay-the-cost S, power:owner P S, at P hand / wounded-option S P\npay-the-cost S\n  ?[rng] O\n  !(wounded-option S O)\n  ~cost-choice S O\ncost-choice S O, is O P, presence-of S P, ~destroy-presence O\ncost-choice S O, is O P, power:owner P S, ~forget S P\n-- \"(unless a Healing Card just removed this rule)\"\nseeking S, turns-done N, >healing-ask S H R N, is R yes, healing:removes-rule H, { pay-the-cost S => }",
+   "evidence": "3 turns, seed 7: seeking-on-turn 0, healing-marker wounded water, paid-cost 0 w1; seeking-on-turn 1, healing-marker wounded animal, paid-cost 1 tide; seeking-on-turn 2, healing-marker wounded water, claimed wounded serene-waters (no cost paid). Seed 2 declines the card on turn 3 and pays (paid-cost 2 w3). A 4-turn run has no seeking on turn 4 after the claim (rule removed).",
+   "notes": "The three steps are a sequenced episode (`seeking S` -> claim-marker; maybe-claim-healing; pay-the-cost). The tie-break is a choice between Water and Animal. 'Unless a Healing Card just removed this rule' is a scoped exception on pay-the-cost; removing the rule for later turns is a fact plus an exception on `seeking`. The Healing Card (serene-waters: 2 Water markers, removes the rule) is INVENTED, since the real Healing Cards weren't in the sources; the real cards' replacement rules are not modeled. Bugs hit along the way: `spirit-phase, >play-cards` re-fired for every previous turn, and `+rule-removed` asserted from a rule anchored on a forever-fact wasn't visible on the next turn."
+  }
+ ],
+ "base_ext": "Multiple turns (each finished turn starts the next, counted by a `turns-done` @sum acc), a play-cards / after-play-cards step in the Spirit Phase, Power Cards with a location (hand/forgotten) and `forget`, a yes/no `may` domain. The played cards are a turn-scoped acc view (`#acc played`, `turn \u2026 / played \u2026`): a `turn, ^played \u2026` view now starts concurrently with the phases.",
+ "core_diff": "",
+ "language_issues": [
+  "`>p` matches ANY earlier p, including previous turns' episodes (`spirit-phase, >play-cards` fired once per earlier turn); workaround: an explicit `after-...` step, or key the episode by turn number (`>healing-ask S H R N` with `turns-done N`).",
+  "A fact asserted by a rule anchored on another forever-fact (`claimed S H, ..., +rule-removed ...`) floats and wasn't visible to the next turn's exception; assert it inside a bounded episode (the seeking step) instead.",
+  "core is single-turn; multi-turn needs a counter and a `game, >turn, ... ~turn` rule. core's `+ravaged X -> 1` (#agg, to top) then leaks, so turns 2+ never Ravage."
+ ]
+}

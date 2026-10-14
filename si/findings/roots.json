@@ -1,0 +1,36 @@
+{
+ "spirit": "Towering Roots of the Jungle",
+ "slug": "roots",
+ "wiki": "Towering_Roots_of_the_Jungle",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-roots.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "ENDURING VITALITY",
+   "text": "Some of your Actions Add Vitality Tokens ( [Vitality] ). (Each [Vitality] in a land with no [Blight] prevents 1 [Blight] from being added, then is Removed.)",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "add-blight L, land:count L vitality V, gt V 0, land:count L blight 0,\n  { add-piece L blight => ~remove-token L vitality }\nadd-blight L, land:count L vitality V, gt V 0, land:count L blight 0,\n  { destroy-presence _ => }",
+   "evidence": "add-blight l1; remove-token l1 vitality; count l1 vitality 2, count l1 blight 0 (3 Vitality, Ravage of 3 Damage).",
+   "notes": "Same shape as Sweden's Heavy Mining: the context is the add-blight episode itself, so the guard (Vitality present, no Blight) is read at the right moment, and the Blight piece plus the Presence destruction it causes are replaced. Cascade needs no exception (a land without Blight never cascades). Two concurrent add-blights in one land would both see the same Vitality."
+  },
+  {
+   "name": "HEART-TREE GUARDS THE LAND",
+   "text": "You have an Incarna ( [Towering Roots of the Jungle] ). Your Powers get +1 [Range] if [Towering Roots of the Jungle] is in the origin land. Invaders/ [Dahan] / [Beasts] can't be damaged or destroyed at [Towering Roots of the Jungle] . Empower [Towering Roots of the Jungle] the first time it's in a land with 3 or more [Vitality] . Skip all Build Actions at empowered [Towering Roots of the Jungle] .",
+   "status": "partial",
+   "mechanism": "add-rows (widen) + exception (instead) + trigger (after/when)",
+   "turn": "-- \"Your Powers get +1 Range if [Incarna] is in the origin land.\"\ntargeting S P, spirit:special S heart-tree, incarna-of S I, at I Src\n  / range-bonus S P Src 1\n-- \"Invaders/Dahan/Beasts can't be damaged or destroyed at [Incarna].\"\n-- Approximation: only destruction during Ravage is covered (the guard has\n-- to be read when the context starts; see notes).\nravage L, spirit:special S heart-tree, incarna-of S I, at I L, { destroy X => }\n-- \"Empower [Incarna] the first time it's in a land with 3 or more Vitality.\"\n-- (checked inside each event that can make it true: the Incarna moving into\n--  a land, and a Vitality arriving in the Incarna's land. Anchoring the check\n--  on `game, >add-piece ...` instead lets +empowered float to a moment not\n--  ordered before later steps.)\nmove I L, incarna-of S I, spirit:special S heart-tree,\n  land:count L vitality N, ge N 3, +empowered I\nadd-piece L vitality, >move V L, incarna-of S I, spirit:special S heart-tree, at I L,\n  land:count L vitality N, ge N 3, +empowered I\n-- \"Skip all Build Actions at empowered [Incarna].\"\nbuild-step, incarna-of S I, empowered I, at I L, { build L => }",
+   "evidence": "could-target roots grow l1/l2/l3 for a range-0 Power: l2 is reachable only from the Incarna's land with the +1; empowered tree after 3 Vitality; l1 Ravage destroys nothing (count l1 dahan 1, town 1, explorer 1); only `build l2` occurs, build l1 skipped.",
+   "notes": "Range bonus is a pure @sum contribution once the base computes targets from range-bonus. Protection is only for destruction during Ravage: an exception guard is evaluated when its context starts, and there is no interval-valued 'Incarna is in L' tuple to use as a context (location is a per-moment @last acc row), so 'at the Incarna' cannot be a standing guard for all destroy sources. Empowerment needs a check inside every event that can make it true (Incarna moves, Vitality added) - acc views cannot emit. Incarna is modeled as an extra presence-of row (counts as Presence), so Blight can destroy it."
+  }
+ ],
+ "base_ext": "Range/land targeting (bounded reach acc, range-bonus @sum, power-target domain, targeting/target-chosen/targeted episodes); remove-token; Incarna as a presence-of row.",
+ "core_diff": "",
+ "language_issues": [
+  "No interval-valued state: 'while the Incarna is in L' cannot be an exception context, because location is an acc @last value (per-moment rows), not a tuple with an interval; guards are read once at context start.",
+  "Acc relations cannot trigger emissions, so 'the first time condition C becomes true' must be re-checked inside every episode that can change C.",
+  "A trigger anchored on a wide window (`game, >add-piece ... , +empowered I`) placed +empowered at a moment not ordered before the later build-step, so the Build-skip guard never saw it; anchoring the check inside the add-piece episode (`add-piece L vitality, >move V L, ...`) fixed it. Silent failure.",
+  "JS relations work inside acc bodies (used for bounded reach with plus/lt)."
+ ]
+}

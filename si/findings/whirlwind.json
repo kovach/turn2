@@ -1,0 +1,22 @@
+{
+ "spirit": "Sun-Bright Whirlwind",
+ "slug": "whirlwind",
+ "wiki": "Sun-Bright_Whirlwind",
+ "expansion": "Horizons",
+ "file": "spirit-whirlwind.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "A STIFF WIND AT THEIR BACKS",
+   "text": "After you Add [Presence] during Growth, Push up to 1 [Explorer] / [Dahan] from that land. (Let other players know this is due to your Special Rule, so they know you're still in the Spirit Phase and not using a [Fasticon] power.)",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "growth S, spirit:special S stiff-wind, >presence-choice S C, is C L\n  ~stiff-wind S L\n#acc stiff-wind-option : spirit e\nstiff-wind S L, at V L, piece:kind V explorer / stiff-wind-option S V\nstiff-wind S L, at V L, piece:kind V dahan / stiff-wind-option S V\nstiff-wind S L / stiff-wind-option S decline\nstiff-wind S L\n  ?[rng] V\n  !(stiff-wind-option S V)\n  ~stiff-wind-choice S L V\nstiff-wind-choice S L C, is C V, at V L, ~push S V L",
+   "evidence": "seed 7: Presence added to l1, then 'push whirl *119 l1' (Explorer); seed 1: added to l2, pushes a Dahan; seeds 2-5: added to empty l3, only 'decline' offered, no push.",
+   "notes": "'After you Add Presence during Growth' = `growth S, >presence-choice S C`: matching presence-choice nested inside growth gives 'during Growth', and `>` places the push after the Presence lands. Reuses core's push (and its push-dest domain). Needed a Growth step in BASE-EXT; core's add-presence was not wrapped in anything that says 'Growth'."
+  }
+ ],
+ "base_ext": "Growth as its own step of the Spirit Phase (`spirit-phase, \u2026, ~growth S` and `growth S, ~add-presence S`), so Presence added by Growth is distinguishable from Presence added by Powers.",
+ "core_diff": "",
+ "language_issues": []
+}

@@ -1,0 +1,45 @@
+{
+ "spirit": "Wandering Voice Keens Delirium",
+ "slug": "voice",
+ "wiki": "Wandering_Voice_Keens_Delirium",
+ "expansion": "Nature Incarnate",
+ "file": "spirit-voice.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "A CLARION VOICE GIVEN FORM",
+   "text": "You have an Incarna ( [Wandering Voice Keens Delirium] ). If Empowered, it Isolates its land.",
+   "status": "partial",
+   "mechanism": "new state",
+   "turn": "#acc isolated : land\nexplore-step, isolated L, { explore L => }\n\nincarna-of S I, empowered I, at I L, land L / isolated L",
+   "evidence": "With an extra wetland Explore card, l1 (holding the empowered Incarna) has no `explore l1`, while `explore l2` and `explore l3` happen in every seed.",
+   "notes": "The Incarna is just a piece with a location; 'Empowered' is a fact (how it gets empowered isn't modeled). Isolate's first half, 'Invaders do not Explore Isolated lands', is an additive exception. Missing: 'Isolated lands are not a source of Explorers' and 'isn't adjacent to anything for Invader pieces'. core's `explorable` is a union of positive acc rows (source in or adjacent), and removing a source needs negation, which acc bodies lack. core would have to build explorable from an Invader-adjacency view that excludes isolated lands."
+  },
+  {
+   "name": "SPREAD TUMULT AND DELUSION",
+   "text": "When your Actions add/move [Wandering Voice Keens Delirium] to a land with Invaders, Add 1 [Strife] in the destination land. In lands with or adjacent to [Wandering Voice Keens Delirium] : if [Strife] is present, [Dahan] do not participate in Ravage. (They do not take Damage or counterattack. Isolate has no effect on [Wandering Voice Keens Delirium] and [Dahan] being adjacent.)",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "action-move S I To, ~move I To\naction-move S I To, incarna-of S I, has-invaders To, ~add-strife-in S To\n-- \"In lands with or adjacent to [Incarna]: if [Strife] is present, [Dahan]\n--  do not participate in Ravage. (They do not take Damage or counterattack.)\"\n#acc voice-near : land\nspirit:special S clarion-voice, incarna-of S I, at I L, land L / voice-near L\nspirit:special S clarion-voice, incarna-of S I, at I M, adjacent M L, land L / voice-near L\nravage L, voice-near L, strife-in L, { damage-dahan L _ => }\nravage L, voice-near L, strife-in L, { dahan-fight-back L => }",
+   "evidence": "action-move voice wv l1 -> add-strife-in voice l1 -> add-strife-on voice ... (Strife on an l1 Invader). After Roaming pushed that piece (with its Strife) to l2, l2's Ravage had no damage-dahan l2 / dahan-fight-back l2 (l2 is adjacent to the Incarna and has Strife), while l1 (no Strife left) ravaged normally: damage-dahan l1 2, dahan-fight-back l1.",
+   "notes": "Part 1 is a trigger on the Spirit's own move. 'Your Actions' needed a cause-tagged move (`action-move S I To`), because core's `move` records no actor. Part 2 is two exceptions scoped to `ravage L` that delete the Dahan's damage step and their counterattack; the Land still takes Damage. 'with or adjacent to' is a boolean acc over raw adjacency, which also honours the note that Isolate doesn't affect it."
+  },
+  {
+   "name": "SENSELESS ROAMING",
+   "text": "When your Actions add [Strife] to an [Explorer] / [Town] , you may Push it.",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "#acc roamer : e\npiece:kind V explorer / roamer V\npiece:kind V town / roamer V\nadd-strife-on S C, spirit:special S senseless-roaming, is C V, roamer V, at V L\n  ?[rng] R\n  !(may R)\n  ~roam-ask S V L R\nroam-ask S V L R, is R yes, ~push S V L",
+   "evidence": "roam-ask voice *119 l1 ... -> push voice *119 l1 -> move *119 l2; strife-report *119 l2 (the Strife travelled with the piece because its location is the piece).",
+   "notes": "The Strife-adding step carries its actor (`add-strife-on A V`), so 'your Actions add Strife' is a direct match. 'Explorer / Town' is a two-row acc (`roamer`) standing for a disjunction. Push reuses core's push/push-dest."
+  }
+ ],
+ "base_ext": "Strife placement (choose an Invader in the land and put a strife piece *at that Invader*, so it moves with it), a `strife-in` acc, and the explore half of Isolate as an exception on `explore L`.",
+ "core_diff": "",
+ "language_issues": [
+  "core's `move` has no actor/cause, so 'when your Actions move X' needs a separate cause-tagged episode (`action-move S I To`). Every move-triggered special rule would want core's move to carry its cause.",
+  "Isolate's 'not a source of Explorers' cannot be added: core's `explorable` is a union of positive acc rows and acc bodies have no negation, so an extension can't remove a source.",
+  "Blight cascade (core) can ping-pong forever between two blighted lands (no Blight supply/Blight Card), and sibling cascade/destroy-presence branches each move the same Presence to destroyed (seed 3 run).",
+  "An 'or' in rule text ('Explorer / Town') becomes a helper acc with one row-producing rule per alternative."
+ ]
+}

@@ -1,0 +1,18 @@
+{
+ "id": "explore-per-source",
+ "misconception": "Each source of Invaders adds its own Explorer: a land next to two Town/City lands, or containing a Town, gets one Explorer per source.",
+ "rulebook": "p10 \"No matter how many sources are in or adjacent to an Explored land, you only add one Explorer.\"",
+ "caught_by": {
+  "q-7w4g8qa": [
+   "present: count l3 explorer 2"
+  ]
+ },
+ "edits": [
+  {
+   "file": "core.t",
+   "find": "explore-step, invader-card:explore C, card:terrain C T, land:terrain L T, explorable L\n  ~explore L",
+   "replace": "explore-step, invader-card:explore C, card:terrain C T, land:terrain L T, explore-source L, at P L, piece:kind P town\n  ~explore L\nexplore-step, invader-card:explore C, card:terrain C T, land:terrain L T, adjacent L L2, explore-source L2\n  ~explore L L2\nexplore L Src, ~add-piece L explorer"
+  }
+ ],
+ "notes": "Sources are counted per land (own Towns, each adjacent source land), so l3 in the scenario gets 2."
+}

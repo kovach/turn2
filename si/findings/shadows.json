@@ -1,0 +1,25 @@
+{
+ "spirit": "Shadows Flicker Like Flame",
+ "slug": "shadows",
+ "wiki": "Shadows_Flicker_Like_Flame",
+ "expansion": "Base",
+ "file": "spirit-shadows.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "SHADOWS OF THE DAHAN",
+   "text": "Whenever you use a Power, you may pay 1 Energy to target a land with [Dahan] regardless of the Power's Range. (Power Cards or your Innate Powers.)",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "spirit:special S shadows-of-the-dahan, targeting S P, land-for power L,\n  land:count L dahan N, gt N 0, energy S E, ge E 1\n  / target-dest S P L 1",
+   "evidence": "target-dest rows: shadows mantle l3 0 (range 0), l1 1, l2 1 (lands with Dahan); 6 seeds targeted l1/l2 and energy-report shadows 0 after paying; with 0 Energy only `target-dest shadows mantle l3 0` exists",
+   "notes": "Needed a BASE-EXT targeting step whose choice ranges over target-dest S P L Cost: the cost column is what lets a widening rule also attach a price ('you may pay 1 Energy to ...'). Without the cost column the payment would need negation ('pay only if the land was not already in range'). rng sometimes picks the paid option even when the land is also in range for free (both rows exist); a human would not -- harmless for 'may pay'."
+  }
+ ],
+ "base_ext": "Energy (#acc energy @sum of energy-change contributions); Range (#acc within land land nat, Peano, bounded by range-value facts); Targeting (targeting S P episode: joint choice ?L C over target-dest S P L Cost, pay Cost, ^target S P L); use-power triggers targeting for power:targets-land.",
+ "core_diff": "",
+ "language_issues": [
+  "No negative-number literal arithmetic: paying K Energy needs `minus 0 K NK` then a contribution of NK (a #js-def), since @sum is the only accumulator.",
+  "Range comparison over Peano needs a bounded recursive acc (`within`); numeric ranges would need a numeric BFS in JS."
+ ]
+}

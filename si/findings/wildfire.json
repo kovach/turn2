@@ -1,0 +1,35 @@
+{
+ "spirit": "Heart of the Wildfire",
+ "slug": "wildfire",
+ "wiki": "Heart_of_the_Wildfire",
+ "expansion": "Promo Pack 1",
+ "file": "spirit-wildfire.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "BLAZING PRESENCE",
+   "status": "partial",
+   "mechanism": "trigger (after/when)",
+   "turn": "spirit-phase, (move P L), presence-of S P, spirit:special S blazing-presence, land L\n  >move P L\n  ^blaze-trigger S L P\n  ~blaze S L\nblaze S L, track-fire S F, ~deal-damage L F\nblaze S L, track-fire S F, ge F 2, ~add-blight L\nblaze S L, beasts-at B L, ~push S B L\n#acc blaze-dahan-option : e\nblaze-dahan S D / blaze-dahan-option push\nblaze-dahan S D / blaze-dahan-option stay\nblaze S L, at D L, piece:kind D dahan, ~blaze-dahan S D\nblaze-dahan S D\n  ?[rng] C\n  !(blaze-dahan-option C)\n  ~blaze-dahan-choice S D C\nblaze-dahan-choice S D C, is C push, at D L, ~push S D L\nblaze S L, presence-of S X, spirit:special S destructive-nature, { move X destroyed => }",
+   "evidence": "move w2 l3; blaze wildfire l3; deal-damage l3 2 -> destroy Explorer; add-blight l3; push wildfire Beasts l3 -> l2; per-Dahan push/stay choice",
+   "notes": "Four sentences map to four rules on the `blaze` episode. Needed BASE-EXT Damage/Health (point-by-point damage with per-piece @sum damage) and a 'Fire showing on tracks' fact. Not modeled: 'If you add multiple Presence into a land at the same time, only do the above effects once' -- each Presence move triggers separately; deduping needs an 'Action' identity Turn doesn't expose. Port to fresh-left ^ / #acc (2026-10-12): the trigger is anchored on each phase episode (one rule per phase; the snippet shows the Spirit phase) instead of a generic `^phase` window, which no longer overlaps the moves in the phase. Anchoring on `turn` instead was tried and is wrong: the blaze then runs concurrently with the later phases, so its Blight is invisible to them.",
+   "text": "Post-Setup, after your [Presence] is added/moved, in the land it goes to: For each [Fire] showing on your [Presence] Tracks, do 1 Damage. If 2 [Fire] or more are showing on your [Presence] Tracks, add 1 [Blight] . Push all [Beasts] and any number of [Dahan] . If you add multiple [Presence] into a land at the same time, only do the above effects once."
+  },
+  {
+   "name": "DESTRUCTIVE NATURE",
+   "status": "works",
+   "mechanism": "exception (instead)",
+   "turn": "blaze S L, presence-of S X, spirit:special S destructive-nature, { move X destroyed => }\nuse-power _ _, presence-of S X, spirit:special S destructive-nature, { move X destroyed => }",
+   "evidence": "Blight added by blaze in l3 destroys neither w1 nor w2; a later Ravage cascade into l3 (seed 1) does destroy w1, as it should",
+   "notes": "Exceptions whose contexts are the Spirit-effect episodes (blaze, use-power) drop `move X destroyed` for this Spirit's Presence; cascades are nested inside the add-blight that caused them, so '(This includes cascades.)' is free. The contexts must be enumerated (Powers, special rules...); 'Spirit effect' is not a first-class notion.",
+   "text": "[Blight] added due to Spirit effects ( Powers, Special Rules, Scenario-based Rituals, etc ) does not destroy your [Presence] . (This includes cascades.)"
+  }
+ ],
+ "base_ext": "Invader Health; per-piece damage (@sum of +hit facts) and a point-by-point deal-damage loop with destroy at Health; track-fire fact; per-phase triggers anchored on each phase episode.",
+ "core_diff": "",
+ "language_issues": [
+  "core.t has no Blight supply / loss condition, so once all lands have Blight, cascades recurse forever (status: gas); this spirit's extra Blight makes that likely. A Blight supply limit would itself need an 'instead' exception whose context starts when the supply runs out.",
+  "Damage persisted as `+hit` facts never clears at Time Passes; per-turn damage needs a turn key.",
+  "'At the same time' (one Action adding several Presence) has no handle: Turn has no notion of Action identity to dedupe triggers on."
+ ]
+}

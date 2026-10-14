@@ -1,0 +1,24 @@
+{
+ "spirit": "Eyes Watch from the Trees",
+ "slug": "eyes",
+ "wiki": "Eyes_Watch_from_the_Trees",
+ "expansion": "Horizons",
+ "file": "spirit-eyes.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "DAHAN TRUST THE WATCHERS",
+   "text": "After one of your Powers adds Defend to a single land, Gather up to 1 [Dahan] into that land. (\"Power\" includes both your Innate Power and your Power Cards. Can be used with any number of Defend Powers each turn.)",
+   "status": "works",
+   "mechanism": "trigger (after/when)",
+   "turn": "turn, >add-defend S P L N, spirit:special S dahan-trust-the-watchers\n  ~gather-up-to-1 L dahan",
+   "evidence": "add-defend eyes watchful l3 2; defend l3 2; gather-up-to-1 l3 dahan; a Dahan moves l2 -> l3; count l3 dahan 1 (all 4 seeds).",
+   "notes": "Needed the base to make 'a Power adds Defend' an attributed step (add-defend S P L N) rather than only the anonymous defend L N sum, so 'one of your Powers' can be recognized. 'to a single land' is not distinguished (every Defend in the slice is single-land; would need a power:single-land fact). 'up to 1' = a decline option in the Gather choice domain."
+  }
+ ],
+ "base_ext": "add-defend S P L N step for a Power's Defend (feeding core's defend L N for the rest of the turn via `turn, >add-defend \u2026, ^defend L N`); Gather up to 1 of a kind from adjacent lands with a decline option.",
+ "core_diff": "",
+ "language_issues": [
+  "Triggers on 'your Power does X' need X to be an episode carrying the actor; core's anonymous defend L N tuple was not enough, so the actor-tagged step had to be introduced in BASE-EXT."
+ ]
+}

@@ -1,0 +1,22 @@
+{
+ "spirit": "River Surges in Sunlight",
+ "slug": "river",
+ "wiki": "River_Surges_in_Sunlight",
+ "expansion": "Base",
+ "file": "spirit-river.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "RIVER'S DOMAIN",
+   "text": "Your [Presence] in Wetlands counts as [Sacred Site] .",
+   "status": "works",
+   "mechanism": "counts-as view",
+   "turn": "spirit:special S rivers-domain, presence-of S P, at P L, terrain-for power L wetland\n  / sacred-site S L",
+   "evidence": "ss-report river l2 (a single Presence p1 in wetland l2 is a Sacred Site); the lone Presence in mountain l3 is not",
+   "notes": "One acc row added to the base sacred-site view. Reading terrain through terrain-for power means an Ocean made a Coastal Wetland by Ocean's Hungry Grasp would also count -- an interaction neither rule mentions, which falls out of routing every terrain read through the view. Only works because the base computes sacred-site as a view (not inline `presence-count S L N, ge N 2` in each consumer)."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": []
+}

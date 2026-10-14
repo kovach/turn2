@@ -1,0 +1,34 @@
+{
+ "spirit": "Many Minds Move as One",
+ "slug": "many-minds",
+ "wiki": "Many_Minds_Move_as_One",
+ "expansion": "Jagged Earth",
+ "file": "spirit-many-minds.t",
+ "core_variant": null,
+ "rules": [
+  {
+   "name": "FLY FAST AS THOUGHT",
+   "text": "When you Gather or Push [Beasts] , they may come from or go to lands up to 2 distant (rather than adjacent only) .",
+   "status": "works",
+   "mechanism": "add-rows (widen)",
+   "turn": "push S B From, spirit:special S fly-fast, beasts-at B From,\n  adjacent From M, adjacent M To, neq From To, land-for power To\n  / push-dest S B From To",
+   "evidence": "push-dest rows for the swarm in l3: l2 (base) and l1 (two away, added)",
+   "notes": "Push is written with an explicit destination relation keyed by who pushes, so a Spirit can add destinations. Needed a hand-written `neq` (#js-def) because Turn has no symbol inequality. Gather is not modeled."
+  },
+  {
+   "name": "A JOINING OF SWARMS AND FLOCKS",
+   "text": "Your [Sacred Site] may also count as [Beasts] . (Note: You never have more than 1 [Sacred Site] in a land, no matter how many [Presence] you have there.) (If something changes a [Beasts] that is your [Sacred Site] , it affects 2 of your [Presence] there - e.g., Push 1 [Beasts] will Push 2 of your [Presence] together.)",
+   "status": "partial",
+   "mechanism": "counts-as view",
+   "turn": "sacred-site S L, spirit:special S joining / beasts-at (swarm S L) L\ngame, { move (swarm S L) To => ~move-pair S L To }\ngame, { destroy (swarm S L) => ~destroy-pair S L }",
+   "evidence": "move-pair mm l3 l1 -> move m1 l1, move m2 l1; destroy of the swarm -> destroy-pair mm l3 -> two Presence destroyed",
+   "notes": "One virtual Beasts per Sacred Site, and two exceptions turn \"move/destroy that Beasts\" into \"move/destroy 2 Presence\". \"May\" count, chosen per piece and per Action (FAQ), is not modeled: the swarm always counts. Doing it properly needs a choice at the start of every Action that reads Beasts, and Turn has no hook for that."
+  }
+ ],
+ "base_ext": "",
+ "core_diff": "",
+ "language_issues": [
+  "No built-in inequality on symbols; needed `#js-def neq +A +B { if (JSON.stringify(A) !== JSON.stringify(B)) yield [] }`.",
+  "Optional \"counts as\", chosen per Action, needs a choice at the start of every Action that reads the counted type, and there is no hook for that."
+ ]
+}
