@@ -4,7 +4,7 @@
 // side-channel buffer.
 
 import { parse } from "./v2/parse.js";
-import { describeErrorStatus, runFixpoint } from "./v2/fixpoint.js";
+import { describeErrorStatus, runFixpoint, type FixpointResult } from "./v2/fixpoint.js";
 import { renderTerm, renderTermShallow, compressRefs, tokensEq } from "./v2/print.js";
 import { renderTuples, renderTimelineH, timelineCollapseKey, momentKey } from "./v2/render-output.js";
 import { Editor } from "./v2/editor.js";
@@ -18,6 +18,7 @@ import type { AccRow } from "./v2/eval.js";
 import { createDefaultDisplay } from "./v2/default-display.js";
 import { displayRows, iconNames } from "./v2/display-rows.js";
 import { TestPanel } from "./v2/test-panel.js";
+import { runV3, ANSWER_PREFIX, type V3EditorResult } from "./v3/bridge.js";
 
 // A click intent is an unresolved component plus the chosen option tuple.
 // `activeTerms[i]` should bind to `optionTuple[i]`. `handleClick` reifies
@@ -182,10 +183,10 @@ let loadedFile: string | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let saveStatus: "idle" | "pending" | "saving" | "error" = "idle";
 
-// Playground mode: when the page is loaded at /v2/playground, the source is
+// Playground mode: when the page is loaded at /playground (or /v2/playground), the source is
 // read from / written to the `?code=` URL param (URL-safe base64). No server
 // PUTs happen; the textarea state lives entirely in the URL so it's shareable.
-const playgroundMode = window.location.pathname === "/v2/playground";
+const playgroundMode = window.location.pathname === "/playground" || window.location.pathname === "/v2/playground";
 
 const SAVE_DEBOUNCE_MS = 400;
 
@@ -316,6 +317,25 @@ function parseDisplayDirective(source: string): string | null {
 // is known to need more than the session defaults (e.g. a whole game replayed
 // on every click) raises the limits for itself. The header fields still win
 // when they are set higher.
+// `-- engine: v3` in the header comment (or `?engine=v3` in the page URL)
+// runs the program with the v3 evaluator (src/v3/bridge.ts); choices are
+// then saved as `--@` answer lines instead of `^ is` rows.
+function parseEngineDirective(source: string): "v2" | "v3" {
+  if (new URLSearchParams(location.search).get("engine") === "v3") return "v3";
+  for (const line of source.split("\n")) {
+    const t = line.trimStart();
+    if (t === "") continue;
+    if (!t.startsWith("--")) break;
+    const m = line.match(/^\s*--\s*engine:\s*(\S+)\s*$/);
+    if (m) return m[1] === "v3" ? "v3" : "v2";
+  }
+  return "v2";
+}
+
+// The last run's v3 result (null when the run used v2): clicks become
+// answer lines through it.
+let lastV3: V3EditorResult | null = null;
+
 function parseGasDirective(source: string): { gas: number; tupleGas: number | null } | null {
   for (const line of source.split("\n")) {
     const t = line.trimStart();
@@ -769,7 +789,18 @@ function appendIsRows(activeTerms: Term[], values: Term[]): void {
   for (let i = 0; i < N; i++) isLines.push(`^ is ${results[i]} ${results[i + N]}`);
   const lines = [...bindings, ...isLines];
   // One rule: continuation lines are indented (offside rule).
-  const text = "\n\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n");
+  appendSourceText("\n\n" + lines.map((l, i) => (i === 0 ? l : "  " + l)).join("\n"));
+}
+
+// A v3 answer: one `--@` comment line (src/v3/bridge.ts), under a header
+// the first time.
+function appendAnswerLine(line: string): void {
+  const has = sourceEl.value.split("\n").some((l) => l.startsWith(ANSWER_PREFIX));
+  const body = sourceEl.value.endsWith("\n") ? "" : "\n";
+  appendSourceText(has ? `${body}${line}` : `${body}\n-- answers: v3 replays these in order; delete lines to step back\n${line}`);
+}
+
+function appendSourceText(text: string): void {
   // Append to the textarea via execCommand so the edit lands on its undo
   // history and the "input" listener saves it (PUT / playground URL).
   const prevStart = sourceEl.selectionStart;
@@ -805,6 +836,12 @@ function handleClick(intent: ClickIntent): void {
     console.warn("handleClick: activeTerms / optionTuple length mismatch");
     return;
   }
+  if (lastV3 !== null) {
+    const line = lastV3.answerText(intent.activeTerms, intent.optionTuple);
+    if (line === null) console.warn("handleClick: no v3 component for this choice");
+    else appendAnswerLine(line);
+    return;
+  }
   appendIsRows(intent.activeTerms, intent.optionTuple);
 }
 
@@ -829,8 +866,13 @@ async function run(): Promise<void> {
   const directive = parseGasDirective(userSource);
   const gas = Math.max(limits.gas, directive?.gas ?? 0);
   const tupleGas = Math.max(limits.tupleGas, directive?.tupleGas ?? 0);
-  let result;
+  let result: Pick<FixpointResult, "store" | "status" | "iterations" | "rules" | "rngCommits" | "accAt">;
+  let v3: V3EditorResult | null = null;
   try {
+    if (parseEngineDirective(userSource) === "v3") {
+      v3 = runV3(parsed, userSource, { tupleGas });
+      result = v3;
+    } else {
     // `?lattice` in the page URL: moment-lattice max/min (v2/store.ts).
     const params = new URLSearchParams(location.search);
     const lattice = params.has("lattice");
@@ -841,6 +883,7 @@ async function run(): Promise<void> {
     // everywhere; slower).
     const accMode = params.get("acc") === "eager" ? "eager" : "demand";
     result = runFixpoint(parsed, gas, tupleGas, { lattice, accMode });
+    }
   } catch (e) {
     // Compile error from a `#js` body, a `@js(...)` runtime throw, or any
     // other evaluation failure — show it rather than swallowing it.
@@ -850,6 +893,7 @@ async function run(): Promise<void> {
     return;
   }
   const { store, status, iterations } = result;
+  lastV3 = v3;
   lastStore = store;
   lastRules = result.rules ?? [];
   lastAccAt = result.accAt;
@@ -873,6 +917,16 @@ async function run(): Promise<void> {
   link.update(parsed.rules);
 
   // Status line.
+  if (v3 !== null) {
+    const replay = v3.replayed + v3.unused.length === 0 ? "" :
+      `; replayed ${v3.replayed} answer${v3.replayed === 1 ? "" : "s"}` +
+      (v3.unused.length > 0 ? `, ${v3.unused.length} unused from line ${v3.unused[0]!.line}` : "");
+    const what = v3.error !== undefined ? `error: ${v3.error}`
+      : status.kind === "active-choices" ? `choices(${status.components.length})`
+      : status.kind === "gas" ? `gas (${status.tuples} tuples)` : "done";
+    setStatus(`v3 ${what} — ${v3.tuples} tuples${replay}`, v3.error !== undefined || status.kind === "gas" || v3.unused.length > 0);
+    if (v3.error !== undefined) showRunError(v3.error);
+  } else
   switch (status.kind) {
     case "done":
       setStatus(`done — ${iterations} iter${iterations === 1 ? "" : "s"}, ${store.tuples.length} tuples`, false);

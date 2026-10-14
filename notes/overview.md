@@ -6,8 +6,10 @@ plan: plans/v3-procedural.md
 - the moment order is v2's, answered without graph walks: `u ≤ v` iff some moment on u's succ chain is a pred-tree ancestor of v (order-maintenance Euler tour, binary search over cached intervals); checked against reachability on random histories
 - `~>p`, `;`, `>p` run ahead; point reads (`#acc`, `not`, lookups that don't listen), exception decisions and frame ends wait for the frames/decisions they ran past (*gates*) and for unanswered choices below them — exactly where v2's walk blocks, so v3 has v2's state at every choice
 - agrees with v2 in lockstep (facts, every acc relation at each choice, option sets): the corpus, 35 Spirit Island spirit variants, 9 full si-game games; 3–23x faster than one v2 run, and it resumes after an answer instead of re-running
-- `ts/data/v3/{ttt,wolf-sheep}.t` rewrite two reactive programs in the procedural idioms: `v3-cli --report` shows no subscriptions; the old wolf-sheep's capture rule recurses forever after two captures (both engines run out of gas)
+- `ts/data/v3/{ttt,wolf-sheep}-v3.t` rewrite two reactive programs in the procedural idioms: `v3-cli --report` shows no subscriptions; the old wolf-sheep's capture rule recurses forever after two captures (both engines run out of gas)
 - tests: ts/src/tests/v3_basic.test.ts; tools: src/v3-cli.ts, src/scratch/v3-diff.ts, src/scratch/v3-bench.ts
+- web editor: `-- engine: v3` in a file's header (or `?engine=v3`) runs it with v3 through src/v3/bridge.ts, which presents the run as a v2 Store/status/accAt so the timeline, choices strip and display modules (si-display.js included) work unchanged; clicks append `--@ label@line value` comment lines that v3 replays in order (delete lines to step back). v2's `^ is` rows are not read. Tests: v3_bridge.test.ts
+- profile (si-game, 79 answers, 15 ms/game): ~68% inclusive in #acc recomputation (rowsAt → computeStratum → solve; the contribution callback alone 17% self), 26% in choice option enumeration, ~9% in moment `≤`; rule dispatch and inserts ~3%. Next lever: reuse acc rows across moments where no input changed (incremental acc)
 
 # 26/10/12
 As of a couple days ago, direct interaction with opus 5.5 through CC seems more efficient than working through this log.

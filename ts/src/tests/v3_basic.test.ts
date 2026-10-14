@@ -91,7 +91,7 @@ function rng(seed: number): () => number {
 }
 
 // ---------------------------------------------------------------- rewrites
-for (const f of ["v3/ttt.t", "v3/wolf-sheep.t"]) {
+for (const f of ["v3/ttt-v3.t", "v3/wolf-sheep-v3.t"]) {
   const p = parse(data(f));
   if ("message" in p) throw new Error(p.message);
   const rt = new Runtime(p);
@@ -99,7 +99,7 @@ for (const f of ["v3/ttt.t", "v3/wolf-sheep.t"]) {
   assert.equal(subs.length, 0, `${f}: subscribing matches ${JSON.stringify(subs)}`);
 }
 {
-  const p = parse(data("v3/ttt.t"));
+  const p = parse(data("v3/ttt-v3.t"));
   if ("message" in p) throw new Error(p.message);
   const rt = new Runtime(p);
   let s = rt.run();
@@ -117,7 +117,7 @@ for (const f of ["v3/ttt.t", "v3/wolf-sheep.t"]) {
 for (const [f, steps] of [
   ["v2/ttt.t", 12], ["v2/pins.t", 8], ["v2/dominion.t", 8], ["v2/dessert.t", 4],
   ["v2/exceptions.t", 4], ["v2/caret-exception.t", 4], ["v2/choice-test.t", 10], ["v2/dungeon.t", 10],
-  ["v2/spirit-island.t", 10], ["v3/ttt.t", 12], ["v3/wolf-sheep.t", 6],
+  ["v2/spirit-island.t", 10], ["v3/ttt-v3.t", 12], ["v3/wolf-sheep-v3.t", 6],
 ] as const) {
   for (const seed of [1, 2]) {
     const r = diffRun(data(f), { steps, pick: "random", seed });

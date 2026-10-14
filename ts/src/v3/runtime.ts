@@ -13,6 +13,7 @@
 // counted there.
 
 import type { Program } from "../v2/types.js";
+import type { Span } from "../v2/term.js";
 import { AccEngine } from "./acc.js";
 import { analyze, type Analysis } from "./analyze.js";
 import { compileProgram, type CompiledRule } from "./compile.js";
@@ -28,6 +29,7 @@ export interface Tuple extends StoredTuple {
   rel: string;
   frame: Frame | null; // an episode's frame
   deps: readonly Gate[]; // unfinished frames and decisions below `l` when emitted
+  span?: Span | undefined; // the emitting atom (display links)
 }
 
 // Something a continuation may have run ahead of: a frame that has not
@@ -135,6 +137,8 @@ class Table {
 export interface Choice {
   term: Id;
   label: string;
+  line: number; // the `?`'s source line
+  rule: string; // the asking rule's name (display)
   actor: string;
   moment: Moment;
   deps: readonly Gate[];
@@ -184,6 +188,8 @@ interface ExnContext {
 export interface RunOptions {
   tupleGas?: number;
   random?: (() => number) | undefined;
+  // Seed for `?[rng]` when the program sets no `rng-seed` (default: Math.random).
+  defaultSeed?: number | undefined;
 }
 
 export class Runtime {
@@ -208,13 +214,17 @@ export class Runtime {
   private tupleCount = 0;
   private readonly tupleGas: number;
   private random: (() => number) | null;
+  private readonly defaultSeed: number | undefined;
   private started = false;
   readonly choiceOf = new Map<Id, Choice>();
+  // Display only: per acc relation, the moments an ordinary rule read it at.
+  readonly accConsulted = new Map<string, Set<Moment>>();
   readonly warnings: string[] = [];
 
   constructor(readonly program: Program, opts: RunOptions = {}) {
     this.tupleGas = opts.tupleGas ?? 1_000_000;
     this.random = opts.random ?? null;
+    this.defaultSeed = opts.defaultSeed;
     this.an = analyze(program);
     this.js = compileJs(program, this.terms);
     this.root = {
@@ -473,9 +483,9 @@ export class Runtime {
 
   // ---------------------------------------------------------------- choices
 
-  ask(label: string, actor: string, moment: Moment, deps: readonly Gate[]): Id {
+  ask(label: string, actor: string, moment: Moment, deps: readonly Gate[], line = 0, rule = ""): Id {
     const term = this.terms.choice(label);
-    const c: Choice = { term, label, actor, moment, deps, constraints: [], value: null, dead: false, seq: this.nextSeq() };
+    const c: Choice = { term, label, line, rule, actor, moment, deps, constraints: [], value: null, dead: false, seq: this.nextSeq() };
     this.choices.push(c);
     this.open.add(c);
     this.choiceOf.set(term, c);
@@ -731,7 +741,7 @@ export class Runtime {
       const vals = new Set(seeds.map((t) => this.terms.num(t.args[0]!)));
       if (vals.size > 1 || vals.has(null)) throw new Error("rng-seed: one numeric value expected");
       const seed = vals.size === 1 ? [...vals][0]! : null;
-      this.random = seed === null ? Math.random : mulberry32(seed);
+      this.random = seed !== null ? mulberry32(seed) : this.defaultSeed !== undefined ? mulberry32(this.defaultSeed) : Math.random;
     }
     return this.random();
   }

@@ -7,7 +7,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
 const args = process.argv.slice(2);
-let dataDir = path.join(ROOT, "data");
 // v2 source/display files: data/v2, then each `--v2-data <dir>` in order.
 const v2Dirs = [path.join(ROOT, "data", "v2")];
 // Scenario tests (v2/scenario.ts) for the editor's Tests view: every `.t` in
@@ -18,7 +17,6 @@ const testDirs: string[] = [path.join(ROOT, "data", "v2", "tests")];
 let port = 3000;
 let readOnly = false;
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--data" && args[i + 1]) dataDir = path.resolve(args[++i]!);
   if (args[i] === "--v2-data" && args[i + 1]) v2Dirs.push(path.resolve(args[++i]!));
   if (args[i] === "--v2-tests" && args[i + 1]) testDirs.push(path.resolve(args[++i]!));
   if (args[i] === "--port" && args[i + 1]) port = parseInt(args[++i]!, 10);
@@ -46,18 +44,6 @@ function scenarioFiles(): { name: string; text: string }[] {
     }
   }
   return [...out].map(([name, text]) => ({ name, text }));
-}
-
-function slFiles(): string[] {
-  try {
-    return fs.readdirSync(dataDir).filter(f => f.endsWith(".sl")).sort();
-  } catch {
-    return [];
-  }
-}
-
-function safeFilename(name: string): boolean {
-  return name.endsWith(".sl") && !name.includes("/") && !name.includes("..");
 }
 
 function mime(ext: string): string {
@@ -91,51 +77,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname === "/api/files" && method === "GET") {
-    sendJson(res, 200, { files: slFiles() });
-    return;
-  }
-
-  const fileMatch = pathname.match(/^\/api\/file\/([^/]+)$/);
-  if (fileMatch) {
-    const name = decodeURIComponent(fileMatch[1]!);
-    if (!safeFilename(name)) { sendJson(res, 400, { error: "invalid filename" }); return; }
-    const filePath = path.join(dataDir, name);
-    const exists = slFiles().includes(name);
-
-    if (method === "GET") {
-      if (!exists) { sendJson(res, 404, { error: "not found" }); return; }
-      try { sendJson(res, 200, { content: fs.readFileSync(filePath, "utf8") }); }
-      catch { sendJson(res, 500, { error: "read error" }); }
-      return;
-    }
-
-    if (method === "PUT") {
-      if (readOnly) { sendJson(res, 403, { error: "read-only" }); return; }
-      if (!exists) { sendJson(res, 404, { error: "not found" }); return; }
-      try { fs.writeFileSync(filePath, await readBody(req), "utf8"); sendJson(res, 200, { ok: true }); }
-      catch { sendJson(res, 500, { error: "write error" }); }
-      return;
-    }
-
-    if (method === "POST") {
-      if (readOnly) { sendJson(res, 403, { error: "read-only" }); return; }
-      if (exists) { sendJson(res, 409, { error: "already exists" }); return; }
-      try { fs.writeFileSync(filePath, await readBody(req), "utf8"); sendJson(res, 200, { ok: true }); }
-      catch { sendJson(res, 500, { error: "write error" }); }
-      return;
-    }
-  }
-
-  if (pathname === "/" || pathname === "/index.html") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(fs.readFileSync(path.join(ROOT, "index.html")));
-    return;
-  }
-
-  if (pathname === "/v2" || pathname === "/index-v2.html" || pathname === "/v2/playground") {
+  // The editor is the root page; `/v2...` are the old addresses of it.
+  if (pathname === "/" || pathname === "/playground" || pathname === "/index-v2.html"
+      || pathname === "/v2" || pathname === "/v2/playground") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(fs.readFileSync(path.join(ROOT, "index-v2.html")));
+    return;
+  }
+
+  // the links page that used to be the root
+  if (pathname === "/links" || pathname === "/index.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(fs.readFileSync(path.join(ROOT, "index.html")));
     return;
   }
 
@@ -230,27 +183,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname.startsWith("/data/") && pathname.endsWith(".js")) {
-    const file = pathname.slice(6);
-    if (file.includes("..") || file.includes("/")) {
-      res.writeHead(400); res.end("Invalid path");
-      return;
-    }
-    try {
-      const content = fs.readFileSync(path.join(dataDir, file));
-      res.writeHead(200, { "Content-Type": "application/javascript" });
-      res.end(content);
-    } catch { res.writeHead(404); res.end("Not found"); }
-    return;
-  }
-
   res.writeHead(404);
   res.end("Not found");
 });
 
 server.listen(port, () => {
   console.log(`Slide  http://localhost:${port}`);
-  console.log(`Data   ${dataDir}`);
   console.log(`v2     ${v2Dirs.join(", ")}`);
   if (testDirs.length > 0) console.log(`tests  ${testDirs.join(", ")}`);
   if (readOnly) console.log(`Mode   read-only (file writes disabled)`);

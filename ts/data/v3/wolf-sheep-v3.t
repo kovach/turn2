@@ -1,3 +1,4 @@
+-- engine: v3
 -- Wolf and sheep in the procedural style (compare ts/data/v2/wolf-sheep.t).
 -- The board is a set of #acc views over one setup fact; pieces are made by
 -- called procedures; a turn is a procedure of its side. `v3-cli --report`

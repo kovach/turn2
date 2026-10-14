@@ -65,6 +65,14 @@ The store, frames, tasks, listeners, exception decisions and choices. A *task* i
 - choices — components per ask moment (no unanswered choice below, gates ended), joined by constraints; a constraint that also mentions a later choice belongs to it; zero options → dead; all-`rng` components resolve by `rng-seed` (mulberry32) or the given `random`
 - gas — tuples and frames count against `tupleGas`; nesting deeper than `MAX_DEPTH` is a runaway
 
+# bridge.ts
+
+v3 in the web editor (`src/web-v2.ts`). A file whose header comment has `-- engine: v3` (or any file with `?engine=v3` in the page URL) runs through `runV3` instead of `runFixpoint`: the program runs with the answers saved in its source replayed, and the result is presented in v2's shapes, a real v2 `Store` (v3's moments with their order edges, every tuple with a trailing id slot and its source span, the acc rows v3 computed as point rows, `accComputed`/`accConsulted`, settled moments), a `FixpointStatus` with `ComponentOptions`, and `accAt`, so the timeline, database view, choices strip and display modules work unchanged. Choice and fresh-object terms become Id terms shaped like v2's templates (`(*id rule line (*chain name) :Var)`), which the page reads for chip labels.
+
+Answers are comment lines, so the source still parses: `--@ C@43 (cell z z)` (one line per click; `label@line value` per answered choice, `|`-separated for a joint click). Replay goes in order, each line to the first pending component that has choices with those labels and an option with those values (printed form), resolving just those choices; it stops at the first misfit (reported in the status line as unused answers from that line). Deleting answer lines steps the game back. v3 is deterministic (rng uses a default seed), so fresh objects' printed names (`#P.17`) stay stable while the program and earlier answers do. v2's saved `^ is` rows are not read.
+
+**Key terms:** `runV3` → `V3EditorResult` (`store`, `status`, `accAt`, `replayed`, `unused`, `error`, `answerText(activeTerms, option)`), `parseAnswers`, `ANSWER_PREFIX`, `choiceLabel`
+
 # print.ts
 
 Text output: `dumpTuples` (`+` facts, `~` episodes, `^` views), `dumpAcc` (rows at a moment), `showComponent`, `showReport`.
@@ -72,5 +80,7 @@ Text output: `dumpTuples` (`+` facts, `~` episodes, `^` views), `dumpAcc` (rows 
 # diff.ts
 
 Lockstep differential run against v2 (`diffRun`): the same program in both engines (saved `^ is` rows dropped, `?[rng]` made `?`), every choice answered the same way, comparing at each step the facts (tuples that live to `top`), each component's options, and every acc relation's rows at the component's moment (at `top` when both are done). Fresh objects are compared through *descriptors* (the facts that mention them), which also pick the "same" option on both sides; components with identical options are paired by their acc rows. v2 re-runs from scratch with the answers appended as `^ is` rows; v3 resumes. Returns the v2 source with every answer (`source2`) and v3's answer indices (`answers3`) for benchmarks.
+
+Editor: add `-- engine: v3` to a file's header and open it in the editor (the data/v3 files carry it; serve them with `--v2-data data/v3`, e.g. `./watch.sh 5176 rw --v2-data data/v3`, then `http://localhost:5176/?file=ttt-v3.t`), or append `?engine=v3` to the page URL. data/v2 is searched first, so a v3 file must not share a data/v2 file's name (hence `ttt-v3.t`). ttt-v3.t uses data/v2's `ttt-display.js`, which reads its board from the `sq (cell R C)` acc rows. Profiling: profile the compiled `dist/` modules (tsx's loader hides function names), e.g. a replay loop over `dist/v3/runtime.js`.
 
 Drivers: `src/v3-cli.ts` (run, `--answers N --pick first|random --seed N`, `--report`, `--acc`), `src/scratch/v3-diff.ts` (one lockstep run), `src/scratch/v3-bench.ts` (v2 one-shot replay vs v3 game), `src/scratch/proc-classify.ts` (the corpus classifier from the discussion).

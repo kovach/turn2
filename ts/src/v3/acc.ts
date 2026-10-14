@@ -101,6 +101,11 @@ export class AccEngine {
 
   private readonly decls: Map<string, AccDecl>;
 
+  // The rows computed so far, by moment (displays).
+  computed(): Iterable<[Moment, Map<string, AccRow[]>]> {
+    return this.cache.entries();
+  }
+
   rowsAt(rel: string, m: Moment): AccRow[] {
     if (this.local !== null && this.localMoment === m && this.local.has(rel)) return this.local.get(rel)!;
     let at = this.cache.get(m);

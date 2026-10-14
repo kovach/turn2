@@ -231,14 +231,20 @@ export function createDisplayKit(host: KitHost): DisplayKit {
       if (typeof spec !== "function" && spec.choice !== undefined) el.classList.add("kit-choice");
       // Native SVG <title> tooltips would double up with ours.
       for (const t of Array.from(el.children)) if (t.tagName.toLowerCase() === "title") t.remove();
+      // The tip pops up where the pointer is when the delay ends, and then
+      // stays put until the pointer leaves.
+      let x = 0, y = 0;
       el.addEventListener("mouseenter", (ev) => {
         const e = ev as MouseEvent;
+        x = e.clientX;
+        y = e.clientY;
         if (tipTimer !== null) clearTimeout(tipTimer);
-        tipTimer = setTimeout(() => { tipTimer = null; if (menu === null) showTip(el, e.clientX, e.clientY); }, 250);
+        tipTimer = setTimeout(() => { tipTimer = null; if (menu === null) showTip(el, x, y); }, 250);
       });
       el.addEventListener("mousemove", (ev) => {
         const e = ev as MouseEvent;
-        if (tip !== null) place(tip, e.clientX + 14, e.clientY + 16);
+        x = e.clientX;
+        y = e.clientY;
       });
       el.addEventListener("mouseleave", () => hideTip());
       el.addEventListener("contextmenu", (ev) => {

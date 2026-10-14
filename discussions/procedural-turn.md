@@ -376,7 +376,7 @@ run of it (SI: 10–17 ms vs 130–260 ms, with about a tenth as many stored
 tuples), and it resumes after an answer where v2's harness re-runs from
 scratch.
 
-§9.3: `ts/data/v3/ttt.t` and `ts/data/v3/wolf-sheep.t` rewrite the two
+§9.3: `ts/data/v3/ttt-v3.t` and `ts/data/v3/wolf-sheep-v3.t` rewrite the two
 most reactive programs in the idioms of §6, and `v3-cli --report` shows no
 subscriptions in either. Every rule is an episode handler whose other
 matches are lookups, `#acc` reads or `is` awaits. So for these games the

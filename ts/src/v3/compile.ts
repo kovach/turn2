@@ -166,6 +166,7 @@ function compileAtom(a: RuleAtom, cx: Cx): Step {
       if (rt.an.acc.has(rel)) {
         if (a.negated) {
           return (ctx0, k) => rt.whenComplete(ctx0, (ctx) => {
+            consulted(rt, rel, ctx.xl);
             for (const row of rt.acc.rowsAt(rel, ctx.xl)) {
               if (matchArgs(pats, row.args, ctx.env.slice(), terms)) return;
             }
@@ -173,6 +174,7 @@ function compileAtom(a: RuleAtom, cx: Cx): Step {
           });
         }
         return (ctx0, k) => rt.whenComplete(ctx0, (ctx) => {
+          consulted(rt, rel, ctx.xl);
           for (const row of rt.acc.rowsAt(rel, ctx.xl)) {
             const env = ctx.env.slice();
             if (matchArgs(pats, row.args, env, terms)) k({ ...ctx, env });
@@ -205,20 +207,20 @@ function compileAtom(a: RuleAtom, cx: Cx): Step {
         const scope = rt.frameOf(ctx.xr);
         if (marker === "anchor" && ctx.xl === mom.bot) {
           // a rule-initial `^` lands on the whole running anchor
-          const t: Tuple = { rel, args, l: ctx.xl, r: ctx.xr, seq: 0, frame: null, deps: ctx.deps };
+          const t: Tuple = { rel, args, l: ctx.xl, r: ctx.xr, seq: 0, frame: null, deps: ctx.deps, span: a.span };
           rt.emit(t, scope, catchers, (g) => k({ ...ctx, env, deps: withGate(ctx.deps, g) }));
           return;
         }
         const l = mom.fresh(ctx.xl, ctx.xr);
         if (l === null) return;
         if (marker === "fact" || marker === "anchor") {
-          const t: Tuple = { rel, args, l, r: marker === "fact" ? mom.top : ctx.xr, seq: 0, frame: null, deps: ctx.deps };
+          const t: Tuple = { rel, args, l, r: marker === "fact" ? mom.top : ctx.xr, seq: 0, frame: null, deps: ctx.deps, span: a.span };
           rt.emit(t, scope, catchers, (g) => k({ env, xl: l, xr: ctx.xr, deps: withGate(ctx.deps, g) }));
           return;
         }
         const r = mom.fresh(l, ctx.xr)!;
         const frame = rt.newFrame(rel, args, l, r, scope, ctx.deps);
-        const t: Tuple = { rel, args, l, r, seq: 0, frame, deps: ctx.deps };
+        const t: Tuple = { rel, args, l, r, seq: 0, frame, deps: ctx.deps, span: a.span };
         rt.emit(t, scope, catchers, after
           ? (g) => rt.continueAt({ env, xl: r, xr: ctx.xr, deps: withGate(ctx.deps, g) }, k)
           : (g) => k({ env, xl: l, xr: r, deps: withGate(ctx.deps, g) }));
@@ -234,7 +236,7 @@ function compileAtom(a: RuleAtom, cx: Cx): Step {
         const env = ctx.env.slice();
         for (const v of vars) {
           if (env[v.slot] !== UNBOUND) throw new Error(`${where}: variable '${v.name}' is already bound at '?'`);
-          env[v.slot] = rt.ask(v.name, actor, ctx.xl, ctx.deps);
+          env[v.slot] = rt.ask(v.name, actor, ctx.xl, ctx.deps, a.span.line, rule.name);
         }
         k({ ...ctx, env });
       };
@@ -300,6 +302,12 @@ function compileMatch(
     }
   };
   return subscribe ? step : (ctx, k) => rt.whenComplete(ctx, (c) => step(c, k));
+}
+
+function consulted(rt: Runtime, rel: string, m: import("./moments.js").Moment): void {
+  let s = rt.accConsulted.get(rel);
+  if (s === undefined) rt.accConsulted.set(rel, (s = new Set()));
+  s.add(m);
 }
 
 function withGate(deps: readonly Gate[], g: Gate | null): readonly Gate[] {

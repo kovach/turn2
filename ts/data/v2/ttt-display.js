@@ -1,4 +1,4 @@
-// v2 ttt display module. Reads `cell R C` and `filled (cell R C) M` rows
+// v2 ttt display module. Reads `cell R C` (or v3's `sq (cell R C)`) and `filled (cell R C) M` rows
 // from the store and renders a 3x3 grid; for each component whose active
 // term resolves to a single cell, registers a click per option whose
 // ClickIntent carries the active term and the chosen option tuple. The
@@ -59,6 +59,19 @@ export function create(api) {
       // The cell-term is the hashconsed `(cell R C)` atom; build it from the
       // tuple's atom Ref. We pass the whole Atom term as the cell id.
       cells.set(key, { row: r, col: c, mark: null, atomTerms: ts, rows: [idx] });
+    }
+    // data/v3/ttt-v3.t has no `cell` facts: its board is the `#acc sq`
+    // view, presented as `sq (cell R C)` rows (head, Cell, id).
+    for (const idx of store.byHead.get("sq") ?? []) {
+      const ts = store.tuples[idx].atom.terms;
+      const inner = ts.length === 3 ? termsOf(ts[1], store) : null;
+      if (!inner || inner.length !== 3 || inner[0]?.tag !== "Symbol" || inner[0].name !== "cell") continue;
+      const r = peanoToInt(inner[1], store);
+      const c = peanoToInt(inner[2], store);
+      if (r === null || c === null) continue;
+      const key = `${r},${c}`;
+      if (cells.has(key)) cells.get(key).rows.push(idx);
+      else cells.set(key, { row: r, col: c, mark: null, atomTerms: inner, rows: [idx] });
     }
 
     const filledRows = store.byHead.get("filled") ?? [];

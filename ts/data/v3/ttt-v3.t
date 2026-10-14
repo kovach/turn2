@@ -1,3 +1,5 @@
+-- engine: v3
+-- display: ttt-display.js
 -- tic-tac-toe in the procedural style (plans/v3-procedural.md, the idioms
 -- of discussions/procedural-turn.md §6). Every rule is triggered by one
 -- episode, and everything else it reads is a lookup of earlier facts, an
